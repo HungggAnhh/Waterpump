@@ -1,0 +1,112 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  admin
+  user
+}
+
+enum UserStatus {
+  active
+  inactive
+}
+
+enum TaskStatus {
+  todo
+  in_progress
+  completed
+}
+
+enum TaskPriority {
+  low
+  medium
+  high
+}
+
+enum ConversationType {
+  direct
+  group
+}
+
+enum MessageType {
+  text
+  image
+  file
+}
+
+model User {
+  id          String   @id @default(uuid())
+  name        String
+  email       String   @unique
+  password    String
+  avatar      String?
+  role        UserRole @default(user)
+  status      UserStatus @default(active)
+  createdAt   DateTime @default(now())
+
+  assignedTasks Task[] @relation("AssignedTasks")
+  createdTasks  Task[] @relation("CreatedTasks")
+
+  messages Message[]
+  conversations ConversationUser[]
+}
+
+model Task {
+  id          String   @id @default(uuid())
+  title       String
+  description String?
+  status      TaskStatus @default(todo)
+  priority    TaskPriority @default(medium)
+  dueDate     DateTime?
+  bossChecked Boolean @default(false)
+
+  assigneeId String?
+  createdBy  String?
+
+  assignee User? @relation("AssignedTasks", fields: [assigneeId], references: [id])
+  creator  User? @relation("CreatedTasks", fields: [createdBy], references: [id])
+
+  createdAt DateTime @default(now())
+}
+
+model Conversation {
+  id        String   @id @default(uuid())
+  name      String?
+  type      ConversationType @default(direct)
+  createdAt DateTime @default(now())
+
+  users    ConversationUser[]
+  messages Message[]
+}
+
+model ConversationUser {
+  conversationId String
+  userId         String
+  joinedAt       DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([conversationId, userId])
+}
+
+model Message {
+  id             String   @id @default(uuid())
+  conversationId String
+  senderId       String
+
+  message  String
+  type     MessageType @default(text)
+  fileUrl  String?
+
+  createdAt DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User @relation(fields: [senderId], references: [id], onDelete: Cascade)
+}
