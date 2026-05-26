@@ -393,6 +393,9 @@ export default function MessagesScreen() {
     setIsTyping(false);
     setShowAttachMenu(false);
 
+    // Giữ focus cho TextInput để bàn phím không bị ẩn đi trên điện thoại (Keyboard persistence)
+    inputRef.current?.focus();
+
     // Cuộn mượt xuống dưới cùng (vị trí tin nhắn mới gửi)
     setTimeout(() => {
       flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
@@ -898,6 +901,7 @@ export default function MessagesScreen() {
               onChangeText={handleTextChange}
               onSubmitEditing={handleSendMessage}
               returnKeyType="send"
+              blurOnSubmit={false} // Ngăn bàn phím tự động ẩn khi người dùng nhấn Enter/Submit trên bàn phím ảo
               onFocus={() => {
                 if (showEmojiPanel) {
                   LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
