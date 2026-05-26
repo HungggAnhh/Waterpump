@@ -21,9 +21,12 @@ function createMainWindow() {
     }
   });
 
-  // Load Expo App (ở cổng 8082 hoặc fallback 8081)
-  mainWindow.loadURL('http://localhost:8082').catch(() => {
-    mainWindow.loadURL('http://localhost:8081');
+  // Tải trực tiếp giao diện Web đã deploy trên Vercel của bạn
+  mainWindow.loadURL('https://waterpump-eta.vercel.app/').catch(() => {
+    // Fallback về localhost nếu muốn chạy thử ở local
+    mainWindow.loadURL('http://localhost:8082').catch(() => {
+      mainWindow.loadURL('http://localhost:8081');
+    });
   });
 
   mainWindow.on('closed', () => {
