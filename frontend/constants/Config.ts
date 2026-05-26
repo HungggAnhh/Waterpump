@@ -14,12 +14,8 @@ import { Platform } from 'react-native';
 const COMPUTER_IP = '192.168.2.7'; // IP Wi-Fi cục bộ của bạn
 
 const getBaseUrl = () => {
-  // Trên trình duyệt Web, có thể gọi trực tiếp localhost ở cổng 3000
-  if (Platform.OS === 'web') {
-    return `http://localhost:3000/api`;
-  }
-  // Trên các thiết bị di động (thật + giả lập), dùng IP Wi-Fi của máy tính ở cổng 3000
-  return `http://${COMPUTER_IP}:3000/api`;
+  // Kết nối trực tiếp đến backend được host trên Render
+  return `https://waterpump-2.onrender.com/api`;
 };
 
 export const API_BASE_URL = getBaseUrl();

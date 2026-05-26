@@ -165,7 +165,10 @@ export default function MessagesScreen() {
   // 2. Khởi tạo kết nối Socket.IO & Đăng ký sự kiện
   useEffect(() => {
     let socketUrl = API_BASE_URL;
-    if (socketUrl.includes(':3000')) {
+    if (socketUrl.includes('onrender.com')) {
+      // Trên môi trường Render production, Socket.IO chạy cùng cổng với HTTP
+      socketUrl = socketUrl.replace(/\/api$/, '').replace(/\/$/, '');
+    } else if (socketUrl.includes(':3000')) {
       // Nếu API_BASE_URL đã ở cổng 3000, chỉ cần loại bỏ hậu tố /api
       socketUrl = socketUrl.replace(/\/api$/, '').replace(/\/$/, '');
     } else {
