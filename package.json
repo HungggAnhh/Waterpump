@@ -1,4 +1,7 @@
 {
+  "scripts": {
+    "start": "node backend/server.js"
+  },
   "dependencies": {
     "@prisma/client": "^7.8.0",
     "@supabase/supabase-js": "^2.106.2",
