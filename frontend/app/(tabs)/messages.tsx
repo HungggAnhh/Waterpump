@@ -177,11 +177,13 @@ export default function MessagesScreen() {
     console.log(`🔌 Đang kết nối Socket.IO Client tới: ${socketUrl}`);
 
     socketRef.current = io(socketUrl, {
-      transports: ['websocket'],
+      transports: ['polling', 'websocket'],
       forceNew: true,
       reconnection: true,
-      reconnectionAttempts: 10,
-      reconnectionDelay: 2000
+      reconnectionAttempts: 20,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000
     });
 
     const socket = socketRef.current;
