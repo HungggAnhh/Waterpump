@@ -49,7 +49,19 @@ app.use('/api/upload',        uploadRoutes);
 
 // Health check
 app.get('/status', (req, res) => {
-  res.json({ status: 'running', service: 'Express + Socket.IO + Supabase', port: process.env.PORT || 3000 });
+  res.json({
+    status: 'running',
+    service: 'Express + Socket.IO + Supabase',
+    port: process.env.PORT || 3000,
+    env: {
+      SUPABASE_URL: !!process.env.SUPABASE_URL,
+      SUPABASE_SERVICE_ROLE_KEY: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+      SUPABASE_SERVICE_KEY: !!process.env.SUPABASE_SERVICE_KEY,
+      SUPABASE_ANON_KEY: !!process.env.SUPABASE_ANON_KEY,
+      SUPABASE_BUCKET: process.env.SUPABASE_BUCKET || '(not set, default: media)',
+      DATABASE_URL: !!process.env.DATABASE_URL,
+    }
+  });
 });
 
 // ─── HTTP + Socket.IO Server ──────────────────────────────────────
