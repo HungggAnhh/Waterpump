@@ -1,0 +1,2 @@
+Placeholder: Replace this folder's icon.ico with your actual app icon (256x256 ICO format).
+You can convert any PNG to ICO at: https://icoconvert.com

@@ -1,0 +1,8 @@
+TEAMFLOW SOFTWARE LICENSE AGREEMENT
+
+Copyright (c) 2024 TeamFlow. All rights reserved.
+
+This software is provided for personal and commercial use.
+Redistribution and modification require explicit written permission from TeamFlow.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.

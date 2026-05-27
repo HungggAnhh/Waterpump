@@ -1,12 +1,71 @@
 {
   "name": "teamflow-desktop",
+  "productName": "TeamFlow",
   "version": "1.0.0",
+  "description": "TeamFlow – Ứng dụng chat nhóm & quản lý công việc chuyên nghiệp",
+  "author": {
+    "name": "TeamFlow",
+    "email": "support@teamflow.app"
+  },
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "build": "electron-builder --win --x64",
+    "build:dir": "electron-builder --win --dir",
+    "postinstall": "electron-builder install-app-deps"
   },
-  "dependencies": {},
+  "build": {
+    "appId": "com.teamflow.desktop",
+    "productName": "TeamFlow",
+    "copyright": "Copyright © 2024 TeamFlow",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "screenshot/**/*",
+      "build/**/*",
+      "!node_modules/**",
+      "!dist/**"
+    ],
+    "extraResources": [],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "publisherName": "TeamFlow"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "shortcutName": "TeamFlow",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "menuCategory": "TeamFlow",
+      "deleteAppDataOnUninstall": false,
+      "language": "1033",
+      "license": "build/license.txt",
+      "installerLanguages": [
+        "en_US"
+      ],
+      "displayLanguageSelector": false
+    },
+    "compression": "maximum",
+    "removePackageScripts": true
+  },
   "devDependencies": {
-    "electron": "^31.0.0"
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
   }
 }
