@@ -22,6 +22,7 @@ export const unstable_settings = {
 SplashScreen.preventAutoHideAsync();
 
 import { UserProvider, useUser } from '../context/UserContext';
+import { SocketProvider } from '../context/SocketContext';
 import LoginScreen from '../components/LoginScreen';
 import NameOnboardingScreen from '../components/NameOnboardingScreen';
 
@@ -74,7 +75,11 @@ function RootLayoutContent() {
     return <NameOnboardingScreen />;
   }
 
-  return <RootLayoutNav />;
+  return (
+    <SocketProvider>
+      <RootLayoutNav />
+    </SocketProvider>
+  );
 }
 
 function RootLayoutNav() {
@@ -85,6 +90,14 @@ function RootLayoutNav() {
       <Stack>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
+        <Stack.Screen
+          name="chat/[id]"
+          options={{
+            headerShown: false,
+            presentation: 'card',
+            animation: 'slide_from_right',
+          }}
+        />
       </Stack>
     </ThemeProvider>
   );

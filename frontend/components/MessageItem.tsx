@@ -31,43 +31,58 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({ item, isMine, colors
         {!isMine && (
           <Text style={styles.messageSenderName}>{item.sender_name}</Text>
         )}
-        <View
-          style={[
-            styles.messageBubble,
-            isMine
-              ? { backgroundColor: colors.tint }
-              : { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1 }
-          ]}
-        >
-          {item.type === 'image' && item.file_url ? (
-            <TouchableOpacity onPress={() => onPressImage && onPressImage(item.file_url!)} activeOpacity={0.9}>
-              <Image source={{ uri: item.file_url }} style={styles.chatImage} resizeMode="cover" />
-              {item.message && item.message !== '[Ảnh chụp màn hình]' && item.message !== '[Hình ảnh]' && item.message !== '[Video]' && (
-                <Text style={[styles.imageCaption, { color: isMine ? '#fff' : colors.text }]}>
+        
+        {item.type === 'image' && item.file_url ? (
+          <TouchableOpacity 
+            onPress={() => onPressImage && onPressImage(item.file_url!)} 
+            activeOpacity={0.9}
+            style={styles.imageMessageContainer}
+          >
+            <Image source={{ uri: item.file_url }} style={styles.chatImage} resizeMode="cover" />
+            {item.message && item.message !== '[Ảnh chụp màn hình]' && item.message !== '[Hình ảnh]' && item.message !== '[Video]' && (
+              <View style={[
+                styles.messageBubble,
+                isMine
+                  ? { backgroundColor: colors.tint, marginTop: 6 }
+                  : { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1, marginTop: 6 }
+              ]}>
+                <Text style={[styles.messageText, { color: isMine ? '#fff' : colors.text }]}>
                   {item.message}
                 </Text>
-              )}
-            </TouchableOpacity>
-          ) : item.type === 'file' && item.file_url ? (
-            <View style={styles.videoAttachmentCard}>
-              <Ionicons name="play-circle-outline" size={32} color={isMine ? '#fff' : colors.tint} />
-              <View style={{ marginLeft: 8 }}>
-                <Text style={[styles.videoAttachmentText, { color: isMine ? '#fff' : colors.text }]}>
-                  Tệp Đính Kèm Video
-                </Text>
-                <Text style={[styles.videoAttachmentSub, { color: isMine ? 'rgba(255,255,255,0.7)' : colors.textSecondary }]}>
-                  Nhấn để phát video clip
-                </Text>
               </View>
-            </View>
-          ) : (
-            <Text style={[styles.messageText, { color: isMine ? '#fff' : colors.text }]}>
-              {item.message}
-            </Text>
-          )}
-        </View>
+            )}
+          </TouchableOpacity>
+        ) : (
+          <View
+            style={[
+              styles.messageBubble,
+              isMine
+                ? { backgroundColor: colors.tint }
+                : { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1 }
+            ]}
+          >
+            {item.type === 'file' && item.file_url ? (
+              <View style={styles.videoAttachmentCard}>
+                <Ionicons name="play-circle-outline" size={32} color={isMine ? '#fff' : colors.tint} />
+                <View style={{ marginLeft: 8 }}>
+                  <Text style={[styles.videoAttachmentText, { color: isMine ? '#fff' : colors.text }]}>
+                    Tệp Đính Kèm Video
+                  </Text>
+                  <Text style={[styles.videoAttachmentSub, { color: isMine ? 'rgba(255,255,255,0.7)' : colors.textSecondary }]}>
+                    Nhấn để phát video clip
+                  </Text>
+                </View>
+              </View>
+            ) : (
+              <Text style={[styles.messageText, { color: isMine ? '#fff' : colors.text }]}>
+                {item.message}
+              </Text>
+            )}
+          </View>
+        )}
+
         <View style={styles.messageMeta}>
-          <Text style={styles.messageTime}>{item.created_at}</Text>
+          <Text style={styles.messageTime}>{formatMessageTime(item.created_at)}</Text>
           {isMine && (
             <Ionicons name="checkmark-done" size={14} color={colors.tint} style={{ marginLeft: 4 }} />
           )}
@@ -75,6 +90,18 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({ item, isMine, colors
       </View>
     </View>
   );
+};
+
+const formatMessageTime = (timeInput: string | Date | null | undefined): string => {
+  if (!timeInput) return '';
+  const date = typeof timeInput === 'string' ? new Date(timeInput) : timeInput;
+  if (isNaN(date.getTime())) {
+    // If it's not a valid ISO date, return as-is
+    return String(timeInput);
+  }
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${hours}:${minutes}`;
 };
 
 // Hàm so sánh tuỳ chỉnh để chặn hoàn toàn re-render thừa
@@ -136,10 +163,14 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: '#a0aec0',
   },
+  imageMessageContainer: {
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
   chatImage: {
-    width: 200,
-    height: 150,
-    borderRadius: 12,
+    width: 240,
+    height: 180,
+    borderRadius: 16,
   },
   imageCaption: {
     fontSize: 13,

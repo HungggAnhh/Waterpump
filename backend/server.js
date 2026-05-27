@@ -58,6 +58,9 @@ const io     = new Server(server, {
   cors: { origin: '*', methods: ['GET', 'POST'] }
 });
 
+// Chia sẻ instance socket.io cho các Express routes
+app.set('io', io);
+
 // ─── Online Users Map ─────────────────────────────────────────────
 const onlineUsers = new Map(); // userId → userDetail
 
@@ -108,10 +111,11 @@ io.on('connection', (socket) => {
     try {
       // Lưu vào Supabase PostgreSQL
       const insertRes = await query(
-        'INSERT INTO messages (conversation_id, sender_id, message, type, file_url) VALUES ($1,$2,$3,$4,$5) RETURNING id',
+        'INSERT INTO messages (conversation_id, sender_id, message, type, file_url) VALUES ($1,$2,$3,$4,$5) RETURNING id, created_at',
         [parseInt(conversation_id), parseInt(sender_id), message, type, file_url]
       );
       const messageId = insertRes.rows[0].id;
+      const createdAt = insertRes.rows[0].created_at;
 
       // Lấy thông tin sender
       const userRes = await query(
@@ -120,7 +124,6 @@ io.on('connection', (socket) => {
       );
       const sender = userRes.rows[0] || {};
 
-      const now = new Date();
       const messageObject = {
         id:              parseInt(messageId),
         conversation_id: parseInt(conversation_id),
@@ -130,8 +133,12 @@ io.on('connection', (socket) => {
         message,
         type,
         file_url,
-        created_at:      now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        raw_time:        now.toISOString(),
+        created_at:      createdAt, // Server database timestamp (ISO Timestamptz)
+        sender_info: {
+          id:     parseInt(sender_id),
+          name:   sender.name,
+          avatar: sender.avatar,
+        }
       };
 
       // Phát tới tất cả thành viên phòng chat qua phòng cá nhân
@@ -148,6 +155,54 @@ io.on('connection', (socket) => {
     } catch (err) {
       console.error('❌ Lỗi lưu tin nhắn Supabase:', err.message);
       socket.emit('error_message', { message: 'Không thể gửi tin nhắn. Lỗi hệ thống.' });
+    }
+  });
+
+  // 4.5 Nhận sự kiện đã xem tin nhắn (seen_message) để cập nhật DB và đồng bộ đa thiết bị
+  socket.on('seen_message', async ({ conversation_id, user_id, message_id }) => {
+    if (!conversation_id || !user_id || !message_id) {
+      return;
+    }
+
+    console.log(`[SERVER:SEEN_MESSAGE_RECEIVED] User ${user_id} reported viewing msg ${message_id} in conversation ${conversation_id}`);
+
+    try {
+      // Step 5: Nghiêm ngặt kiểm tra tin nhắn tồn tại và không phải do chính người xem gửi
+      const msgCheck = await query(
+        'SELECT sender_id FROM messages WHERE id = $1 AND conversation_id = $2 LIMIT 1',
+        [parseInt(message_id), parseInt(conversation_id)]
+      );
+      
+      if (msgCheck.rows.length === 0) {
+        console.log(`[SERVER:SEEN_MESSAGE_VALIDATION] Message ${message_id} does not exist in conversation ${conversation_id}`);
+        return;
+      }
+      
+      const senderId = msgCheck.rows[0].sender_id;
+      if (senderId === parseInt(user_id)) {
+        console.log(`[SERVER:SEEN_MESSAGE_VALIDATION] User ${user_id} cannot seen their own message ${message_id}`);
+        return;
+      }
+
+      // Cập nhật database: last_seen_message_id và last_seen_at
+      await query(
+        `UPDATE conversation_users
+         SET last_seen_message_id = $1, last_seen_at = NOW()
+         WHERE conversation_id = $2 AND user_id = $3`,
+        [parseInt(message_id), parseInt(conversation_id), parseInt(user_id)]
+      );
+
+      console.log(`[SERVER:LAST_SEEN_UPDATED] Database updated for User ${user_id} in conversation ${conversation_id} to message ${message_id}`);
+
+      // Đồng bộ hóa đa thiết bị cho tất cả socket của cùng người dùng này
+      console.log(`[SERVER:MULTI_DEVICE_SYNC] Broadcasting conversation_seen to user_${user_id}`);
+      io.to(`user_${user_id}`).emit('conversation_seen', {
+        conversation_id: parseInt(conversation_id),
+        message_id: parseInt(message_id)
+      });
+
+    } catch (err) {
+      console.error('❌ Lỗi xử lý seen_message socket:', err.message);
     }
   });
 
