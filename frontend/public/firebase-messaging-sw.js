@@ -51,8 +51,8 @@ self.addEventListener('push', (event) => {
 
   const notificationOptions = {
     body: notificationBody,
-    icon: '/icon-192.png',
-    badge: '/icon-192.png',
+    icon: 'icon-192.png', // Sử dụng đường dẫn tương đối để tránh lỗi 404 trên các môi trường cục bộ/Electron
+    badge: 'icon-192.png', // Sử dụng đường dẫn tương đối
     requireInteraction: true, // Giữ thông báo hiển thị cho đến khi tắt hoặc tương tác
     vibrate: [200, 100, 200],
     data: {

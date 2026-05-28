@@ -22,6 +22,14 @@ function createMainWindow() {
     }
   });
 
+  // Tự động phê duyệt các quyền hiển thị Thông báo (Notification) để đảm bảo không bị Windows chặn
+  mainWindow.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
+    if (permission === 'notifications') {
+      return callback(true); // Chấp nhận quyền thông báo ngay lập tức
+    }
+    callback(true); // Chấp nhận các quyền cơ bản khác
+  });
+
   // Tải trực tiếp giao diện Web đã deploy trên Vercel của bạn
   mainWindow.loadURL('https://waterpump-eta.vercel.app/').catch(() => {
     // Fallback về localhost nếu muốn chạy thử ở local

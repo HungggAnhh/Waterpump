@@ -89,8 +89,8 @@ export async function requestAndRegisterFCM() {
     const messaging = getMessaging(app);
 
     // 3. Đăng ký và đảm bảo Service Worker đang hoạt động
-    // serviceWorker.register sẽ tự động tái sử dụng nếu đã được đăng ký trước đó
-    const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+    // Sử dụng đường dẫn tương đối để tương thích tốt với Electron cục bộ hoặc subdirectory
+    const registration = await navigator.serviceWorker.register('firebase-messaging-sw.js');
     console.log('[fcmHelper] Service Worker đã được đăng ký thành công!');
 
     // 4. Lấy FCM Token từ Firebase SDK
