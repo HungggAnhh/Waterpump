@@ -15,7 +15,7 @@
     "postinstall": "electron-builder install-app-deps"
   },
   "build": {
-    "appId": "com.teamflow.desktop",
+    "appId": "com.teamflow.app",
     "productName": "TeamFlow",
     "copyright": "Copyright © 2024 TeamFlow",
     "directories": {
