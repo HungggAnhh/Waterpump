@@ -6,10 +6,22 @@ const { query } = require('./supabase');
 try {
   const projectId = process.env.FIREBASE_PROJECT_ID || 'teamflow-pwa';
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-  // Handle newlines in private key
-  const privateKey = process.env.FIREBASE_PRIVATE_KEY 
-    ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') 
-    : undefined;
+  // Chuẩn hóa và làm sạch Private Key từ biến môi trường (xử lý triệt để dấu nháy và ký tự escape trên Render)
+  let privateKey = process.env.FIREBASE_PRIVATE_KEY;
+  if (privateKey) {
+    privateKey = privateKey.trim();
+    // 1. Loại bỏ các dấu nháy kép hoặc đơn bao bọc chuỗi (lỗi cực kỳ phổ biến khi dán trên dashboard Render)
+    if (privateKey.startsWith('"') && privateKey.endsWith('"')) {
+      privateKey = privateKey.slice(1, -1);
+    }
+    if (privateKey.startsWith("'") && privateKey.endsWith("'")) {
+      privateKey = privateKey.slice(1, -1);
+    }
+    // 2. Tự động sửa lỗi typo \A (mất chữ 'n' trong \n) để khôi phục định dạng
+    privateKey = privateKey.replace(/\\A/g, '\nA');
+    // 3. Thay thế các ký tự escape \n thành xuống dòng thực tế
+    privateKey = privateKey.replace(/\\n/g, '\n');
+  }
 
   if (clientEmail && privateKey) {
     admin.initializeApp({
