@@ -26,10 +26,10 @@ require('./config/firebaseAdmin');
 // ─── Routes ──────────────────────────────────────────────────────
 const authRoutes          = require('./routes/auth');
 const usersRoutes         = require('./routes/users');
-const tasksRoutes         = require('./routes/tasks');
 const conversationsRoutes = require('./routes/conversations');
 const messagesRoutes      = require('./routes/messages');
 const uploadRoutes        = require('./routes/upload');
+const tasksRoutes         = require('./routes/tasks');
 
 // ─── Express App ─────────────────────────────────────────────────
 const app = express();
@@ -44,10 +44,10 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // ─── API Routes ───────────────────────────────────────────────────
 app.use('/api/auth',          authRoutes);
 app.use('/api/users',         usersRoutes);
-app.use('/api/tasks',         tasksRoutes);
 app.use('/api/conversations', conversationsRoutes);
 app.use('/api/messages',      messagesRoutes);
 app.use('/api/upload',        uploadRoutes);
+app.use('/api/tasks',         tasksRoutes);
 
 // Health check
 app.get('/status', (req, res) => {
