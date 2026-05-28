@@ -54,20 +54,31 @@ self.addEventListener('notificationclick', (event) => {
   event.notification.close();
 
   // Get the target URL
-  const targetUrl = event.notification.data?.url || '/';
+  let targetUrl = event.notification.data?.url || '/';
+
+  // Chuyển đổi đường dẫn tương đối thành URL tuyệt đối chuẩn xác dựa trên origin hiện tại (tránh lỗi Vercel 404 và lỗi clients.openWindow)
+  if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+    targetUrl = new URL(targetUrl, self.location.origin).href;
+  }
+
+  console.log('[firebase-messaging-sw.js] Điều hướng tới URL tuyệt đối:', targetUrl);
 
   event.waitUntil(
     // Match existing windows/clients of the application
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
-      // If a window is already open at the target URL, focus it
+      // Chuẩn hóa URL trước khi so sánh (loại bỏ dấu gạch chéo cuối nếu có)
+      const cleanTargetUrl = targetUrl.replace(/\/$/, '');
+
+      // 1. Nếu có tab nào đang mở đúng trang này rồi, thì focus trực tiếp vào tab đó
       for (let i = 0; i < windowClients.length; i++) {
         const client = windowClients[i];
-        if (client.url === targetUrl && 'focus' in client) {
+        const cleanClientUrl = client.url.replace(/\/$/, '');
+        if (cleanClientUrl === cleanTargetUrl && 'focus' in client) {
           return client.focus();
         }
       }
       
-      // If we have any open windows, we can navigate one of them, otherwise open a new window
+      // 2. Nếu có tab ứng dụng đang mở (nhưng ở trang khác), điều hướng tab đó đến URL mong muốn và focus
       if (windowClients.length > 0) {
         const client = windowClients[0];
         if ('navigate' in client) {
@@ -76,7 +87,7 @@ self.addEventListener('notificationclick', (event) => {
         }
       }
 
-      // If no clients, open a new tab/window
+      // 3. Nếu không có tab nào đang mở, mở một tab mới hoàn toàn
       if (self.clients.openWindow) {
         return self.clients.openWindow(targetUrl);
       }

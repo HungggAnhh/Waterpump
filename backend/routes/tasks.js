@@ -104,7 +104,7 @@ router.post('/', async (req, res) => {
             
             const title = '🎯 Công việc mới được giao';
             const body = `${creatorName} đã giao cho bạn công việc: "${data.title}"`;
-            const dataUrl = '/(tabs)'; // Điều hướng về tab chính chứa danh sách công việc (PWA)
+            const dataUrl = '/tasks'; // Điều hướng về tab chính chứa danh sách công việc (PWA)
 
             console.log(`📡 Phát hiện ${tokensRes.rows.length} thiết bị nhận thông báo giao việc cho User ID ${assigneeId}`);
             for (const row of tokensRes.rows) {

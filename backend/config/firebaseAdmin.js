@@ -90,9 +90,6 @@ async function sendPWAPushNotification(targetFCMToken, title, body, dataUrl = '/
         icon: "/icon-192.png", // Icon ứng dụng
         badge: "/icon-192.png",
         vibrate: [200, 100, 200]
-      },
-      fcm_options: {
-        link: dataUrl // Tự động click điều hướng web
       }
     }
   };
