@@ -21,36 +21,54 @@ firebase.initializeApp(firebaseConfig);
 // Initialize Firebase Messaging compat
 const messaging = firebase.messaging();
 
-// Background message handler
-messaging.onBackgroundMessage((payload) => {
-  console.log('[firebase-messaging-sw.js] Đã nhận tin nhắn chạy ngầm: ', payload);
+// Native Push Event Listener (Đảm bảo hoạt động 100% trên cả Mobile và PC/Desktop)
+// Bọc toàn bộ quá trình xử lý trong event.waitUntil() để giữ Service Worker sống cho đến khi hiển thị xong thông báo
+self.addEventListener('push', (event) => {
+  console.log('[firebase-messaging-sw.js] Nhận sự kiện push native:', event);
 
-  // Trích xuất dữ liệu từ payload.data (hỗ trợ Data-Only Messages để tránh hiển thị thông báo kép)
-  const data = payload.data || {};
-  const notificationTitle = data.title || payload.notification?.title || 'Thông báo mới';
-  const notificationBody = data.body || payload.notification?.body || '';
-  const notificationType = data.type || 'general';
+  let data = {};
+  let notificationTitle = 'Thông báo mới';
+  let notificationBody = '';
+  let notificationType = 'general';
+  let tag = 'general-notification';
 
-  console.log(`📦 [firebase-messaging-sw.js] Phân loại thông báo: [${notificationType}] - Title: "${notificationTitle}"`);
+  if (event.data) {
+    try {
+      const payload = event.data.json();
+      console.log('[firebase-messaging-sw.js] Dữ liệu sự kiện push (JSON):', payload);
+      
+      // Hỗ trợ cả cấu trúc Data-Only Message và Notification Message từ FCM
+      data = payload.data || {};
+      notificationTitle = data.title || payload.notification?.title || 'Thông báo mới';
+      notificationBody = data.body || payload.notification?.body || '';
+      notificationType = data.type || 'general';
+      tag = data.tag || (notificationType === 'chat' ? 'chat-group' : (notificationType === 'task' ? 'task-group' : 'general-notification'));
+    } catch (e) {
+      console.warn('[firebase-messaging-sw.js] Lỗi parse JSON payload push, chuyển sang text:', e);
+      notificationBody = event.data.text() || '';
+    }
+  }
 
   const notificationOptions = {
     body: notificationBody,
     icon: '/icon-192.png',
     badge: '/icon-192.png',
-    requireInteraction: true, // Giữ thông báo hiển thị cho đến khi người dùng tắt hoặc tương tác
+    requireInteraction: true, // Giữ thông báo hiển thị cho đến khi tắt hoặc tương tác
     vibrate: [200, 100, 200],
     data: {
       url: data.click_action || data.url || '/',
       ...data
     },
-    // Nhóm thông báo thông minh theo loại (Tránh spam khay thông báo của người dùng)
-    tag: data.tag || (notificationType === 'chat' ? 'chat-group' : (notificationType === 'task' ? 'task-group' : 'general-notification')),
+    tag: tag,
   };
 
-  return self.registration.showNotification(notificationTitle, notificationOptions);
-});
+  console.log(`💻 [firebase-messaging-sw.js] Đang hiển thị thông báo [${notificationType}] - Title: "${notificationTitle}"`);
 
-// Handle click action on Notification to redirect or open window
+  // BẮT BUỘC TRÊN PC/DESKTOP: Bọc showNotification trong event.waitUntil để hệ điều hành không kill luồng Service Worker nửa chừng
+  event.waitUntil(
+    self.registration.showNotification(notificationTitle, notificationOptions)
+  );
+});// Handle click action on Notification to redirect or open window
 self.addEventListener('notificationclick', (event) => {
   console.log('[firebase-messaging-sw.js] Click thông báo:', event);
   
