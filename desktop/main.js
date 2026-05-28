@@ -17,7 +17,8 @@ function createMainWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      backgroundThrottling: false // Giúp ứng dụng không bị ngủ đông khi thu nhỏ, giữ kết nối Realtime/Push luôn hoạt động
     }
   });
 
@@ -131,6 +132,9 @@ async function triggerScreenshot(options = { excludeSelf: true }) {
 
 // 4. Lắng nghe các sự kiện IPC từ renderers
 app.whenReady().then(() => {
+  // Thiết lập định danh ứng dụng cho Windows để hệ thống nhận diện trong Action Center và hiển thị Notification nổi
+  app.setAppUserModelId('com.teamflow.app');
+  
   createMainWindow();
 
   // Đăng ký shortcut Ctrl+Shift+A (Chụp không kèm cửa sổ app)
