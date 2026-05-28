@@ -45,6 +45,9 @@ async function registerTokenOnBackend(token: string) {
   }
 }
 
+// Biến cờ (flag) toàn cục trong phiên chạy để chống trùng lặp và lặp re-render vô hạn
+let isFCMRegisteringOrRegistered = false;
+
 /**
  * Xin quyền thông báo và lấy FCM Token
  */
@@ -54,6 +57,12 @@ export async function requestAndRegisterFCM() {
     console.log('[fcmHelper] Bỏ qua đăng ký FCM do không phải môi trường Web.');
     return;
   }
+
+  if (isFCMRegisteringOrRegistered) {
+    console.log('[fcmHelper] Đăng ký FCM đã hoàn thành hoặc đang được xử lý. Bỏ qua để chống vòng lặp vô hạn.');
+    return;
+  }
+  isFCMRegisteringOrRegistered = true;
 
   // Kiểm tra hỗ trợ của Trình duyệt cho Service Worker và Notifications
   if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('Notification' in window)) {
@@ -96,8 +105,10 @@ export async function requestAndRegisterFCM() {
       await registerTokenOnBackend(fcmToken);
     } else {
       console.warn('[fcmHelper] Không thể lấy FCM Token. Kiểm tra quyền hoặc cấu hình.');
+      isFCMRegisteringOrRegistered = false; // Reset cờ khi thất bại để cho phép thử lại
     }
   } catch (error) {
     console.error('❌ [fcmHelper] Lỗi trong quá trình xin quyền & lấy FCM token:', error);
+    isFCMRegisteringOrRegistered = false; // Reset cờ khi gặp lỗi để cho phép thử lại
   }
 }

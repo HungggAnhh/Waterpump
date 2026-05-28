@@ -42,7 +42,13 @@ try {
 async function sendPWAPushNotification(targetFCMToken, title, body, dataUrl = '/') {
   if (!targetFCMToken) {
     console.warn("⚠️ [firebaseAdmin] Bỏ qua gửi thông báo: Token nhận vào trống.");
-    return;
+    return { success: false, error: "Empty token" };
+  }
+
+  // BỔ SUNG AN TOÀN KHÔNG CRASH: Kiểm tra nếu Firebase Admin chưa khởi tạo ứng dụng nào thành công
+  if (!admin || !admin.apps || admin.apps.length === 0) {
+    console.warn("⚠️ [firebaseAdmin] Bỏ qua gửi thông báo: Firebase Admin chưa được khởi tạo thành công (Thiếu Credentials).");
+    return { success: false, error: "Firebase Admin App not initialized" };
   }
 
   // Cấu hình payload tin nhắn
