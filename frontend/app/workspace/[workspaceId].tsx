@@ -142,9 +142,6 @@ export default function PageTasksScreen() {
       if (newTask.workspace_id === parseInt(workspaceId as string)) {
         setTasks(prev => {
           if (prev.some(t => t.id === newTask.id)) return prev;
-          if (user?.role !== 'admin' && newTask.assigned_to !== user?.id) {
-            return prev;
-          }
           return [...prev, newTask];
         });
       }
@@ -153,8 +150,9 @@ export default function PageTasksScreen() {
     const handleTaskUpdated = (updatedTask: Task) => {
       if (updatedTask.workspace_id === parseInt(workspaceId as string)) {
         setTasks(prev => {
-          if (user?.role !== 'admin' && updatedTask.assigned_to !== user?.id) {
-            return prev.filter(t => t.id !== updatedTask.id);
+          const exists = prev.some(t => t.id === updatedTask.id);
+          if (!exists) {
+            return [...prev, updatedTask];
           }
           return prev.map(t => t.id === updatedTask.id ? updatedTask : t);
         });

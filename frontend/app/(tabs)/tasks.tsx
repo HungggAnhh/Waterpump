@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
   Platform,
   Image,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Colors from '@/constants/Colors';
@@ -99,7 +100,13 @@ export default function WorkspaceScreen() {
       });
     };
 
+    const handleWorkspaceDeleted = (deletedWs: { id: number }) => {
+      console.log('📡 [SOCKET] workspace_deleted:', deletedWs);
+      setWorkspaces(prev => prev.filter(w => w.id !== deletedWs.id));
+    };
+
     socket.on('workspace_created', handleWorkspaceCreated);
+    socket.on('workspace_deleted', handleWorkspaceDeleted);
 
     const refreshTrigger = () => {
       // Re-fetch workspaces for non-admins when visibility updates
@@ -113,6 +120,7 @@ export default function WorkspaceScreen() {
 
     return () => {
       socket.off('workspace_created', handleWorkspaceCreated);
+      socket.off('workspace_deleted', handleWorkspaceDeleted);
       socket.off('task_created', refreshTrigger);
       socket.off('task_updated', refreshTrigger);
       socket.off('task_deleted', refreshTrigger);
@@ -158,6 +166,42 @@ export default function WorkspaceScreen() {
       alert('Có lỗi mạng xảy ra.');
     } finally {
       setCreatingWorkspace(false);
+    }
+  };
+
+  const handleDeleteWorkspace = async (id: number, name: string) => {
+    const doDelete = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/tasks/workspaces/${id}`, {
+          method: 'DELETE',
+        });
+        const result = await res.json();
+        if (result.status === 'success') {
+          setWorkspaces(prev => prev.filter(w => w.id !== id));
+        } else {
+          alert(result.message || 'Lỗi khi xóa trang.');
+        }
+      } catch (err) {
+        console.error(err);
+        alert('Lỗi mạng.');
+      }
+    };
+
+    const msg = `Bạn có chắc chắn muốn xóa trang "${name}" và toàn bộ công việc bên trong không? Hành động này không thể hoàn tác.`;
+
+    if (Platform.OS === 'web') {
+      if (window.confirm(msg)) {
+        doDelete();
+      }
+    } else {
+      Alert.alert(
+        "Xác nhận xóa trang",
+        msg,
+        [
+          { text: "Hủy", style: "cancel" },
+          { text: "Xóa", style: "destructive", onPress: doDelete }
+        ]
+      );
     }
   };
 
@@ -218,7 +262,20 @@ export default function WorkspaceScreen() {
                     <Ionicons name="document-text" size={20} color="#059669" style={{ marginRight: 12 }} />
                     <Text style={[styles.workspaceName, { color: colors.text }]}>{ws.name}</Text>
                   </View>
-                  <Ionicons name="chevron-forward" size={16} color={colors.tabIconDefault} />
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    {isAdmin && (
+                      <TouchableOpacity 
+                        style={{ padding: 8, marginRight: 8 }}
+                        onPress={(e) => {
+                          e.stopPropagation(); // Prevents navigating to the workspace
+                          handleDeleteWorkspace(ws.id, ws.name);
+                        }}
+                      >
+                        <Ionicons name="trash-outline" size={18} color={colors.danger || '#ef4444'} />
+                      </TouchableOpacity>
+                    )}
+                    <Ionicons name="chevron-forward" size={16} color={colors.tabIconDefault} />
+                  </View>
                 </TouchableOpacity>
               ))}
             </View>

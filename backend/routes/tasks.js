@@ -106,6 +106,31 @@ router.post('/workspaces', async (req, res) => {
   }
 });
 
+// DELETE /api/tasks/workspaces/:workspaceId — Xóa trang lớn (chỉ Admin)
+router.delete('/workspaces/:workspaceId', async (req, res) => {
+  const user = getAuthUser(req);
+  if (!user || user.role !== 'admin') {
+    return res.status(403).json({ status: 'error', message: 'Không có quyền thực hiện. Chỉ admin mới được xóa trang.' });
+  }
+
+  const workspaceId = parseInt(req.params.workspaceId);
+  try {
+    const result = await query('DELETE FROM workspaces WHERE id = $1 RETURNING *', [workspaceId]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'Không tìm thấy trang để xóa.' });
+    }
+
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('workspace_deleted', { id: workspaceId });
+    }
+
+    return res.status(200).json({ status: 'success', message: 'Đã xóa trang thành công.' });
+  } catch (err) {
+    return res.status(500).json({ status: 'error', message: 'Lỗi khi xóa trang: ' + err.message });
+  }
+});
+
 // 3. GET /api/tasks/workspaces/:workspaceId/tasks — Lấy danh sách nhiệm vụ của trang lớn
 router.get('/workspaces/:workspaceId/tasks', async (req, res) => {
   const user = getAuthUser(req);
@@ -116,27 +141,14 @@ router.get('/workspaces/:workspaceId/tasks', async (req, res) => {
   const workspaceId = parseInt(req.params.workspaceId);
 
   try {
-    let result;
-    if (user.role === 'admin') {
-      result = await query(
-        `SELECT t.*, u.name AS assignee_name, u.avatar AS assignee_avatar 
-         FROM tasks t 
-         LEFT JOIN users u ON t.assigned_to = u.id 
-         WHERE t.workspace_id = $1 
-         ORDER BY t.id ASC`,
-        [workspaceId]
-      );
-    } else {
-      // Chỉ lấy task được giao cho chính user đó thuộc trang lớn này
-      result = await query(
-        `SELECT t.*, u.name AS assignee_name, u.avatar AS assignee_avatar 
-         FROM tasks t 
-         LEFT JOIN users u ON t.assigned_to = u.id 
-         WHERE t.workspace_id = $1 AND t.assigned_to = $2 
-         ORDER BY t.id ASC`,
-        [workspaceId, user.id]
-      );
-    }
+    let result = await query(
+      `SELECT t.*, u.name AS assignee_name, u.avatar AS assignee_avatar 
+       FROM tasks t 
+       LEFT JOIN users u ON t.assigned_to = u.id 
+       WHERE t.workspace_id = $1 
+       ORDER BY t.id ASC`,
+      [workspaceId]
+    );
     return res.status(200).json({ status: 'success', data: result.rows });
   } catch (err) {
     return res.status(500).json({ status: 'error', message: 'Lỗi lấy danh sách nhiệm vụ: ' + err.message });
