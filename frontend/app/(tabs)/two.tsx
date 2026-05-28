@@ -155,10 +155,17 @@ export default function SettingsScreen() {
   };
 
   const handleLogout = () => {
-    Alert.alert('Đăng xuất', 'Bạn có chắc chắn muốn đăng xuất khỏi tài khoản?', [
-      { text: 'Hủy', style: 'cancel' },
-      { text: 'Đăng xuất', style: 'destructive', onPress: () => logout() }
-    ]);
+    if (Platform.OS === 'web') {
+      const confirmLogout = window.confirm('Bạn có chắc chắn muốn đăng xuất khỏi tài khoản?');
+      if (confirmLogout) {
+        logout();
+      }
+    } else {
+      Alert.alert('Đăng xuất', 'Bạn có chắc chắn muốn đăng xuất khỏi tài khoản?', [
+        { text: 'Hủy', style: 'cancel' },
+        { text: 'Đăng xuất', style: 'destructive', onPress: () => logout() }
+      ]);
+    }
   };
 
   const handleProvisionAccount = async () => {
