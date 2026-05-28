@@ -63,14 +63,10 @@ async function sendPWAPushNotification(targetFCMToken, title, body, dataUrl = '/
     return { success: false, error: "Firebase Admin App not initialized" };
   }
 
-  // Cấu hình payload tin nhắn
+  // Cấu hình payload tin nhắn dạng Data-Only Message (tránh lỗi hiển thị thông báo kép)
   const message = {
     token: targetFCMToken,
-    notification: {
-      title: title,
-      body: body,
-    },
-    // Custom data chứa click url và các metadata khác
+    // Toàn bộ tiêu đề, nội dung và đường dẫn được đẩy vào data
     data: {
       title: title,
       body: body,
@@ -78,18 +74,10 @@ async function sendPWAPushNotification(targetFCMToken, title, body, dataUrl = '/
       url: dataUrl,
       tag: 'teamflow-notification-' + Date.now()
     },
-    // Cấu hình cụ thể cho Web Push
+    // Cấu hình cụ thể cho Web Push (vẫn giữ Urgency để thiết bị thức giấc nhận tin ngay)
     webpush: {
       headers: {
-        Urgency: "high", // Mức độ ưu tiên cao nhất để nhận ngay cả khi điện thoại ngủ
-      },
-      notification: {
-        title: title,
-        body: body,
-        requireInteraction: true, // Giữ thông báo hiển thị cho đến khi người dùng tắt hoặc tương tác
-        icon: "/icon-192.png", // Icon ứng dụng
-        badge: "/icon-192.png",
-        vibrate: [200, 100, 200]
+        Urgency: "high",
       }
     }
   };

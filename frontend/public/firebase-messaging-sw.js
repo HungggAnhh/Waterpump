@@ -25,22 +25,22 @@ const messaging = firebase.messaging();
 messaging.onBackgroundMessage((payload) => {
   console.log('[firebase-messaging-sw.js] Đã nhận tin nhắn chạy ngầm: ', payload);
 
-  const notificationTitle = payload.notification?.title || 'Thông báo mới';
-  
-  // Extract custom notification data
+  // Trích xuất dữ liệu từ payload.data (hỗ trợ Data-Only Messages để tránh hiển thị thông báo kép)
   const data = payload.data || {};
+  const notificationTitle = data.title || payload.notification?.title || 'Thông báo mới';
+  
   const notificationOptions = {
-    body: payload.notification?.body || '',
+    body: data.body || payload.notification?.body || '',
     icon: '/icon-192.png',
     badge: '/icon-192.png',
-    requireInteraction: true, // Keep notification active on screen
+    requireInteraction: true, // Giữ thông báo hiển thị cho đến khi người dùng tắt hoặc tương tác
     vibrate: [200, 100, 200],
     data: {
       url: data.click_action || data.url || '/',
       ...data
     },
-    // Set a tag to group notifications and avoid cluttering
-    tag: data.tag || 'general-notification',
+    // Tag duy nhất để nhóm và hiển thị thông báo chính xác
+    tag: data.tag || 'teamflow-notification-' + Date.now(),
   };
 
   return self.registration.showNotification(notificationTitle, notificationOptions);
