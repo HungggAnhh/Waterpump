@@ -1,5 +1,5 @@
 import { useFonts } from 'expo-font';
-import { Stack } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
@@ -85,10 +85,35 @@ function RootLayoutContent() {
 
 function RootLayoutNav() {
   const colorScheme = useColorScheme();
+  const router = useRouter();
 
   useEffect(() => {
     // Tự động đăng ký Web Push Notifications cho PWA
     requestAndRegisterFCM();
+  }, []);
+
+  // Xử lý điều hướng gián tiếp qua trang chủ (?redirect=...) để tránh lỗi Vercel 404
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const redirectPath = urlParams.get('redirect');
+      if (redirectPath) {
+        console.log('🔄 [RootLayoutNav] Phát hiện yêu cầu điều hướng gián tiếp:', redirectPath);
+        
+        // 1. Loại bỏ tham số redirect khỏi URL để tránh bị chuyển hướng lặp lại khi re-render/refresh
+        const cleanSearch = window.location.search
+          .replace(/[?&]redirect=[^&]+/, '')
+          .replace(/^&/, '?')
+          .replace(/^\?$/, '');
+        const newUrl = window.location.pathname + cleanSearch;
+        window.history.replaceState({}, '', newUrl);
+
+        // 2. Chờ một nhịp nhỏ để router của client sẵn sàng, sau đó chuyển hướng người dùng
+        setTimeout(() => {
+          router.push(redirectPath as any);
+        }, 300);
+      }
+    }
   }, []);
 
   return (
