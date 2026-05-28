@@ -51,7 +51,7 @@ try {
  * @param {string} body Nội dung thông báo
  * @param {string} dataUrl Đường dẫn PWA ứng dụng cần điều hướng khi click
  */
-async function sendPWAPushNotification(targetFCMToken, title, body, dataUrl = '/') {
+async function sendPWAPushNotification(targetFCMToken, title, body, dataUrl = '/', type = 'general') {
   if (!targetFCMToken) {
     console.warn("⚠️ [firebaseAdmin] Bỏ qua gửi thông báo: Token nhận vào trống.");
     return { success: false, error: "Empty token" };
@@ -68,11 +68,12 @@ async function sendPWAPushNotification(targetFCMToken, title, body, dataUrl = '/
     token: targetFCMToken,
     // Toàn bộ tiêu đề, nội dung và đường dẫn được đẩy vào data
     data: {
+      type: type,
       title: title,
       body: body,
       click_action: dataUrl,
       url: dataUrl,
-      tag: 'teamflow-notification-' + Date.now()
+      tag: `${type}-notification-` + Date.now()
     },
     // Cấu hình cụ thể cho Web Push (vẫn giữ Urgency để thiết bị thức giấc nhận tin ngay)
     webpush: {

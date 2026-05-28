@@ -28,9 +28,13 @@ messaging.onBackgroundMessage((payload) => {
   // Trích xuất dữ liệu từ payload.data (hỗ trợ Data-Only Messages để tránh hiển thị thông báo kép)
   const data = payload.data || {};
   const notificationTitle = data.title || payload.notification?.title || 'Thông báo mới';
-  
+  const notificationBody = data.body || payload.notification?.body || '';
+  const notificationType = data.type || 'general';
+
+  console.log(`📦 [firebase-messaging-sw.js] Phân loại thông báo: [${notificationType}] - Title: "${notificationTitle}"`);
+
   const notificationOptions = {
-    body: data.body || payload.notification?.body || '',
+    body: notificationBody,
     icon: '/icon-192.png',
     badge: '/icon-192.png',
     requireInteraction: true, // Giữ thông báo hiển thị cho đến khi người dùng tắt hoặc tương tác
@@ -39,8 +43,8 @@ messaging.onBackgroundMessage((payload) => {
       url: data.click_action || data.url || '/',
       ...data
     },
-    // Tag duy nhất để nhóm và hiển thị thông báo chính xác
-    tag: data.tag || 'teamflow-notification-' + Date.now(),
+    // Nhóm thông báo thông minh theo loại (Tránh spam khay thông báo của người dùng)
+    tag: data.tag || (notificationType === 'chat' ? 'chat-group' : (notificationType === 'task' ? 'task-group' : 'general-notification')),
   };
 
   return self.registration.showNotification(notificationTitle, notificationOptions);

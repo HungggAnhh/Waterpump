@@ -197,7 +197,7 @@ io.on('connection', (socket) => {
 
               console.log(`📡 Phát hiện ${tokensRes.rows.length} thiết bị nhận thông báo tin nhắn mới từ User ID ${sender_id}`);
               for (const row of tokensRes.rows) {
-                await sendPWAPushNotification(row.fcm_token, title, body, dataUrl);
+                await sendPWAPushNotification(row.fcm_token, title, body, dataUrl, 'chat');
               }
             }
           }

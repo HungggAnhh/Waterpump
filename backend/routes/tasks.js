@@ -102,13 +102,13 @@ router.post('/', async (req, res) => {
           if (tokensRes.rows.length > 0) {
             const { sendPWAPushNotification } = require('../config/firebaseAdmin');
             
-            const title = '🎯 Công việc mới được giao';
-            const body = `${creatorName} đã giao cho bạn công việc: "${data.title}"`;
+            const title = '📌 Bạn có công việc mới!';
+            const body = `Người giao: ${creatorName} \nTask: ${data.title}`;
             const dataUrl = '/tasks'; // Điều hướng về tab chính chứa danh sách công việc (PWA)
 
             console.log(`📡 Phát hiện ${tokensRes.rows.length} thiết bị nhận thông báo giao việc cho User ID ${assigneeId}`);
             for (const row of tokensRes.rows) {
-              await sendPWAPushNotification(row.fcm_token, title, body, dataUrl);
+              await sendPWAPushNotification(row.fcm_token, title, body, dataUrl, 'task');
             }
           }
         } catch (pushErr) {
