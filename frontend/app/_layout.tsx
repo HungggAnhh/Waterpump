@@ -25,6 +25,7 @@ import { UserProvider, useUser } from '../context/UserContext';
 import { SocketProvider } from '../context/SocketContext';
 import LoginScreen from '../components/LoginScreen';
 import NameOnboardingScreen from '../components/NameOnboardingScreen';
+import { requestAndRegisterFCM } from '../utils/fcmHelper';
 
 export default function RootLayout() {
   const [loaded, error] = useFonts({
@@ -84,6 +85,11 @@ function RootLayoutContent() {
 
 function RootLayoutNav() {
   const colorScheme = useColorScheme();
+
+  useEffect(() => {
+    // Tự động đăng ký Web Push Notifications cho PWA
+    requestAndRegisterFCM();
+  }, []);
 
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>

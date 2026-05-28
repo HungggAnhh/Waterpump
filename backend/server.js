@@ -20,6 +20,8 @@ const cors    = require('cors');
 const path    = require('path');
 
 const { query } = require('./config/supabase');
+// Khởi tạo Firebase Admin SDK ngay khi khởi động Server
+require('./config/firebaseAdmin');
 
 // ─── Routes ──────────────────────────────────────────────────────
 const authRoutes          = require('./routes/auth');
@@ -163,6 +165,46 @@ io.on('connection', (socket) => {
         io.to(`user_${user_id}`).emit('receive_message', messageObject);
         console.log(`🚀 → user_${user_id}`);
       });
+
+      // Gửi Push Notification cho các thành viên khác trong phòng chat (chạy bất đồng bộ)
+      (async () => {
+        try {
+          const senderName = sender.name || 'Người dùng';
+          // Lọc danh sách người nhận (loại trừ chính người gửi)
+          const otherMembers = memberRes.rows.filter(m => m.user_id !== parseInt(sender_id));
+          
+          if (otherMembers.length > 0) {
+            const memberIds = otherMembers.map(m => m.user_id);
+            // Lấy các FCM tokens của các thành viên này
+            const tokensRes = await query(
+              'SELECT user_id, fcm_token FROM user_push_tokens WHERE user_id = ANY($1)',
+              [memberIds]
+            );
+
+            if (tokensRes.rows.length > 0) {
+              const { sendPWAPushNotification } = require('./config/firebaseAdmin');
+              
+              const title = `💬 Tin nhắn mới từ ${senderName}`;
+              let body = message;
+              if (type === 'image') body = '📷 [Hình ảnh]';
+              else if (type === 'file') body = '📁 [Tệp tin]';
+              
+              if (body.length > 100) {
+                body = body.substring(0, 100) + '...';
+              }
+
+              const dataUrl = `/chat/${conversation_id}`; // Đường dẫn trực tiếp vào phòng chat trên PWA
+
+              console.log(`📡 Phát hiện ${tokensRes.rows.length} thiết bị nhận thông báo tin nhắn mới từ User ID ${sender_id}`);
+              for (const row of tokensRes.rows) {
+                await sendPWAPushNotification(row.fcm_token, title, body, dataUrl);
+              }
+            }
+          }
+        } catch (pushErr) {
+          console.error('⚠️ [socket] Lỗi gửi push notification cho tin nhắn:', pushErr.message);
+        }
+      })();
 
     } catch (err) {
       console.error('❌ Lỗi lưu tin nhắn Supabase:', err.message);

@@ -1,6 +1,7 @@
 // backend/routes/users.js
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 const { query } = require('../config/supabase');
 const router = express.Router();
 
@@ -80,6 +81,48 @@ router.post('/', async (req, res) => {
     });
   } catch (err) {
     return res.status(500).json({ status: 'error', message: 'Lỗi CSDL khi tạo tài khoản: ' + err.message });
+  }
+});
+
+// POST /api/users/register-push-token — Đăng ký FCM token từ PWA client
+router.post('/register-push-token', async (req, res) => {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+
+  if (!token) {
+    return res.status(401).json({ status: 'error', message: 'Thiếu mã xác thực (Token).' });
+  }
+
+  try {
+    const JWT_SECRET = process.env.JWT_SECRET || 'SecretCompanyKeySecret_9988';
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const userId = decoded.id;
+
+    const { fcmToken, deviceType = 'pwa_web' } = req.body;
+    if (!fcmToken) {
+      return res.status(400).json({ status: 'error', message: 'Thiếu FCM Token trong yêu cầu.' });
+    }
+
+    // Upsert FCM token: chèn mới, nếu trùng fcm_token thì cập nhật lại user_id tương ứng
+    await query(`
+      INSERT INTO user_push_tokens (user_id, fcm_token, device_type, updated_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT (fcm_token)
+      DO UPDATE SET user_id = EXCLUDED.user_id, device_type = EXCLUDED.device_type, updated_at = NOW()
+    `, [parseInt(userId), fcmToken, deviceType]);
+
+    console.log(`🎫 Đã đăng ký FCM Web Token cho User ID ${userId}: ${fcmToken.substring(0, 15)}...`);
+
+    return res.status(200).json({
+      status: 'success',
+      message: 'Đăng ký FCM Web Token thành công.'
+    });
+  } catch (err) {
+    console.error('❌ Lỗi đăng ký FCM token:', err.message);
+    return res.status(401).json({
+      status: 'error',
+      message: 'Mã xác thực không hợp lệ hoặc lỗi CSDL: ' + err.message
+    });
   }
 });
 

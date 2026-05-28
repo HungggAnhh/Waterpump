@@ -74,6 +74,49 @@ router.post('/', async (req, res) => {
     const userRes = await query('SELECT name, avatar FROM users WHERE id = $1 LIMIT 1', [sender_id]);
     const user = userRes.rows[0] || {};
 
+    // Gửi Push Notification cho các thành viên khác trong phòng chat (chạy bất đồng bộ)
+    (async () => {
+      try {
+        const senderName = user.name || 'Người dùng';
+        // Lấy tất cả thành viên trong cuộc trò chuyện
+        const memberRes = await query(
+          'SELECT user_id FROM conversation_users WHERE conversation_id = $1',
+          [parseInt(conversation_id)]
+        );
+        const otherMembers = memberRes.rows.filter(m => m.user_id !== parseInt(sender_id));
+        
+        if (otherMembers.length > 0) {
+          const memberIds = otherMembers.map(m => m.user_id);
+          const tokensRes = await query(
+            'SELECT user_id, fcm_token FROM user_push_tokens WHERE user_id = ANY($1)',
+            [memberIds]
+          );
+
+          if (tokensRes.rows.length > 0) {
+            const { sendPWAPushNotification } = require('../config/firebaseAdmin');
+            
+            const title = `💬 Tin nhắn mới từ ${senderName}`;
+            let body = message;
+            if (type === 'image') body = '📷 [Hình ảnh]';
+            else if (type === 'file') body = '📁 [Tệp tin]';
+            
+            if (body.length > 100) {
+              body = body.substring(0, 100) + '...';
+            }
+
+            const dataUrl = `/chat/${conversation_id}`;
+
+            console.log(`📡 [http-msg] Phát hiện ${tokensRes.rows.length} thiết bị nhận thông báo tin nhắn từ User ID ${sender_id}`);
+            for (const row of tokensRes.rows) {
+              await sendPWAPushNotification(row.fcm_token, title, body, dataUrl);
+            }
+          }
+        }
+      } catch (pushErr) {
+        console.error('⚠️ [messages] Lỗi gửi push notification cho tin nhắn:', pushErr.message);
+      }
+    })();
+
     return res.status(201).json({
       status: 'success',
       data: {

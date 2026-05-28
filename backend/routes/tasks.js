@@ -85,10 +85,42 @@ router.post('/', async (req, res) => {
       ]
     );
 
+    const taskId = result.rows[0].id;
+
+    // Gửi Push Notification cho người được giao task (nếu có) bất đồng bộ
+    const assigneeId = data.assignee_id ? parseInt(data.assignee_id) : null;
+    if (assigneeId) {
+      (async () => {
+        try {
+          // Lấy tên người giao (creator)
+          const creatorId = data.created_by ? parseInt(data.created_by) : 1;
+          const creatorRes = await query('SELECT name FROM users WHERE id = $1 LIMIT 1', [creatorId]);
+          const creatorName = creatorRes.rows[0]?.name || 'Quản trị viên';
+
+          // Lấy các FCM tokens của người được giao task
+          const tokensRes = await query('SELECT fcm_token FROM user_push_tokens WHERE user_id = $1', [assigneeId]);
+          if (tokensRes.rows.length > 0) {
+            const { sendPWAPushNotification } = require('../config/firebaseAdmin');
+            
+            const title = '🎯 Công việc mới được giao';
+            const body = `${creatorName} đã giao cho bạn công việc: "${data.title}"`;
+            const dataUrl = '/(tabs)'; // Điều hướng về tab chính chứa danh sách công việc (PWA)
+
+            console.log(`📡 Phát hiện ${tokensRes.rows.length} thiết bị nhận thông báo giao việc cho User ID ${assigneeId}`);
+            for (const row of tokensRes.rows) {
+              await sendPWAPushNotification(row.fcm_token, title, body, dataUrl);
+            }
+          }
+        } catch (pushErr) {
+          console.error('⚠️ [tasks] Lỗi gửi push notification cho task:', pushErr.message);
+        }
+      })();
+    }
+
     return res.status(201).json({
       status: 'success',
       message: 'Công việc đã được tạo thành công.',
-      task_id: result.rows[0].id
+      task_id: taskId
     });
   } catch (err) {
     return res.status(500).json({ status: 'error', message: 'Lỗi CSDL khi tạo công việc: ' + err.message });
