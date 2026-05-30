@@ -291,6 +291,89 @@ io.on('connection', (socket) => {
   });
 });
 
+// ─── Recurring Task Reminders Scheduler (Runs every 1 minute) ──────
+const startReminderScheduler = () => {
+  console.log("⏰ [scheduler] Bắt đầu khởi chạy tiến trình nhắc việc tự động...");
+  setInterval(async () => {
+    try {
+      // Tìm các công việc:
+      // 1. Chưa hoàn thành (completed = FALSE)
+      // 2. Không bị xóa (is_deleted = FALSE)
+      // 3. Có độ ưu tiên cao (priority = 'high')
+      // 4. Có khoảng cách nhắc nhở (reminder_interval IS NOT NULL)
+      // 5. Được gán cho một người (assigned_to IS NOT NULL)
+      const tasksRes = await query(`
+        SELECT t.*, u.name AS assignee_name
+        FROM tasks t
+        JOIN users u ON t.assigned_to = u.id
+        WHERE t.completed = FALSE 
+          AND t.is_deleted = FALSE 
+          AND t.priority = 'high' 
+          AND t.reminder_interval IS NOT NULL 
+          AND t.assigned_to IS NOT NULL
+      `);
+
+      if (tasksRes.rows.length === 0) return;
+
+      const now = new Date();
+      const { sendPWAPushNotification } = require('./config/firebaseAdmin');
+
+      for (const task of tasksRes.rows) {
+        // Mốc thời gian gần đây nhất gửi reminder. Nếu chưa gửi bao giờ thì dùng created_at.
+        const baseTime = task.last_reminded_at ? new Date(task.last_reminded_at) : new Date(task.created_at);
+        const diffMs = now.getTime() - baseTime.getTime();
+        const diffMinutes = diffMs / (1000 * 60);
+
+        let isDue = false;
+        let reminderText = '';
+
+        if (task.reminder_interval === 'hourly') {
+          // Gửi mỗi giờ (60 phút)
+          if (diffMinutes >= 60) {
+            isDue = true;
+            reminderText = 'mỗi giờ';
+          }
+        } else if (task.reminder_interval === 'daily') {
+          // Gửi mỗi ngày (24 giờ = 1440 phút)
+          if (diffMinutes >= 1440) {
+            isDue = true;
+            reminderText = 'mỗi ngày';
+          }
+        }
+
+        if (isDue) {
+          console.log(`⏰ [scheduler] Phát hiện công việc ID ${task.id} đến lịch hối thúc [${task.reminder_interval}] cho User ${task.assigned_to}`);
+          
+          // Lấy FCM tokens của assignee
+          const tokensRes = await query(
+            'SELECT fcm_token FROM user_push_tokens WHERE user_id = $1',
+            [task.assigned_to]
+          );
+
+          if (tokensRes.rows.length > 0) {
+            const title = `🚨 [HỐI THÚC NHẮC HẸN]`;
+            const body = `Công việc gấp chưa hoàn thành! Sếp nhắc bạn thực hiện [nhắc ${reminderText}]: "${task.title}"`;
+            const dataUrl = `/workspace/${task.workspace_id}`;
+            for (const row of tokensRes.rows) {
+              await sendPWAPushNotification(row.fcm_token, title, body, dataUrl, 'task');
+            }
+          }
+
+          // Cập nhật last_reminded_at trong CSDL để tránh gửi lặp
+          await query(
+            'UPDATE tasks SET last_reminded_at = NOW() WHERE id = $1',
+            [task.id]
+          );
+        }
+      }
+    } catch (err) {
+      console.error('❌ [scheduler] Lỗi hệ thống trong tiến trình nhắc việc tự động:', err.message);
+    }
+  }, 60000); // 60000 ms = 1 phút
+};
+
+startReminderScheduler();
+
 // ─── Start ────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {

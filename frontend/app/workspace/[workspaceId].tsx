@@ -36,6 +36,8 @@ interface Task {
   deadline: string | null;
   completed: boolean;
   is_reviewed?: boolean;
+  reminder_interval?: 'hourly' | 'daily' | null;
+  last_reminded_at?: string | null;
   created_at: string;
   updated_at?: string;
 }
@@ -66,6 +68,8 @@ export default function PageTasksScreen() {
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [isUrgeModalOpen, setIsUrgeModalOpen] = useState(false);
+  const [submittingUrge, setSubmittingUrge] = useState(false);
 
   // Form Fields (For create and edit)
   const [formTitle, setFormTitle] = useState('');
@@ -316,6 +320,33 @@ export default function PageTasksScreen() {
     } catch (err) {
       console.error(err);
       alert('Lỗi mạng.');
+    }
+  };
+
+  const handleUrgeTask = async (interval: 'now' | 'hourly' | 'daily' | 'off') => {
+    if (!selectedTask) return;
+    try {
+      setSubmittingUrge(true);
+      const res = await fetch(`${API_BASE_URL}/tasks/tasks/${selectedTask.id}/urge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ interval }),
+      });
+      const result = await res.json();
+      if (result.status === 'success') {
+        alert(result.message);
+        setIsUrgeModalOpen(false);
+        const updatedInterval = (interval === 'off' || interval === 'now') ? null : interval;
+        setTasks(prev => prev.map(t => t.id === selectedTask.id ? { ...t, reminder_interval: updatedInterval } : t));
+        setSelectedTask(prev => prev ? { ...prev, reminder_interval: updatedInterval } : null);
+      } else {
+        alert(result.message || 'Lỗi khi gửi yêu cầu hối thúc.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Lỗi kết nối mạng.');
+    } finally {
+      setSubmittingUrge(false);
     }
   };
 
@@ -587,6 +618,10 @@ export default function PageTasksScreen() {
                 <Ionicons name="checkmark-done-outline" size={12} color={colors.tabIconDefault} style={{ marginRight: 5 }} />
                 <Text style={[styles.colHeaderText, { color: colors.tabIconDefault }]}>Duyệt</Text>
               </View>
+              <View style={[styles.colHeader, styles.colUrge, { borderRightColor: colors.border }]}>
+                <Ionicons name="thunderstorm-outline" size={12} color={colors.tabIconDefault} style={{ marginRight: 5 }} />
+                <Text style={[styles.colHeaderText, { color: colors.tabIconDefault }]}>Hối thúc</Text>
+              </View>
               <View style={[styles.colHeader, styles.colDesc]}>
                 <Ionicons name="menu-outline" size={12} color={colors.tabIconDefault} style={{ marginRight: 5 }} />
                 <Text style={[styles.colHeaderText, { color: colors.tabIconDefault }]}>Mô tả</Text>
@@ -696,7 +731,59 @@ export default function PageTasksScreen() {
                     )}
                   </View>
 
-                  {/* Column 4: Mô tả */}
+                  {/* Column 4.5: Hối thúc */}
+                  <View style={[styles.colCell, styles.colUrge, { borderRightColor: colors.border, alignItems: 'center', justifyContent: 'center' }]}>
+                    {task.priority?.toLowerCase() === 'high' && !task.completed ? (
+                      isAdmin ? (
+                        <TouchableOpacity
+                          style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            backgroundColor: task.reminder_interval ? '#fef3c7' : 'transparent',
+                            borderColor: task.reminder_interval ? '#f59e0b' : colors.border,
+                            borderWidth: task.reminder_interval ? 1 : 0.5,
+                            borderRadius: 6,
+                            paddingHorizontal: 8,
+                            paddingVertical: 3,
+                          }}
+                          onPress={() => {
+                            setSelectedTask(task);
+                            setIsUrgeModalOpen(true);
+                          }}
+                          activeOpacity={0.7}
+                        >
+                          <Ionicons 
+                            name="flash" 
+                            size={14} 
+                            color={task.reminder_interval ? '#d97706' : colors.tabIconDefault} 
+                            style={{ marginRight: task.reminder_interval ? 4 : 0 }}
+                          />
+                          {task.reminder_interval && (
+                            <Text style={{ fontSize: 11, fontWeight: '700', color: '#92400e' }}>
+                              {task.reminder_interval === 'hourly' ? '1 giờ' : '1 ngày'}
+                            </Text>
+                          )}
+                        </TouchableOpacity>
+                      ) : (
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          <Ionicons 
+                            name="flash" 
+                            size={14} 
+                            color={task.reminder_interval ? '#d97706' : colors.tabIconDefault} 
+                          />
+                          {task.reminder_interval && (
+                            <Text style={{ fontSize: 11, fontWeight: '700', color: '#92400e', marginLeft: 4 }}>
+                              {task.reminder_interval === 'hourly' ? 'Mỗi giờ' : 'Mỗi ngày'}
+                            </Text>
+                          )}
+                        </View>
+                      )
+                    ) : (
+                      <Text style={{ color: colors.tabIconDefault, fontSize: 12 }}>—</Text>
+                    )}
+                  </View>
+
+                  {/* Column 5: Mô tả */}
                   <View style={[styles.colCell, styles.colDesc]}>
                     <Text style={[styles.descText, { color: colors.tabIconDefault }]} numberOfLines={1}>
                       {task.description || ''}
@@ -753,6 +840,8 @@ export default function PageTasksScreen() {
                 
                 <View style={[styles.colCell, styles.colStatus, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
                 <View style={[styles.colCell, styles.colPriority, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
+                <View style={[styles.colCell, styles.colReviewed, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
+                <View style={[styles.colCell, styles.colUrge, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
                 <View style={[styles.colCell, styles.colDesc, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
               </View>
             )}
@@ -921,34 +1010,6 @@ export default function PageTasksScreen() {
                 </View>
               </View>
 
-              <Text style={[styles.formLabel, { color: colors.text }]}>Người được giao</Text>
-              <View pointerEvents={isAdmin ? "auto" : "none"} style={[styles.pickerContainer, { borderColor: colors.border, backgroundColor: colors.background, marginBottom: 12, opacity: isAdmin ? 1 : 0.6 }]}>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ paddingVertical: 4 }}>
-                  <TouchableOpacity
-                    style={[
-                      styles.assigneeOption,
-                      formAssignedTo === '' && { backgroundColor: colors.tint + '20', borderColor: colors.tint }
-                    ]}
-                    onPress={() => setFormAssignedTo('')}
-                  >
-                    <Text style={{ fontSize: 12, color: formAssignedTo === '' ? colors.tint : colors.text, fontWeight: '600' }}>Không gán</Text>
-                  </TouchableOpacity>
-                  
-                  {usersList.map(u => (
-                    <TouchableOpacity
-                      key={u.id}
-                      style={[
-                        styles.assigneeOption,
-                        formAssignedTo === String(u.id) && { backgroundColor: colors.tint + '20', borderColor: colors.tint }
-                      ]}
-                      onPress={() => setFormAssignedTo(String(u.id))}
-                    >
-                      <Image source={{ uri: u.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=50&h=50&q=80' }} style={styles.optionAvatar} />
-                      <Text style={{ fontSize: 12, color: formAssignedTo === String(u.id) ? colors.tint : colors.text, fontWeight: '600' }}>{u.name}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
 
               <View style={styles.formButtons}>
                 <TouchableOpacity
@@ -1028,25 +1089,43 @@ export default function PageTasksScreen() {
                   {selectedTask.description || 'Không có mô tả chi tiết cho nhiệm vụ này.'}
                 </Text>
 
+                {isAdmin && selectedTask.priority?.toLowerCase() === 'high' && !selectedTask.completed && (
+                  <TouchableOpacity
+                    style={{ 
+                      backgroundColor: '#d97706', 
+                      marginVertical: 12,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      height: 40,
+                      borderRadius: 8,
+                      gap: 6
+                    }}
+                    onPress={() => setIsUrgeModalOpen(true)}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="thunderstorm-outline" size={18} color="#ffffff" />
+                    <Text style={{ color: '#ffffff', fontSize: 13, fontWeight: '700' }}>
+                      {selectedTask.reminder_interval ? '⚡ Quản lý hối thúc' : '⚡ Hối thúc công việc'}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+
                 <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
-                {/* Meta Row 1: Assignee */}
-                <View style={{ marginBottom: 14 }}>
-                  <Text style={[styles.detailLabel, { color: colors.tabIconDefault }]}>NGƯỜI ĐƯỢC GIAO</Text>
-                  {selectedTask.assigned_to ? (
-                    <View style={[styles.assigneeContainer, { marginTop: 4 }]}>
-                      <Image
-                        source={{ uri: selectedTask.assignee_avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=50&h=50&q=80' }}
-                        style={styles.assigneeAvatar}
-                      />
-                      <Text style={[styles.assigneeNameText, { color: colors.text }]}>
-                        {selectedTask.assignee_name}
+
+                {/* Active Reminder Interval if set */}
+                {selectedTask.reminder_interval && (
+                  <View style={{ marginBottom: 14 }}>
+                    <Text style={[styles.detailLabel, { color: colors.tabIconDefault }]}>LỊCH NHẮC HẸN</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+                      <Ionicons name="alarm-outline" size={16} color="#d97706" style={{ marginRight: 6 }} />
+                      <Text style={{ color: '#d97706', fontSize: 13, fontWeight: '700' }}>
+                        Nhắc nhở hối thúc: {selectedTask.reminder_interval === 'hourly' ? 'Mỗi giờ' : 'Mỗi ngày'}
                       </Text>
                     </View>
-                  ) : (
-                    <Text style={{ color: colors.text, fontSize: 13, marginTop: 4 }}>Chưa có ai</Text>
-                  )}
-                </View>
+                  </View>
+                )}
 
                 {/* Meta Row 2: Timestamps */}
                 <View style={styles.detailMetaRow}>
@@ -1066,6 +1145,7 @@ export default function PageTasksScreen() {
                 </View>
               </ScrollView>
             )}
+
 
             {selectedTask && (isAdmin || selectedTask.assigned_to === user?.id) && (
               <View style={styles.adminControls}>
@@ -1090,6 +1170,114 @@ export default function PageTasksScreen() {
             )}
           </View>
         </View>
+      </Modal>
+
+      {/* 7.5. Modal: Hối thúc công việc */}
+      <Modal
+        visible={isUrgeModalOpen}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setIsUrgeModalOpen(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setIsUrgeModalOpen(false)}
+        >
+          <View style={[styles.urgeModalCard, { backgroundColor: colors.card }]} onStartShouldSetResponder={() => true}>
+            <View style={styles.urgeModalHeader}>
+              <Text style={[styles.urgeModalTitle, { color: colors.text }]}>⚡ Thiết lập hối thúc</Text>
+              <TouchableOpacity onPress={() => setIsUrgeModalOpen(false)}>
+                <Ionicons name="close" size={20} color={colors.tabIconDefault} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={[styles.urgeModalSubtitle, { color: colors.tabIconDefault }]}>
+              Chọn phương thức để đôn đốc nhân viên hoàn thành nhiệm vụ này gấp.
+            </Text>
+
+            {submittingUrge ? (
+              <View style={{ padding: 20, alignItems: 'center' }}>
+                <ActivityIndicator size="large" color="#d97706" />
+                <Text style={{ marginTop: 10, color: colors.tabIconDefault, fontSize: 12 }}>Đang gửi yêu cầu...</Text>
+              </View>
+            ) : (
+              <View style={styles.urgeOptionsList}>
+                {/* 1. Hối thúc ngay lập tức */}
+                <TouchableOpacity
+                  style={[styles.urgeOptionBtn, { backgroundColor: '#fee2e2', borderColor: '#ef4444' }]}
+                  onPress={() => handleUrgeTask('now')}
+                >
+                  <View style={styles.urgeOptionIconBox}>
+                    <Ionicons name="flash" size={20} color="#dc2626" />
+                  </View>
+                  <View style={styles.urgeOptionTextBox}>
+                    <Text style={{ fontSize: 13, fontWeight: '700', marginBottom: 2, color: '#b91c1c' }}>Hối thúc ngay</Text>
+                    <Text style={{ fontSize: 10.5, fontWeight: '500', color: '#991b1b' }}>Gửi 1 thông báo đẩy khẩn cấp ngay lập tức</Text>
+                  </View>
+                </TouchableOpacity>
+
+                {/* 2. Nhắc nhở mỗi giờ */}
+                <TouchableOpacity
+                  style={[
+                    styles.urgeOptionBtn, 
+                    { backgroundColor: '#fef3c7', borderColor: '#f59e0b' },
+                    selectedTask?.reminder_interval === 'hourly' && { borderWidth: 2 }
+                  ]}
+                  onPress={() => handleUrgeTask('hourly')}
+                >
+                  <View style={styles.urgeOptionIconBox}>
+                    <Ionicons name="alarm" size={20} color="#d97706" />
+                  </View>
+                  <View style={styles.urgeOptionTextBox}>
+                    <Text style={{ fontSize: 13, fontWeight: '700', marginBottom: 2, color: '#92400e' }}>Nhắc nhở mỗi giờ</Text>
+                    <Text style={{ fontSize: 10.5, fontWeight: '500', color: '#b45309' }}>Thông báo đẩy lặp lại sau mỗi 60 phút</Text>
+                  </View>
+                  {selectedTask?.reminder_interval === 'hourly' && (
+                    <Ionicons name="checkmark-circle" size={20} color="#d97706" style={{ marginLeft: 'auto' }} />
+                  )}
+                </TouchableOpacity>
+
+                {/* 3. Nhắc nhở mỗi ngày */}
+                <TouchableOpacity
+                  style={[
+                    styles.urgeOptionBtn, 
+                    { backgroundColor: '#ecfdf5', borderColor: '#10b981' },
+                    selectedTask?.reminder_interval === 'daily' && { borderWidth: 2 }
+                  ]}
+                  onPress={() => handleUrgeTask('daily')}
+                >
+                  <View style={styles.urgeOptionIconBox}>
+                    <Ionicons name="calendar" size={20} color="#059669" />
+                  </View>
+                  <View style={styles.urgeOptionTextBox}>
+                    <Text style={{ fontSize: 13, fontWeight: '700', marginBottom: 2, color: '#065f46' }}>Nhắc nhở mỗi ngày</Text>
+                    <Text style={{ fontSize: 10.5, fontWeight: '500', color: '#047857' }}>Thông báo đẩy lặp lại mỗi 24 giờ</Text>
+                  </View>
+                  {selectedTask?.reminder_interval === 'daily' && (
+                    <Ionicons name="checkmark-circle" size={20} color="#059669" style={{ marginLeft: 'auto' }} />
+                  )}
+                </TouchableOpacity>
+
+                {/* 4. Tắt nhắc nhở */}
+                {selectedTask?.reminder_interval && (
+                  <TouchableOpacity
+                    style={[styles.urgeOptionBtn, { backgroundColor: '#f1f5f9', borderColor: '#94a3b8' }]}
+                    onPress={() => handleUrgeTask('off')}
+                  >
+                    <View style={styles.urgeOptionIconBox}>
+                      <Ionicons name="notifications-off" size={20} color="#475569" />
+                    </View>
+                    <View style={styles.urgeOptionTextBox}>
+                      <Text style={{ fontSize: 13, fontWeight: '700', marginBottom: 2, color: '#334155' }}>Tắt nhắc nhở</Text>
+                      <Text style={{ fontSize: 10.5, fontWeight: '500', color: '#475569' }}>Ngừng gửi nhắc nhở tự động cho task này</Text>
+                    </View>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+          </View>
+        </TouchableOpacity>
       </Modal>
     </SafeAreaView>
   );
@@ -1252,7 +1440,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     paddingVertical: 8,
     width: '100%',
-    minWidth: 600,
+    minWidth: 750,
   },
   colHeader: {
     flexDirection: 'row',
@@ -1269,7 +1457,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     alignItems: 'center',
     width: '100%',
-    minWidth: 600,
+    minWidth: 750,
   },
 colCell: {
     flexDirection: 'row',     // Thêm dòng này để các phần tử nằm ngang hàng
@@ -1296,6 +1484,11 @@ colCell: {
   },
   colReviewed: {
     width: 90,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  colUrge: {
+    width: 100,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1598,5 +1791,53 @@ colCell: {
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
+  },
+  urgeModalCard: {
+    width: '100%',
+    maxWidth: 320,
+    borderRadius: 20,
+    padding: 16,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.15,
+        shadowRadius: 16,
+      },
+      android: {
+        elevation: 8,
+      },
+    }),
+  },
+  urgeModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  urgeModalTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  urgeModalSubtitle: {
+    fontSize: 12,
+    lineHeight: 16,
+    marginBottom: 16,
+  },
+  urgeOptionsList: {
+    gap: 10,
+  },
+  urgeOptionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  urgeOptionIconBox: {
+    marginRight: 12,
+  },
+  urgeOptionTextBox: {
+    flex: 1,
   },
 });

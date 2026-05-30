@@ -169,6 +169,48 @@ router.post('/tasks', async (req, res) => {
   }
 
   try {
+    let finalAssignedTo = assigned_to ? parseInt(assigned_to) : null;
+
+    if (!finalAssignedTo && workspace_id) {
+      // 1. Tự động tìm thành viên thường (non-admin) đầu tiên trong Trang để gán nhiệm vụ
+      const memberRes = await query(
+        `SELECT wm.user_id FROM workspace_members wm
+         JOIN users u ON wm.user_id = u.id
+         WHERE wm.workspace_id = $1 AND u.role::text = 'user'
+         LIMIT 1`,
+        [parseInt(workspace_id)]
+      );
+      if (memberRes.rows.length > 0) {
+        finalAssignedTo = memberRes.rows[0].user_id;
+      } else {
+        // 2. Fallback: Nếu Trang này chưa có thành viên thường nào, tự động gán cho tài khoản thường (non-admin) đầu tiên trong hệ thống
+        const userRes = await query(
+          `SELECT id FROM users WHERE role::text = 'user' ORDER BY id ASC LIMIT 1`
+        );
+        if (userRes.rows.length > 0) {
+          finalAssignedTo = userRes.rows[0].id;
+        }
+      }
+    }
+
+    let pageId = null;
+    if (workspace_id) {
+      const pageRes = await query(
+        'SELECT id FROM workspace_pages WHERE workspace_id = $1 LIMIT 1',
+        [parseInt(workspace_id)]
+      );
+      if (pageRes.rows.length > 0) {
+        pageId = pageRes.rows[0].id;
+      } else {
+        // Create a default sub-page if none exists
+        const newPageRes = await query(
+          'INSERT INTO workspace_pages (workspace_id, name, created_by) VALUES ($1, $2, $3) RETURNING id',
+          [parseInt(workspace_id), 'Trang chính 📄', user.id]
+        );
+        pageId = newPageRes.rows[0].id;
+      }
+    }
+
     const isCompleted = status === 'completed';
     const result = await query(
       `INSERT INTO tasks (workspace_id, page_id, title, description, status, priority, assigned_to, created_by, deadline, completed)
@@ -176,12 +218,12 @@ router.post('/tasks', async (req, res) => {
        RETURNING *`,
       [
         parseInt(workspace_id),
-        parseInt(workspace_id),
+        pageId,
         title.trim(),
         description || null,
         status,
         priority,
-        assigned_to ? parseInt(assigned_to) : null,
+        finalAssignedTo,
         user.id,
         deadline || null,
         isCompleted
@@ -204,6 +246,29 @@ router.post('/tasks', async (req, res) => {
     if (io) {
       io.emit('task_created', newTask);
       console.log('📡 Realtime: Phát sự kiện task_created cho:', newTask.title);
+    }
+
+    // Gửi Push Notification cho assignee (chạy bất đồng bộ)
+    if (newTask.assigned_to) {
+      (async () => {
+        try {
+          const tokensRes = await query(
+            'SELECT user_id, fcm_token FROM user_push_tokens WHERE user_id = $1',
+            [newTask.assigned_to]
+          );
+          if (tokensRes.rows.length > 0) {
+            const { sendPWAPushNotification } = require('../config/firebaseAdmin');
+            const title = `📋 Nhiệm vụ mới được giao`;
+            const body = `Sếp đã giao cho bạn nhiệm vụ: "${newTask.title}"`;
+            const dataUrl = `/workspace/${newTask.workspace_id}`;
+            for (const row of tokensRes.rows) {
+              await sendPWAPushNotification(row.fcm_token, title, body, dataUrl, 'task');
+            }
+          }
+        } catch (pushErr) {
+          console.error('⚠️ Lỗi gửi push notification khi tạo task:', pushErr.message);
+        }
+      })();
     }
 
     return res.status(201).json({ status: 'success', data: newTask });
@@ -237,7 +302,17 @@ router.put('/tasks/:taskId', async (req, res) => {
       
       queryStr = `
         UPDATE tasks 
-        SET title = $1, description = $2, status = $3, priority = $4, assigned_to = $5, deadline = $6, completed = $7, is_reviewed = $8, updated_at = NOW() 
+        SET title = $1, 
+            description = $2, 
+            status = $3, 
+            priority = $4, 
+            assigned_to = $5, 
+            deadline = $6, 
+            completed = $7, 
+            is_reviewed = $8, 
+            updated_at = NOW(),
+            reminder_interval = CASE WHEN $7 = TRUE THEN NULL ELSE reminder_interval END,
+            last_reminded_at = CASE WHEN $7 = TRUE THEN NULL ELSE last_reminded_at END
         WHERE id = $9 
         RETURNING *`;
       params = [
@@ -261,7 +336,13 @@ router.put('/tasks/:taskId', async (req, res) => {
 
       queryStr = `
         UPDATE tasks 
-        SET status = $1, priority = $2, description = $3, completed = $4, updated_at = NOW() 
+        SET status = $1, 
+            priority = $2, 
+            description = $3, 
+            completed = $4, 
+            updated_at = NOW(),
+            reminder_interval = CASE WHEN $4 = TRUE THEN NULL ELSE reminder_interval END,
+            last_reminded_at = CASE WHEN $4 = TRUE THEN NULL ELSE last_reminded_at END
         WHERE id = $5 
         RETURNING *`;
       params = [
@@ -283,6 +364,29 @@ router.put('/tasks/:taskId', async (req, res) => {
         updatedTask.assignee_name = userRes.rows[0].name;
         updatedTask.assignee_avatar = userRes.rows[0].avatar;
       }
+    }
+
+    // Gửi Push Notification nếu thay đổi người thực hiện (hoặc được giao mới)
+    if (updatedTask.assigned_to && updatedTask.assigned_to !== currentTask.assigned_to) {
+      (async () => {
+        try {
+          const tokensRes = await query(
+            'SELECT user_id, fcm_token FROM user_push_tokens WHERE user_id = $1',
+            [updatedTask.assigned_to]
+          );
+          if (tokensRes.rows.length > 0) {
+            const { sendPWAPushNotification } = require('../config/firebaseAdmin');
+            const title = `📋 Bạn có nhiệm vụ mới`;
+            const body = `Sếp đã giao cho bạn nhiệm vụ: "${updatedTask.title}"`;
+            const dataUrl = `/workspace/${updatedTask.workspace_id}`;
+            for (const row of tokensRes.rows) {
+              await sendPWAPushNotification(row.fcm_token, title, body, dataUrl, 'task');
+            }
+          }
+        } catch (pushErr) {
+          console.error('⚠️ Lỗi gửi push notification khi gán task:', pushErr.message);
+        }
+      })();
     }
 
     // Phát realtime socket
@@ -361,6 +465,126 @@ router.get('/stats', async (req, res) => {
     return res.status(200).json({ status: 'success', data: result.rows[0] });
   } catch (err) {
     return res.status(500).json({ status: 'error', message: 'Lỗi tính toán thống kê: ' + err.message });
+  }
+});
+
+// POST /api/tasks/tasks/:taskId/urge — Hối thúc nhiệm vụ (chỉ Admin)
+router.post('/tasks/:taskId/urge', async (req, res) => {
+  const user = getAuthUser(req);
+  if (!user || user.role !== 'admin') {
+    return res.status(403).json({ status: 'error', message: 'Chỉ có Quản trị viên mới được sử dụng tính năng hối thúc.' });
+  }
+
+  const taskId = parseInt(req.params.taskId);
+  const { interval } = req.body; // 'now' | 'hourly' | 'daily' | 'off'
+
+  if (!interval || !['now', 'hourly', 'daily', 'off'].includes(interval)) {
+    return res.status(400).json({ status: 'error', message: 'Lựa chọn hối thúc không hợp lệ.' });
+  }
+
+  try {
+    const taskRes = await query('SELECT * FROM tasks WHERE id = $1 AND is_deleted = FALSE', [taskId]);
+    if (taskRes.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'Không tìm thấy nhiệm vụ hoặc nhiệm vụ đã bị xóa.' });
+    }
+
+    const task = taskRes.rows[0];
+    let assignedTo = task.assigned_to;
+
+    if (!assignedTo) {
+      // 1. Tự động tìm thành viên thường (non-admin) đầu tiên trong Trang để gán nhiệm vụ
+      const memberRes = await query(
+        `SELECT wm.user_id FROM workspace_members wm
+         JOIN users u ON wm.user_id = u.id
+         WHERE wm.workspace_id = $1 AND u.role::text = 'user'
+         LIMIT 1`,
+        [task.workspace_id]
+      );
+      if (memberRes.rows.length > 0) {
+        assignedTo = memberRes.rows[0].user_id;
+        // Cập nhật CSDL
+        await query('UPDATE tasks SET assigned_to = $1 WHERE id = $2', [assignedTo, taskId]);
+        console.log(`💡 [urge] Tự động gán nhiệm vụ ID ${taskId} cho User ID ${assignedTo}`);
+      } else {
+        // 2. Fallback: Nếu Trang này chưa có thành viên thường nào, tự động gán cho tài khoản thường (non-admin) đầu tiên trong hệ thống
+        const userRes = await query(
+          `SELECT id FROM users WHERE role::text = 'user' ORDER BY id ASC LIMIT 1`
+        );
+        if (userRes.rows.length > 0) {
+          assignedTo = userRes.rows[0].id;
+          // Cập nhật CSDL
+          await query('UPDATE tasks SET assigned_to = $1 WHERE id = $2', [assignedTo, taskId]);
+          console.log(`💡 [urge] Tự động gán nhiệm vụ ID ${taskId} cho tài khoản thường đầu tiên ID ${assignedTo}`);
+        }
+      }
+    }
+
+    if (!assignedTo) {
+      return res.status(400).json({ status: 'error', message: 'Nhiệm vụ này chưa được gán cho ai và Trang này chưa có thành viên thường nào để tự động gán.' });
+    }
+
+    // Fetch assignee tokens
+    const tokensRes = await query(
+      'SELECT fcm_token FROM user_push_tokens WHERE user_id = $1',
+      [assignedTo]
+    );
+
+    const { sendPWAPushNotification } = require('../config/firebaseAdmin');
+
+    if (interval === 'now') {
+      // Immediate push notification
+      if (tokensRes.rows.length > 0) {
+        const title = `⚡ [HỐI THÚC KHẨN CẤP]`;
+        const body = `Sếp đang hối thúc bạn thực hiện nhiệm vụ gấp: "${task.title}"`;
+        const dataUrl = `/workspace/${task.workspace_id}`;
+        for (const row of tokensRes.rows) {
+          await sendPWAPushNotification(row.fcm_token, title, body, dataUrl, 'task');
+        }
+      }
+      return res.status(200).json({
+        status: 'success',
+        message: 'Đã gửi thông báo hối thúc khẩn cấp thành công!'
+      });
+    }
+
+    // Set recurring reminders
+    let dbInterval = null;
+    if (interval === 'hourly') dbInterval = 'hourly';
+    if (interval === 'daily') dbInterval = 'daily';
+
+    await query(
+      'UPDATE tasks SET reminder_interval = $1, last_reminded_at = NULL, updated_at = NOW() WHERE id = $2',
+      [dbInterval, taskId]
+    );
+
+    // Send immediate notification letting the user know a reminder is set
+    if (dbInterval && tokensRes.rows.length > 0) {
+      const reminderText = dbInterval === 'hourly' ? 'mỗi giờ' : 'mỗi ngày';
+      const title = `⏰ Đặt nhắc nhở hối thúc`;
+      const body = `Sếp đã bật chế độ hối thúc công việc này [${reminderText}] cho đến khi hoàn tất: "${task.title}"`;
+      const dataUrl = `/workspace/${task.workspace_id}`;
+      for (const row of tokensRes.rows) {
+        await sendPWAPushNotification(row.fcm_token, title, body, dataUrl, 'task');
+      }
+    }
+
+    const msgMap = {
+      hourly: 'Đã thiết lập nhắc nhở hối thúc mỗi giờ.',
+      daily: 'Đã thiết lập nhắc nhở hối thúc mỗi ngày.',
+      off: 'Đã tắt chế độ nhắc nhở hối thúc công việc này.'
+    };
+
+    return res.status(200).json({
+      status: 'success',
+      message: msgMap[interval],
+      data: {
+        reminder_interval: dbInterval
+      }
+    });
+
+  } catch (err) {
+    console.error('❌ Lỗi API hối thúc:', err.message);
+    return res.status(500).json({ status: 'error', message: 'Lỗi hệ thống khi xử lý hối thúc: ' + err.message });
   }
 });
 
