@@ -19,9 +19,49 @@ interface MessageItemProps {
   isMine: boolean;
   colors: any;
   onPressImage?: (url: string) => void;
+  currentUserName: string;
 }
 
-const MessageItemComponent: React.FC<MessageItemProps> = ({ item, isMine, colors, onPressImage }) => {
+const renderMessageText = (text: string, isMine: boolean, colors: any, isMentioned: boolean) => {
+  if (!text) return null;
+  
+  const regex = /(@[A-Za-z0-9_À-ỹ]+(?:\s+[A-Za-z0-9_À-ỹ]+)*)/g;
+  const parts = text.split(regex);
+  
+  return (
+    <Text style={[
+      styles.messageText, 
+      { 
+        color: isMine ? '#fff' : colors.text,
+        fontWeight: isMentioned ? '800' : '400'
+      }
+    ]}>
+      {parts.map((part, index) => {
+        if (part.startsWith('@')) {
+          return (
+            <Text 
+              key={index} 
+              style={{ 
+                fontWeight: '900', 
+                color: isMine ? '#ffe4e6' : colors.tint,
+                backgroundColor: isMine ? 'rgba(255,255,255,0.25)' : 'rgba(59, 130, 246, 0.12)',
+                borderRadius: 4,
+                paddingHorizontal: 2,
+              }}
+            >
+              {part}
+            </Text>
+          );
+        }
+        return part;
+      })}
+    </Text>
+  );
+};
+
+const MessageItemComponent: React.FC<MessageItemProps> = ({ item, isMine, colors, onPressImage, currentUserName }) => {
+  const isMentioned = !!(!isMine && item.message && item.message.includes(`@${currentUserName}`));
+
   return (
     <View style={[styles.messageRow, isMine ? styles.myMessageRow : styles.otherMessageRow]}>
       {!isMine && item.sender_avatar && (
@@ -44,11 +84,11 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({ item, isMine, colors
                 styles.messageBubble,
                 isMine
                   ? { backgroundColor: colors.tint, marginTop: 6 }
-                  : { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1, marginTop: 6 }
+                  : isMentioned
+                    ? { backgroundColor: '#fef3c7', borderColor: '#f59e0b', borderWidth: 1, marginTop: 6 }
+                    : { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1, marginTop: 6 }
               ]}>
-                <Text style={[styles.messageText, { color: isMine ? '#fff' : colors.text }]}>
-                  {item.message}
-                </Text>
+                {renderMessageText(item.message, isMine, colors, isMentioned)}
               </View>
             )}
           </TouchableOpacity>
@@ -58,7 +98,9 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({ item, isMine, colors
               styles.messageBubble,
               isMine
                 ? { backgroundColor: colors.tint }
-                : { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1 }
+                : isMentioned
+                  ? { backgroundColor: '#fef3c7', borderColor: '#f59e0b', borderWidth: 1 }
+                  : { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1 }
             ]}
           >
             {item.type === 'file' && item.file_url ? (
@@ -74,9 +116,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({ item, isMine, colors
                 </View>
               </View>
             ) : (
-              <Text style={[styles.messageText, { color: isMine ? '#fff' : colors.text }]}>
-                {item.message}
-              </Text>
+              renderMessageText(item.message, isMine, colors, isMentioned)
             )}
           </View>
         )}
@@ -111,7 +151,8 @@ export const MessageItem = React.memo(MessageItemComponent, (prevProps, nextProp
     prevProps.item.id === nextProps.item.id &&
     prevProps.item.message === nextProps.item.message &&
     prevProps.isMine === nextProps.isMine &&
-    prevProps.colors.tint === nextProps.colors.tint
+    prevProps.colors.tint === nextProps.colors.tint &&
+    prevProps.currentUserName === nextProps.currentUserName
   );
 });
 

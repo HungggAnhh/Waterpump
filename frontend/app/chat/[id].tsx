@@ -95,6 +95,20 @@ export default function ChatRoomScreen() {
   const [capturedImagePath, setCapturedImagePath] = useState<string | null>(null);
   const [infoModalVisible, setInfoModalVisible] = useState(false);
 
+  // Mentions (@tag)
+  const [showTagList, setShowTagList] = useState(false);
+  const [tagSearchQuery, setTagSearchQuery] = useState('');
+
+  const filteredMembersForTag = useMemo(() => {
+    if (!activeThread?.members) return [];
+    // Loại trừ bản thân người dùng khỏi danh sách tag để đỡ rối
+    const allMembers = activeThread.members.filter(m => (m.user_id || m.id) !== currentUser.id);
+    if (!tagSearchQuery.trim()) return allMembers;
+    return allMembers.filter(m => 
+      m.name.toLowerCase().includes(tagSearchQuery.toLowerCase())
+    );
+  }, [activeThread?.members, tagSearchQuery, currentUser.id]);
+
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
   const typingTimeoutRef = useRef<any>(null);
@@ -559,8 +573,29 @@ export default function ChatRoomScreen() {
     }
   };
 
+  const handleSelectMemberTag = (memberName: string) => {
+    setInputMessage(prev => {
+      const words = prev.split(/\s/);
+      words.pop(); // Xóa cụm @... đang gõ dở
+      const base = words.join(' ');
+      const space = base ? ' ' : '';
+      return `${base}${space}@${memberName} `;
+    });
+    setShowTagList(false);
+    inputRef.current?.focus();
+  };
+
   const handleTextChange = (text: string) => {
     setInputMessage(text);
+
+    // Phát hiện gõ ký tự '@' để mở danh sách tag thành viên
+    const lastWord = text.split(/\s/).pop() || '';
+    if (lastWord.startsWith('@')) {
+      setTagSearchQuery(lastWord.slice(1));
+      setShowTagList(true);
+    } else {
+      setShowTagList(false);
+    }
 
     if (socket && conversationId) {
       if (!isTyping) {
@@ -666,6 +701,7 @@ export default function ChatRoomScreen() {
                 isMine={item.sender_id === currentUser.id}
                 colors={colors}
                 onPressImage={handlePressImage}
+                currentUserName={currentUser.name}
               />
             )}
           />
@@ -705,6 +741,34 @@ export default function ChatRoomScreen() {
                 </View>
                 <Text style={[styles.attachMenuText, { color: colors.text }]}>Tải video lên</Text>
               </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Floating Tag list overlay */}
+          {showTagList && filteredMembersForTag.length > 0 && (
+            <View style={[styles.tagListContainer, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <FlatList
+                data={filteredMembersForTag}
+                keyExtractor={(item) => String(item.user_id || item.id || '')}
+                keyboardShouldPersistTaps="handled"
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={[styles.tagMemberItem, { borderBottomColor: colors.border }]}
+                    onPress={() => handleSelectMemberTag(item.name)}
+                  >
+                    <Image
+                      source={{ uri: item.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150&q=80' }}
+                      style={styles.tagMemberAvatar}
+                    />
+                    <Text style={[styles.tagMemberName, { color: colors.text }]}>{item.name}</Text>
+                    {item.email && (
+                      <Text style={[styles.tagMemberEmail, { color: colors.textSecondary }]} numberOfLines={1}>
+                        ({item.email})
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                )}
+              />
             </View>
           )}
 
@@ -995,5 +1059,42 @@ const styles = StyleSheet.create({
   fullScreenImage: {
     width: '100%',
     height: '90%',
+  },
+  tagListContainer: {
+    position: 'absolute',
+    bottom: 65, // Phía trên Input Bar một chút
+    left: 12,
+    right: 12,
+    maxHeight: 200,
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 5,
+    zIndex: 1001,
+  },
+  tagMemberItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    gap: 10,
+  },
+  tagMemberAvatar: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+  },
+  tagMemberName: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  tagMemberEmail: {
+    fontSize: 11,
+    flex: 1,
   },
 });
