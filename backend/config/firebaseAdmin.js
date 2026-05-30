@@ -101,6 +101,7 @@ async function sendPWAPushNotification(targetFCMToken, title, body, dataUrl = '/
         sound: 'default',
         defaultSound: true,
         defaultVibrateTimings: true,
+        visibility: 'public', // Ép hệ điều hành Android hiển thị thông báo đầy đủ ngoài màn hình khóa
       }
     },
     // BỔ SUNG CẤU HÌNH IOS (APNS): Đẩy tin tức thì, tự động đổ chuông và hiện số badge đếm số thông báo mới
