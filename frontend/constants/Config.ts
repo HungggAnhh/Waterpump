@@ -11,7 +11,7 @@ import { Platform } from 'react-native';
  *   3. Trình duyệt Web trên máy tính (localhost:8081).
  */
 
-const COMPUTER_IP = '192.168.2.7'; // IP Wi-Fi cục bộ của bạn
+const COMPUTER_IP = '192.168.2.15'; // IP Wi-Fi cục bộ của bạn
 
 const getBaseUrl = () => {
   // Tự động sử dụng backend Node.js cục bộ khi đang phát triển (development)
