@@ -8,7 +8,9 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }, // Supabase yêu cầu SSL
   max: 10,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000,
+  connectionTimeoutMillis: 10000, // Tăng lên 10 giây để tránh lỗi timeout do mạng chậm trên môi trường đám mây
+  keepAlive: true, // Kích hoạt TCP Keep-Alive để giữ kết nối thông suốt, tránh bị ngắt âm thầm
+  keepAliveInitialDelayMillis: 10000, // Tự động gửi gói tin thăm dò sau 10 giây
 });
 
 pool.on('error', (err) => {
