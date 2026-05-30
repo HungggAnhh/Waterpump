@@ -63,10 +63,16 @@ async function sendPWAPushNotification(targetFCMToken, title, body, dataUrl = '/
     return { success: false, error: "Firebase Admin App not initialized" };
   }
 
-  // Cấu hình payload tin nhắn dạng Data-Only Message (tránh lỗi hiển thị thông báo kép)
+  // Cấu hình payload tin nhắn chứa cả khối notification chuẩn và data
   const message = {
     token: targetFCMToken,
-    // Toàn bộ tiêu đề, nội dung và đường dẫn được đẩy vào data
+    // BỔ SUNG KHỐI NOTIFICATION TIÊU CHUẨN: Giúp hệ điều hành di động (Android/iOS)
+    // tự động hiển thị thông báo đẩy lên màn hình khóa ngay lập tức ngay cả khi App/Trình duyệt ĐÃ TẮT HOÀN TOÀN.
+    notification: {
+      title: title,
+      body: body,
+    },
+    // Khối dữ liệu đi kèm hỗ trợ việc điều hướng và xử lý sự kiện
     data: {
       type: type,
       title: title,
@@ -75,10 +81,38 @@ async function sendPWAPushNotification(targetFCMToken, title, body, dataUrl = '/
       url: dataUrl,
       tag: `${type}-notification-` + Date.now()
     },
-    // Cấu hình cụ thể cho Web Push (vẫn giữ Urgency để thiết bị thức giấc nhận tin ngay)
+    // Cấu hình cụ thể cho Web Push (bao gồm icon, badge để hiển thị đồng bộ trên PC/Desktop)
     webpush: {
       headers: {
         Urgency: "high",
+      },
+      notification: {
+        title: title,
+        body: body,
+        icon: '/icon-192.png',
+        badge: '/icon-192.png',
+        tag: `${type}-notification`,
+      }
+    },
+    // BỔ SUNG CẤU HÌNH ANDROID: Độ ưu tiên cao nhất, đổ chuông/rung giống Zalo/Messenger kể cả khi đang ở chế độ ngủ (Doze Mode)
+    android: {
+      priority: 'high',
+      notification: {
+        sound: 'default',
+        defaultSound: true,
+        defaultVibrateTimings: true,
+      }
+    },
+    // BỔ SUNG CẤU HÌNH IOS (APNS): Đẩy tin tức thì, tự động đổ chuông và hiện số badge đếm số thông báo mới
+    apns: {
+      headers: {
+        'apns-priority': '10', // 10 = gửi ngay lập tức, đánh thức thiết bị đang ở chế độ ngủ sâu
+      },
+      payload: {
+        aps: {
+          sound: 'default',
+          badge: 1,
+        }
       }
     }
   };

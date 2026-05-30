@@ -37,10 +37,16 @@ self.addEventListener('push', (event) => {
       const payload = event.data.json();
       console.log('[firebase-messaging-sw.js] Dữ liệu sự kiện push (JSON):', payload);
       
-      // Hỗ trợ cả cấu trúc Data-Only Message và Notification Message từ FCM
+      // Nếu tin nhắn có khối notification tiêu chuẩn (thường do Firebase SDK/Trình duyệt hiển thị tự động ngoài nền),
+      // bỏ qua hiển thị thủ công để chống trùng lặp (tránh hiển thị thông báo kép).
+      if (payload.notification || (payload.webpush && payload.webpush.notification)) {
+        console.log('[firebase-messaging-sw.js] Phát hiện khối notification tiêu chuẩn. Bỏ qua hiển thị thủ công.');
+        return;
+      }
+
       data = payload.data || {};
-      notificationTitle = data.title || payload.notification?.title || 'Thông báo mới';
-      notificationBody = data.body || payload.notification?.body || '';
+      notificationTitle = data.title || 'Thông báo mới';
+      notificationBody = data.body || '';
       notificationType = data.type || 'general';
       tag = data.tag || (notificationType === 'chat' ? 'chat-group' : (notificationType === 'task' ? 'task-group' : 'general-notification'));
     } catch (e) {
