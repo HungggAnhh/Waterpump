@@ -1,5 +1,5 @@
 // frontend/components/GroupInfoModal.tsx
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   StyleSheet,
   Text,
@@ -18,7 +18,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL, endpoints } from '@/constants/Config';
-import { useConversationStore, ChatThread, GroupMember } from '../store/useConversationStore';
+import { useConversationStore, GroupMember } from '../store/useConversationStore';
 import { useSocket } from '../context/SocketContext';
 
 interface User {
@@ -84,7 +84,6 @@ export function GroupInfoModal({
   // States
   const [isRenaming, setIsRenaming] = useState(false);
   const [newGroupName, setNewGroupName] = useState(activeThread?.name || '');
-  const [loadingAction, setLoadingAction] = useState(false);
 
   // Add Member Modal States
   const [addModalVisible, setAddModalVisible] = useState(false);
@@ -185,7 +184,6 @@ export function GroupInfoModal({
     });
 
     setAddModalVisible(false);
-    setLoadingAction(true);
 
     try {
       const response = await fetch(`${API_BASE_URL}/conversations/members`, {
@@ -211,8 +209,6 @@ export function GroupInfoModal({
       useConversationStore.getState().replaceConversation(originalConversation);
       console.error('Lỗi khi thêm thành viên:', error);
       Alert.alert('Lỗi kết nối', 'Không thể kết nối đến máy chủ.');
-    } finally {
-      setLoadingAction(false);
     }
   };
 
@@ -246,7 +242,6 @@ export function GroupInfoModal({
             // Apply Optimistic Update
             useConversationStore.getState().removeMemberFromGroup(conversationId, Number(targetUserId));
 
-            setLoadingAction(true);
             try {
               const response = await fetch(`${API_BASE_URL}/conversations/members/remove`, {
                 method: 'POST',
@@ -269,8 +264,6 @@ export function GroupInfoModal({
               useConversationStore.getState().replaceConversation(originalConversation);
               console.error('Lỗi khi xóa thành viên:', error);
               Alert.alert('Lỗi kết nối', 'Không thể kết nối đến máy chủ.');
-            } finally {
-              setLoadingAction(false);
             }
           },
         },
@@ -297,7 +290,6 @@ export function GroupInfoModal({
     useConversationStore.getState().updateGroupName(conversationId, newGroupName.trim());
 
     setIsRenaming(false);
-    setLoadingAction(true);
 
     try {
       const response = await fetch(`${API_BASE_URL}/conversations/rename`, {
@@ -321,8 +313,6 @@ export function GroupInfoModal({
       useConversationStore.getState().replaceConversation(originalConversation);
       console.error('Lỗi khi đổi tên nhóm:', error);
       Alert.alert('Lỗi kết nối', 'Không thể kết nối đến máy chủ.');
-    } finally {
-      setLoadingAction(false);
     }
   };
 
@@ -345,7 +335,6 @@ export function GroupInfoModal({
           text: 'Rời nhóm',
           style: 'destructive',
           onPress: async () => {
-            setLoadingAction(true);
             try {
               const response = await fetch(`${API_BASE_URL}/conversations/leave`, {
                 method: 'POST',
@@ -378,8 +367,6 @@ export function GroupInfoModal({
             } catch (error) {
               console.error('Lỗi khi rời nhóm:', error);
               Alert.alert('Lỗi kết nối', 'Không thể kết nối đến máy chủ.');
-            } finally {
-              setLoadingAction(false);
             }
           },
         },

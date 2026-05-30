@@ -1,6 +1,6 @@
 // backend/routes/conversations.js
 const express = require('express');
-const { query, pool } = require('../config/supabase');
+const { pool } = require('../config/supabase');
 const router = express.Router();
 
 // GET /api/conversations?user_id=X - Lấy danh sách hội thoại

@@ -90,7 +90,7 @@ router.post('/', (req, res, next) => {
     console.log(`[UPLOAD_API:START] Khởi động upload tệp "${file.originalname}" (${file.size} bytes) lên bucket "${bucketName}/${fileName}"`);
 
     // 3. Upload buffer trực tiếp lên Supabase Storage
-    const { data, error } = await supabase.storage
+    const { error } = await supabase.storage
       .from(bucketName)
       .upload(fileName, file.buffer, {
         contentType: file.mimetype,

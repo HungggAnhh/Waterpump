@@ -10,7 +10,6 @@ import {
   Modal,
   ActivityIndicator,
   Platform,
-  Image,
   Alert
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -42,11 +41,7 @@ interface Task {
   updated_at?: string;
 }
 
-interface UserListItem {
-  id: number;
-  name: string;
-  avatar: string | null;
-}
+
 
 export default function PageTasksScreen() {
   const { workspaceId } = useLocalSearchParams();
@@ -56,7 +51,6 @@ export default function PageTasksScreen() {
   const { socket } = useSocket();
 
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [usersList, setUsersList] = useState<UserListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [workspaceName, setWorkspaceName] = useState('Trình theo dõi nhiệm vụ');
 
@@ -119,23 +113,9 @@ export default function PageTasksScreen() {
     }
   };
 
-  // Fetch users for dropdown assignment
-  const fetchUsers = async () => {
-    try {
-      const res = await fetch(`${API_BASE_URL}/users`);
-      const result = await res.json();
-      if (result.status === 'success') {
-        setUsersList(result.data || []);
-      }
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
   useEffect(() => {
     fetchTasks();
     fetchWorkspaceDetails();
-    fetchUsers();
   }, [workspaceId, user]);
 
   // Realtime Socket Sync
@@ -222,14 +202,7 @@ export default function PageTasksScreen() {
     }
   };
 
-  const handleOpenCreateModal = () => {
-    setFormTitle('');
-    setFormDesc('');
-    setFormStatus('todo');
-    setFormPriority('medium');
-    setFormAssignedTo('');
-    setIsTaskModalOpen(true);
-  };
+
 
   const handleCreateTask = async () => {
     if (!formTitle.trim()) return;
@@ -482,14 +455,7 @@ export default function PageTasksScreen() {
     }
   };
 
-  const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return '';
-    const date = new Date(dateStr);
-    const day = String(date.getDate()).padStart(2, '0');
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const year = date.getFullYear();
-    return `${month}/${day}/${year}`;
-  };
+
 
   const formatDateTime = (dateStr: string | null | undefined) => {
     if (!dateStr) return '';

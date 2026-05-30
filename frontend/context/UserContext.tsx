@@ -76,8 +76,6 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const storedUserJson = await safeStorage.getItem('user_data');
 
         if (storedToken && storedUserJson) {
-          const parsedUser = JSON.parse(storedUserJson);
-          
           // Gửi API kiểm tra token xem còn hợp lệ không (verify-token)
           const response = await fetch(`${API_BASE_URL}/auth/verify-token`, {
             method: 'POST',

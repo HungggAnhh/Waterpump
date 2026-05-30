@@ -7,6 +7,20 @@ const os = require('os');
 let mainWindow = null;
 let screenshotWindows = [];
 
+// Đảm bảo chỉ chạy một instance duy nhất (Single Instance Lock) để tránh xung đột khóa cache/DB dưới nền (Lỗi Access is denied 0x5)
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+}
+
 // 1. Tạo cửa sổ chính (Main Chat App)
 function createMainWindow() {
   mainWindow = new BrowserWindow({

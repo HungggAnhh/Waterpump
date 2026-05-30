@@ -66,12 +66,6 @@ async function sendPWAPushNotification(targetFCMToken, title, body, dataUrl = '/
   // Cấu hình payload tin nhắn chứa cả khối notification chuẩn và data
   const message = {
     token: targetFCMToken,
-    // BỔ SUNG KHỐI NOTIFICATION TIÊU CHUẨN: Giúp hệ điều hành di động (Android/iOS)
-    // tự động hiển thị thông báo đẩy lên màn hình khóa ngay lập tức ngay cả khi App/Trình duyệt ĐÃ TẮT HOÀN TOÀN.
-    notification: {
-      title: title,
-      body: body,
-    },
     // Khối dữ liệu đi kèm hỗ trợ việc điều hướng và xử lý sự kiện
     data: {
       type: type,
@@ -81,30 +75,17 @@ async function sendPWAPushNotification(targetFCMToken, title, body, dataUrl = '/
       url: dataUrl,
       tag: `${type}-notification-` + Date.now()
     },
-    // Cấu hình cụ thể cho Web Push (bao gồm icon, badge để hiển thị đồng bộ trên PC/Desktop)
+    // Cấu hình cụ thể cho Web Push (bao gồm độ ưu tiên)
     webpush: {
       headers: {
         Urgency: "high",
-      },
-      notification: {
-        title: title,
-        body: body,
-        icon: '/icon-192.png',
-        badge: '/icon-192.png',
-        tag: `${type}-notification`,
       }
     },
-    // BỔ SUNG CẤU HÌNH ANDROID: Độ ưu tiên cao nhất, đổ chuông/rung giống Zalo/Messenger kể cả khi đang ở chế độ ngủ (Doze Mode)
+    // BỔ SUNG CẤU HÌNH ANDROID: Độ ưu tiên cao nhất kể cả khi đang ở chế độ ngủ (Doze Mode)
     android: {
-      priority: 'high',
-      notification: {
-        sound: 'default',
-        defaultSound: true,
-        defaultVibrateTimings: true,
-        visibility: 'public', // Ép hệ điều hành Android hiển thị thông báo đầy đủ ngoài màn hình khóa
-      }
+      priority: 'high'
     },
-    // BỔ SUNG CẤU HÌNH IOS (APNS): Đẩy tin tức thì, tự động đổ chuông và hiện số badge đếm số thông báo mới
+    // BỔ SUNG CẤU HÌNH IOS (APNS): Đẩy tin tức thì, tự động đổ chuông và đánh thức thiết bị
     apns: {
       headers: {
         'apns-priority': '10', // 10 = gửi ngay lập tức, đánh thức thiết bị đang ở chế độ ngủ sâu
@@ -113,6 +94,7 @@ async function sendPWAPushNotification(targetFCMToken, title, body, dataUrl = '/
         aps: {
           sound: 'default',
           badge: 1,
+          'content-available': 1 // Đánh thức Service Worker trên nền iOS để hiển thị thông báo
         }
       }
     }
