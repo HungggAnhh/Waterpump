@@ -3,6 +3,7 @@
 const express = require('express');
 const multer  = require('multer');
 const { createClient } = require('@supabase/supabase-js');
+const WebSocket = require('ws');
 require('dotenv').config({ path: __dirname + '/../.env' });
 
 const router = express.Router();
@@ -18,7 +19,16 @@ if (!supabaseKey) {
   console.warn('⚠️ [UPLOAD_API:INIT] SUPABASE_SERVICE_ROLE_KEY / SERVICE_KEY đang trống!');
 }
 
-const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
+const supabase = supabaseUrl && supabaseKey 
+  ? createClient(supabaseUrl, supabaseKey, {
+      auth: {
+        persistSession: false
+      },
+      realtime: {
+        transport: WebSocket
+      }
+    })
+  : null;
 
 if (supabase) {
   console.log('🟢 [UPLOAD_API:INIT] Supabase Client đã được khởi tạo thành công.');

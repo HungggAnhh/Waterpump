@@ -39,6 +39,11 @@ interface Task {
   last_reminded_at?: string | null;
   created_at: string;
   updated_at?: string;
+  approval_status?: 'pending' | 'in_progress' | 'waiting_approval' | 'completed' | 'revision_required';
+  approved_by?: number | null;
+  approved_at?: string | null;
+  revision_note?: string | null;
+  revision_count?: number;
 }
 
 
@@ -64,6 +69,14 @@ export default function PageTasksScreen() {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [isUrgeModalOpen, setIsUrgeModalOpen] = useState(false);
   const [submittingUrge, setSubmittingUrge] = useState(false);
+
+  // Task Activities/History
+  const [activities, setActivities] = useState<any[]>([]);
+  const [loadingActivities, setLoadingActivities] = useState(false);
+
+  // Enterprise Approval Workflow
+  const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
 
   // Form Fields (For create and edit)
   const [formTitle, setFormTitle] = useState('');
@@ -113,6 +126,113 @@ export default function PageTasksScreen() {
     }
   };
 
+  const fetchActivities = async (taskId: number) => {
+    try {
+      setLoadingActivities(true);
+      const res = await fetch(`${API_BASE_URL}/tasks/tasks/${taskId}/activities`);
+      const result = await res.json();
+      if (result.status === 'success') {
+        setActivities(result.data || []);
+      }
+    } catch (err) {
+      console.error('Lỗi lấy lịch sử hoạt động:', err);
+    } finally {
+      setLoadingActivities(false);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedTask && isDetailModalOpen) {
+      fetchActivities(selectedTask.id);
+    } else {
+      setActivities([]);
+    }
+  }, [selectedTask, isDetailModalOpen]);
+
+  const handleStartTask = async (task: Task) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/tasks/tasks/${task.id}/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const result = await res.json();
+      if (result.status === 'success') {
+        const updated = result.data;
+        setTasks(prev => prev.map(t => t.id === task.id ? updated : t));
+        setSelectedTask(updated);
+      } else {
+        alert(result.message || 'Lỗi khi bắt đầu thực hiện.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Lỗi kết nối mạng.');
+    }
+  };
+
+  const handleSubmitTask = async (task: Task) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/tasks/tasks/${task.id}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const result = await res.json();
+      if (result.status === 'success') {
+        const updated = result.data;
+        setTasks(prev => prev.map(t => t.id === task.id ? updated : t));
+        setSelectedTask(updated);
+      } else {
+        alert(result.message || 'Lỗi khi gửi duyệt.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Lỗi kết nối mạng.');
+    }
+  };
+
+  const handleApproveTask = async (task: Task) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/tasks/tasks/${task.id}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const result = await res.json();
+      if (result.status === 'success') {
+        const updated = result.data;
+        setTasks(prev => prev.map(t => t.id === task.id ? updated : t));
+        setSelectedTask(updated);
+      } else {
+        alert(result.message || 'Lỗi khi duyệt công việc.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Lỗi kết nối mạng.');
+    }
+  };
+
+  const handleRejectTask = async () => {
+    if (!selectedTask || !rejectReason.trim()) return;
+    try {
+      const res = await fetch(`${API_BASE_URL}/tasks/tasks/${selectedTask.id}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: rejectReason.trim() })
+      });
+      const result = await res.json();
+      if (result.status === 'success') {
+        const updated = result.data;
+        setTasks(prev => prev.map(t => t.id === selectedTask.id ? updated : t));
+        setSelectedTask(updated);
+        setIsRejectModalOpen(false);
+        setRejectReason('');
+      } else {
+        alert(result.message || 'Lỗi khi yêu cầu sửa lại.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Lỗi kết nối mạng.');
+    }
+  };
+
   useEffect(() => {
     fetchTasks();
     fetchWorkspaceDetails();
@@ -143,6 +263,7 @@ export default function PageTasksScreen() {
 
         setSelectedTask(prev => {
           if (prev && prev.id === updatedTask.id) {
+            fetchActivities(updatedTask.id);
             return updatedTask;
           }
           return prev;
@@ -409,7 +530,8 @@ export default function PageTasksScreen() {
     if (viewFilter === 'my_tasks' && task.assigned_to !== user?.id) {
       return false;
     }
-    if (statusFilter !== 'all' && task.status !== statusFilter) {
+    const currentStatus = task.approval_status || task.status;
+    if (statusFilter !== 'all' && currentStatus !== statusFilter) {
       return false;
     }
     return true;
@@ -421,19 +543,37 @@ export default function PageTasksScreen() {
 
   const getStatusText = (status: string) => {
     switch (status) {
-      case 'todo': return 'Chưa bắt đầu';
-      case 'in_progress': return 'Đang thực hiện';
-      case 'completed': return 'Hoàn tất';
-      default: return status;
+      case 'pending':
+      case 'todo': 
+        return 'Chờ thực hiện';
+      case 'in_progress': 
+        return 'Đang thực hiện';
+      case 'waiting_approval': 
+        return 'Chờ duyệt';
+      case 'completed': 
+        return 'Hoàn thành';
+      case 'revision_required': 
+        return 'Cần làm lại';
+      default: 
+        return status;
     }
   };
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'todo': return { bg: '#f1f5f9', text: '#64748b', dot: '#94a3b8' }; // Gray
-      case 'in_progress': return { bg: '#e0f2fe', text: '#0284c7', dot: '#0ea5e9' }; // Blue
-      case 'completed': return { bg: '#d1fae5', text: '#059669', dot: '#10b981' }; // Green
-      default: return { bg: '#f1f5f9', text: '#64748b', dot: '#94a3b8' };
+      case 'pending':
+      case 'todo': 
+        return { bg: '#f1f5f9', text: '#475569', dot: '#64748b' };
+      case 'in_progress': 
+        return { bg: '#e0f2fe', text: '#0284c7', dot: '#0ea5e9' };
+      case 'waiting_approval': 
+        return { bg: '#fef3c7', text: '#d97706', dot: '#f59e0b' };
+      case 'completed': 
+        return { bg: '#d1fae5', text: '#059669', dot: '#10b981' };
+      case 'revision_required': 
+        return { bg: '#fee2e2', text: '#dc2626', dot: '#ef4444' };
+      default: 
+        return { bg: '#f1f5f9', text: '#475569', dot: '#64748b' };
     }
   };
 
@@ -466,6 +606,53 @@ export default function PageTasksScreen() {
     const hours = String(date.getHours()).padStart(2, '0');
     const minutes = String(date.getMinutes()).padStart(2, '0');
     return `${day}/${month}/${year} ${hours}:${minutes}`;
+  };
+
+  const getActivityText = (act: any) => {
+    const actor = act.user_name || 'Ai đó';
+    const roleText = act.user_role === 'admin' ? '(Sếp)' : '';
+    switch (act.action) {
+      case 'created':
+        return `${actor} ${roleText} đã giao việc: "${act.new_value}"`;
+      case 'assigned':
+        return `${actor} ${roleText} đã gán việc cho: ${act.new_value}`;
+      case 'status_changed':
+        return `${actor} ${roleText} đã chuyển trạng thái thành: "${getStatusText(act.new_value)}"`;
+      case 'priority_changed':
+        return `${actor} ${roleText} đã thay đổi mức độ thành: ${getPriorityText(act.new_value)}`;
+      case 'title_changed':
+        return `${actor} ${roleText} đã đổi tiêu đề thành: "${act.new_value}"`;
+      case 'desc_changed':
+        return `${actor} ${roleText} đã chỉnh sửa mô tả công việc`;
+      case 'reviewed':
+        return act.new_value === 'true' 
+          ? `${actor} ${roleText} đã duyệt hoàn tất nhiệm vụ này ✔️` 
+          : `${actor} ${roleText} đã bỏ duyệt nhiệm vụ này`;
+      default:
+        return `${actor} ${roleText} đã chỉnh sửa nhiệm vụ`;
+    }
+  };
+
+  const getActivityIcon = (action: string) => {
+    switch (action) {
+      case 'created': return 'add-circle-outline';
+      case 'assigned': return 'person-add-outline';
+      case 'status_changed': return 'swap-horizontal-outline';
+      case 'priority_changed': return 'options-outline';
+      case 'reviewed': return 'checkmark-done-circle-outline';
+      default: return 'create-outline';
+    }
+  };
+
+  const getActivityIconColor = (action: string) => {
+    switch (action) {
+      case 'created': return '#0969da';
+      case 'assigned': return '#7c3aed';
+      case 'status_changed': return '#0284c7';
+      case 'priority_changed': return '#d97706';
+      case 'reviewed': return '#10b981';
+      default: return colors.tabIconDefault;
+    }
   };
 
   return (
@@ -532,7 +719,7 @@ export default function PageTasksScreen() {
           <TouchableOpacity
             style={[styles.tabBtn, statusFilter !== 'all' && styles.tabBtnActive]}
             onPress={() => {
-              const next: Record<string, string> = { all: 'todo', todo: 'in_progress', in_progress: 'completed', completed: 'all' };
+              const next: Record<string, string> = { all: 'pending', pending: 'in_progress', in_progress: 'waiting_approval', waiting_approval: 'revision_required', revision_required: 'completed', completed: 'all' };
               setStatusFilter(next[statusFilter] || 'all');
             }}
           >
@@ -596,10 +783,10 @@ export default function PageTasksScreen() {
 
             {/* Table Body Rows */}
             {filteredTasks.map(task => {
-              const statusColor = getStatusColor(task.status);
+              const statusColor = getStatusColor(task.approval_status || task.status);
               const priorityColor = getPriorityColor(task.priority);
               const isAssignedToMe = task.assigned_to === user?.id;
-              const canEditStatus = isAdmin || isAssignedToMe;
+              const canEditStatus = isAdmin; // Chỉ Admin được đổi trực tiếp, User phải dùng workflow modal
 
               return (
                 <View
@@ -642,14 +829,16 @@ export default function PageTasksScreen() {
                         if (canEditStatus) {
                           setQuickStatusTask(task);
                         } else {
-                          alert('Bạn chỉ có quyền cập nhật trạng thái nhiệm vụ của mình.');
+                          // Tự động mở chi tiết nếu là nhân viên
+                          setSelectedTask(task);
+                          setIsDetailModalOpen(true);
                         }
                       }}
-                      activeOpacity={canEditStatus ? 0.7 : 1}
+                      activeOpacity={0.7}
                     >
                       <View style={[styles.statusDot, { backgroundColor: statusColor.dot }]} />
                       <Text style={[styles.notionStatusText, { color: statusColor.text }]}>
-                        {getStatusText(task.status)}
+                        {getStatusText(task.approval_status || task.status)}
                       </Text>
                     </TouchableOpacity>
                   </View>
@@ -1030,7 +1219,7 @@ export default function PageTasksScreen() {
             </View>
 
             {selectedTask && (
-              <ScrollView style={{ maxHeight: 300 }}>
+              <ScrollView style={{ maxHeight: 450 }} showsVerticalScrollIndicator={true}>
                 <Text style={[styles.detailTaskTitle, { color: colors.text }]}>
                   {selectedTask.title}
                 </Text>
@@ -1109,6 +1298,185 @@ export default function PageTasksScreen() {
                     </Text>
                   </View>
                 </View>
+
+                {/* 📋 WORKFLOW CONTROL BLOCK */}
+                <View style={{ marginVertical: 14 }}>
+                  <Text style={[styles.detailLabel, { color: colors.tabIconDefault, marginBottom: 8 }]}>QUY TRÌNH PHÊ DUYỆT</Text>
+                  
+                  {/* PENDING STATE */}
+                  {(selectedTask.approval_status || selectedTask.status) === 'pending' && (
+                    <TouchableOpacity
+                      style={[styles.workflowBtn, { backgroundColor: colors.tint }]}
+                      onPress={() => handleStartTask(selectedTask)}
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons name="play-circle-outline" size={18} color="#ffffff" style={{ marginRight: 6 }} />
+                      <Text style={styles.workflowBtnText}>Bắt đầu thực hiện</Text>
+                    </TouchableOpacity>
+                  )}
+
+                  {/* IN PROGRESS STATE */}
+                  {(selectedTask.approval_status || selectedTask.status) === 'in_progress' && (
+                    <View style={{ gap: 8 }}>
+                      <TouchableOpacity
+                        style={[styles.workflowBtn, { backgroundColor: colors.tint }]}
+                        onPress={() => handleOpenEditModal(selectedTask)}
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons name="create-outline" size={18} color="#ffffff" style={{ marginRight: 6 }} />
+                        <Text style={styles.workflowBtnText}>Cập nhật tiến độ</Text>
+                      </TouchableOpacity>
+                      
+                      <TouchableOpacity
+                        style={[styles.workflowBtn, { backgroundColor: '#10b981' }]}
+                        onPress={() => handleSubmitTask(selectedTask)}
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons name="paper-plane-outline" size={18} color="#ffffff" style={{ marginRight: 6 }} />
+                        <Text style={styles.workflowBtnText}>Gửi duyệt</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+
+                  {/* REVISION REQUIRED STATE */}
+                  {(selectedTask.approval_status || selectedTask.status) === 'revision_required' && (
+                    <View style={{ gap: 8 }}>
+                      {/* Warning card */}
+                      <View style={{ backgroundColor: '#fffbeb', borderColor: '#f59e0b', borderWidth: 1, borderRadius: 8, padding: 12 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
+                          <Ionicons name="alert-circle" size={16} color="#d97706" style={{ marginRight: 6 }} />
+                          <Text style={{ fontSize: 13, fontWeight: '700', color: '#b45309' }}>⚠️ Yêu cầu làm lại</Text>
+                        </View>
+                        <Text style={{ fontSize: 12, fontWeight: '700', color: '#b45309', marginBottom: 4 }}>
+                          Lý do:
+                        </Text>
+                        <Text style={{ fontSize: 12.5, color: '#92400e', lineHeight: 18, fontStyle: 'italic' }}>
+                          {selectedTask.revision_note || 'Chưa ghi lý do chi tiết.'}
+                        </Text>
+                        {selectedTask.revision_count && (
+                          <Text style={{ fontSize: 11, color: '#d97706', fontWeight: '700', marginTop: 6 }}>
+                            Số lần chỉnh sửa: {selectedTask.revision_count}
+                          </Text>
+                        )}
+                      </View>
+
+                      {/* Buttons */}
+                      <TouchableOpacity
+                        style={[styles.workflowBtn, { backgroundColor: colors.tint }]}
+                        onPress={() => handleOpenEditModal(selectedTask)}
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons name="create-outline" size={18} color="#ffffff" style={{ marginRight: 6 }} />
+                        <Text style={styles.workflowBtnText}>Cập nhật lại</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[styles.workflowBtn, { backgroundColor: '#10b981' }]}
+                        onPress={() => handleSubmitTask(selectedTask)}
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons name="paper-plane-outline" size={18} color="#ffffff" style={{ marginRight: 6 }} />
+                        <Text style={styles.workflowBtnText}>Gửi duyệt lại</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+
+                  {/* WAITING APPROVAL STATE */}
+                  {(selectedTask.approval_status || selectedTask.status) === 'waiting_approval' && (
+                    <View>
+                      {isAdmin ? (
+                        <View style={{ gap: 8 }}>
+                          <View style={{ backgroundColor: '#fffbeb', borderColor: '#f59e0b', borderWidth: 0.5, borderRadius: 8, padding: 10, alignItems: 'center', marginBottom: 4 }}>
+                            <Text style={{ fontSize: 12, fontWeight: '700', color: '#b45309' }}>⏳ NHÂN VIÊN ĐANG GỬI DUYỆT</Text>
+                          </View>
+                          
+                          <TouchableOpacity
+                            style={[styles.workflowBtn, { backgroundColor: '#10b981' }]}
+                            onPress={() => handleApproveTask(selectedTask)}
+                            activeOpacity={0.8}
+                          >
+                            <Ionicons name="checkmark-done-outline" size={18} color="#ffffff" style={{ marginRight: 6 }} />
+                            <Text style={styles.workflowBtnText}>✓ Duyệt hoàn thành</Text>
+                          </TouchableOpacity>
+
+                          <TouchableOpacity
+                            style={[styles.workflowBtn, { backgroundColor: '#ef4444' }]}
+                            onPress={() => {
+                              setRejectReason('');
+                              setIsRejectModalOpen(true);
+                            }}
+                            activeOpacity={0.8}
+                          >
+                            <Ionicons name="refresh-outline" size={18} color="#ffffff" style={{ marginRight: 6 }} />
+                            <Text style={styles.workflowBtnText}>↺ Yêu cầu làm lại</Text>
+                          </TouchableOpacity>
+                        </View>
+                      ) : (
+                        <View style={{ backgroundColor: '#f0fdf4', borderColor: '#16a34a', borderWidth: 1, borderRadius: 8, padding: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+                          <Ionicons name="hourglass-outline" size={18} color="#15803d" style={{ marginRight: 8 }} />
+                          <Text style={{ color: '#15803d', fontSize: 13, fontWeight: '700' }}>
+                            ⏳ Đang chờ quản lý duyệt
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  )}
+
+                  {/* COMPLETED STATE */}
+                  {(selectedTask.approval_status || selectedTask.status) === 'completed' && (
+                    <View style={{ backgroundColor: '#f0fdf4', borderColor: '#16a34a', borderWidth: 1, borderRadius: 8, padding: 12 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 6 }}>
+                        <Ionicons name="checkmark-done-circle" size={20} color="#15803d" style={{ marginRight: 8 }} />
+                        <Text style={{ color: '#15803d', fontSize: 13.5, fontWeight: '800' }}>
+                          ✅ Đã được duyệt hoàn thành
+                        </Text>
+                      </View>
+                      {selectedTask.approved_at && (
+                        <View style={{ borderTopWidth: 0.5, borderTopColor: '#bbf7d0', paddingTop: 6, marginTop: 6, gap: 2 }}>
+                          <Text style={{ fontSize: 11.5, color: '#166534', fontWeight: '500' }}>
+                            • Người duyệt: Quản trị viên (Admin)
+                          </Text>
+                          <Text style={{ fontSize: 11.5, color: '#166534', fontWeight: '500' }}>
+                            • Thời gian duyệt: {formatDateTime(selectedTask.approved_at)}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  )}
+                </View>
+
+                <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
+                {/* Timeline Lịch sử hoạt động */}
+                <Text style={[styles.detailLabel, { color: colors.tabIconDefault, marginBottom: 10 }]}>LỊCH SỬ HOẠT ĐỘNG</Text>
+                {loadingActivities ? (
+                  <ActivityIndicator size="small" color={colors.tint} style={{ marginVertical: 10, alignSelf: 'flex-start' }} />
+                ) : activities.length === 0 ? (
+                  <Text style={{ color: colors.tabIconDefault, fontSize: 12, fontStyle: 'italic', marginVertical: 6 }}>
+                    Chưa có lịch sử hoạt động ghi nhận cho nhiệm vụ này.
+                  </Text>
+                ) : (
+                  <View style={{ gap: 12, marginVertical: 6, paddingLeft: 2 }}>
+                    {activities.map((act) => (
+                      <View key={act.id} style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+                        <Ionicons 
+                          name={getActivityIcon(act.action) as any} 
+                          size={16} 
+                          color={getActivityIconColor(act.action)} 
+                          style={{ marginRight: 8, marginTop: 2 }} 
+                        />
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ fontSize: 13, color: colors.text, fontWeight: '600', lineHeight: 18 }}>
+                            {getActivityText(act)}
+                          </Text>
+                          <Text style={{ fontSize: 11, color: colors.tabIconDefault, marginTop: 2 }}>
+                            {formatDateTime(act.created_at)}
+                          </Text>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                )}
               </ScrollView>
             )}
 
@@ -1244,6 +1612,68 @@ export default function PageTasksScreen() {
             )}
           </View>
         </TouchableOpacity>
+      </Modal>
+
+      {/* 7.6. Modal: Lý do yêu cầu chỉnh sửa (Admin) */}
+      <Modal
+        visible={isRejectModalOpen}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setIsRejectModalOpen(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.urgeModalCard, { backgroundColor: colors.card, padding: 20 }]}>
+            <View style={styles.urgeModalHeader}>
+              <Text style={[styles.urgeModalTitle, { color: colors.text }]}>↺ Yêu cầu làm lại</Text>
+              <TouchableOpacity onPress={() => setIsRejectModalOpen(false)}>
+                <Ionicons name="close" size={20} color={colors.tabIconDefault} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={[styles.urgeModalSubtitle, { color: colors.text, fontWeight: '700', marginBottom: 8, marginTop: 10 }]}>
+              Lý do yêu cầu chỉnh sửa:
+            </Text>
+
+            <TextInput
+              style={{
+                height: 100,
+                borderWidth: 1,
+                borderColor: colors.border,
+                borderRadius: 10,
+                padding: 12,
+                fontSize: 13,
+                fontWeight: '500',
+                color: colors.text,
+                backgroundColor: colors.background,
+                textAlignVertical: 'top',
+                marginBottom: 16,
+              }}
+              placeholder="Nhập lý do chi tiết..."
+              placeholderTextColor={colors.tabIconDefault}
+              value={rejectReason}
+              onChangeText={setRejectReason}
+              multiline
+              numberOfLines={4}
+            />
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.btnCancel, { borderColor: colors.border }]}
+                onPress={() => setIsRejectModalOpen(false)}
+              >
+                <Text style={[styles.btnCancelText, { color: colors.text }]}>Hủy</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.btnSubmit, { backgroundColor: '#ef4444' }]}
+                onPress={handleRejectTask}
+                disabled={!rejectReason.trim()}
+              >
+                <Text style={styles.btnSubmitText}>Xác nhận</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -1805,5 +2235,18 @@ colCell: {
   },
   urgeOptionTextBox: {
     flex: 1,
+  },
+  workflowBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 40,
+    borderRadius: 8,
+    width: '100%',
+  },
+  workflowBtnText: {
+    color: '#ffffff',
+    fontSize: 13.5,
+    fontWeight: '700',
   },
 });

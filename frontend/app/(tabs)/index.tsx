@@ -31,8 +31,10 @@ interface User {
 interface KPIStats {
   total: number;
   in_progress: number;
+  waiting_approval: number;
+  revision_required: number;
   completed: number;
-  urgent: number;
+  completion_rate: number;
 }
 
 export default function HomeScreen() {
@@ -45,8 +47,10 @@ export default function HomeScreen() {
   const [stats, setStats] = useState<KPIStats>({
     total: 0,
     in_progress: 0,
+    waiting_approval: 0,
+    revision_required: 0,
     completed: 0,
-    urgent: 0,
+    completion_rate: 0,
   });
   const [statsLoading, setStatsLoading] = useState(true);
 
@@ -73,7 +77,7 @@ export default function HomeScreen() {
       const res = await fetch(`${API_BASE_URL}/tasks/stats`);
       const result = await res.json();
       if (result.status === 'success') {
-        setStats(result.data || { total: 0, in_progress: 0, completed: 0, urgent: 0 });
+        setStats(result.data || { total: 0, in_progress: 0, waiting_approval: 0, revision_required: 0, completed: 0, completion_rate: 0 });
       }
     } catch (err) {
       console.error('⚠️ [Home] Lỗi lấy KPI thống kê:', err);
@@ -132,66 +136,119 @@ export default function HomeScreen() {
             <Text style={[styles.statsLoaderText, { color: colors.tabIconDefault }]}>Đang tính toán thống kê...</Text>
           </View>
         ) : (
-          <View style={styles.kpiGrid}>
-            {/* Card 1: Tổng công việc */}
-            <TouchableOpacity 
-              style={[styles.kpiCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-              onPress={() => router.push('/tasks')}
-              activeOpacity={0.7}
+          <View style={{ gap: 14, marginBottom: 24 }}>
+            {/* Completion Rate Glassmorphic Card */}
+            <View 
+              style={{
+                width: '100%',
+                borderWidth: 1,
+                borderRadius: 18,
+                padding: 16,
+                backgroundColor: colors.card,
+                borderColor: colors.border,
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                ...Platform.select({
+                  ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.03, shadowRadius: 4 },
+                  android: { elevation: 1 }
+                })
+              }}
             >
-              <View style={[styles.kpiIconWrapper, { backgroundColor: '#eff6ff' }]}>
-                <Ionicons name="folder-open" size={20} color="#2563eb" />
+              <View style={{ flex: 1, marginRight: 16 }}>
+                <Text style={{ fontSize: 11.5, fontWeight: '700', color: colors.tabIconDefault, marginBottom: 8, letterSpacing: 0.5 }}>
+                  TỶ LỆ HOÀN THÀNH DOANH NGHIỆP
+                </Text>
+                <View style={{ height: 8, width: '100%', backgroundColor: colors.border, borderRadius: 4, overflow: 'hidden' }}>
+                  <View style={{ height: '100%', width: `${stats.completion_rate}%`, backgroundColor: '#10b981', borderRadius: 4 }} />
+                </View>
+                <Text style={{ fontSize: 12, color: colors.tabIconDefault, fontWeight: '600', marginTop: 8 }}>
+                  {stats.completed} trên tổng số {stats.total} nhiệm vụ đã được duyệt hoàn thành.
+                </Text>
               </View>
-              <View style={styles.kpiInfo}>
-                <Text style={[styles.kpiTitle, { color: colors.tabIconDefault }]}>Tổng việc</Text>
-                <Text style={[styles.kpiNumber, { color: colors.text }]}>{stats.total}</Text>
+              <View style={{ alignItems: 'center', justifyContent: 'center', backgroundColor: '#ecfdf5', borderRadius: 16, width: 60, height: 60, borderWidth: 1, borderColor: '#10b981' }}>
+                <Text style={{ fontSize: 18, fontWeight: '900', color: '#059669' }}>
+                  {stats.completion_rate}%
+                </Text>
               </View>
-            </TouchableOpacity>
+            </View>
 
-            {/* Card 2: Đang thực hiện */}
-            <TouchableOpacity 
-              style={[styles.kpiCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-              onPress={() => router.push('/tasks')}
-              activeOpacity={0.7}
-            >
-              <View style={[styles.kpiIconWrapper, { backgroundColor: '#fef3c7' }]}>
-                <Ionicons name="sync" size={20} color="#d97706" />
-              </View>
-              <View style={styles.kpiInfo}>
-                <Text style={[styles.kpiTitle, { color: colors.tabIconDefault }]}>Đang làm</Text>
-                <Text style={[styles.kpiNumber, { color: colors.text }]}>{stats.in_progress}</Text>
-              </View>
-            </TouchableOpacity>
+            <View style={styles.kpiGrid}>
+              {/* Card 1: Tổng công việc */}
+              <TouchableOpacity 
+                style={[styles.kpiCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+                onPress={() => router.push('/tasks')}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.kpiIconWrapper, { backgroundColor: '#eff6ff' }]}>
+                  <Ionicons name="folder-open" size={18} color="#2563eb" />
+                </View>
+                <View style={styles.kpiInfo}>
+                  <Text style={[styles.kpiTitle, { color: colors.tabIconDefault }]}>Tổng việc</Text>
+                  <Text style={[styles.kpiNumber, { color: colors.text }]}>{stats.total}</Text>
+                </View>
+              </TouchableOpacity>
 
-            {/* Card 3: Hoàn tất */}
-            <TouchableOpacity 
-              style={[styles.kpiCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-              onPress={() => router.push('/tasks')}
-              activeOpacity={0.7}
-            >
-              <View style={[styles.kpiIconWrapper, { backgroundColor: '#d1fae5' }]}>
-                <Ionicons name="checkmark-circle" size={20} color="#059669" />
-              </View>
-              <View style={styles.kpiInfo}>
-                <Text style={[styles.kpiTitle, { color: colors.tabIconDefault }]}>Hoàn tất</Text>
-                <Text style={[styles.kpiNumber, { color: colors.text }]}>{stats.completed}</Text>
-              </View>
-            </TouchableOpacity>
+              {/* Card 2: Đang thực hiện */}
+              <TouchableOpacity 
+                style={[styles.kpiCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+                onPress={() => router.push('/tasks')}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.kpiIconWrapper, { backgroundColor: '#e0f2fe' }]}>
+                  <Ionicons name="sync" size={18} color="#0284c7" />
+                </View>
+                <View style={styles.kpiInfo}>
+                  <Text style={[styles.kpiTitle, { color: colors.tabIconDefault }]}>Đang làm</Text>
+                  <Text style={[styles.kpiNumber, { color: colors.text }]}>{stats.in_progress}</Text>
+                </View>
+              </TouchableOpacity>
 
-            {/* Card 4: Khẩn cấp */}
-            <TouchableOpacity 
-              style={[styles.kpiCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-              onPress={() => router.push('/tasks')}
-              activeOpacity={0.7}
-            >
-              <View style={[styles.kpiIconWrapper, { backgroundColor: '#fef2f2' }]}>
-                <Ionicons name="alert-circle" size={20} color="#dc2626" />
-              </View>
-              <View style={styles.kpiInfo}>
-                <Text style={[styles.kpiTitle, { color: colors.tabIconDefault }]}>Khẩn cấp</Text>
-                <Text style={[styles.kpiNumber, { color: colors.text }]}>{stats.urgent}</Text>
-              </View>
-            </TouchableOpacity>
+              {/* Card 3: Chờ duyệt */}
+              <TouchableOpacity 
+                style={[styles.kpiCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+                onPress={() => router.push('/tasks')}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.kpiIconWrapper, { backgroundColor: '#fef3c7' }]}>
+                  <Ionicons name="hourglass" size={18} color="#d97706" />
+                </View>
+                <View style={styles.kpiInfo}>
+                  <Text style={[styles.kpiTitle, { color: colors.tabIconDefault }]}>Chờ duyệt</Text>
+                  <Text style={[styles.kpiNumber, { color: colors.text }]}>{stats.waiting_approval}</Text>
+                </View>
+              </TouchableOpacity>
+
+              {/* Card 4: Cần làm lại */}
+              <TouchableOpacity 
+                style={[styles.kpiCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+                onPress={() => router.push('/tasks')}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.kpiIconWrapper, { backgroundColor: '#fee2e2' }]}>
+                  <Ionicons name="refresh-circle" size={18} color="#dc2626" />
+                </View>
+                <View style={styles.kpiInfo}>
+                  <Text style={[styles.kpiTitle, { color: colors.tabIconDefault }]}>Làm lại</Text>
+                  <Text style={[styles.kpiNumber, { color: colors.text }]}>{stats.revision_required}</Text>
+                </View>
+              </TouchableOpacity>
+
+              {/* Card 5: Hoàn thành */}
+              <TouchableOpacity 
+                style={[styles.kpiCard, { backgroundColor: colors.card, borderColor: colors.border, width: '100%' }]}
+                onPress={() => router.push('/tasks')}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.kpiIconWrapper, { backgroundColor: '#d1fae5' }]}>
+                  <Ionicons name="checkmark-done-circle" size={18} color="#059669" />
+                </View>
+                <View style={styles.kpiInfo}>
+                  <Text style={[styles.kpiTitle, { color: colors.tabIconDefault }]}>Hoàn thành (Đã duyệt)</Text>
+                  <Text style={[styles.kpiNumber, { color: colors.text }]}>{stats.completed}</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
 

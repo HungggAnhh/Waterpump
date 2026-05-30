@@ -38,6 +38,34 @@
 
 ---
 
+## ⚙️ Cấu hình biến môi trường (.env)
+
+Tạo file `.env` nằm trong thư mục `backend/` (`backend/.env`) để cấu hình kết nối database, dịch vụ lưu trữ đám mây và thông báo đẩy:
+
+```env
+# Kết nối Cơ sở dữ liệu PostgreSQL (Supabase)
+DATABASE_URL="postgresql://postgres.xxx:password@aws-xxx.pooler.supabase.com:6543/postgres"
+
+# --- CẤU HÌNH SUPABASE STORAGE (Dùng để upload ảnh/video) ---
+# Địa chỉ API của Supabase
+SUPABASE_URL="https://your-project.supabase.co"
+# Khóa Service Role Key (hoặc Service Key) để upload file trực tiếp
+SUPABASE_SERVICE_ROLE_KEY="sb_secret_xxxx"
+# Tên bucket lưu trữ trên Supabase Storage (Mặc định: media)
+SUPABASE_BUCKET="media"
+
+# --- CẤU HÌNH FIREBASE ADMIN SDK (Gửi Push Notifications) ---
+FIREBASE_PROJECT_ID="your-project-id"
+FIREBASE_CLIENT_EMAIL="firebase-adminsdk-xxx@your-project.iam.gserviceaccount.com"
+FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkq..."
+```
+
+> [!NOTE]
+> * Hệ thống sử dụng thư viện `ws` làm WebSocket transport cho `@supabase/supabase-js`, đảm bảo tương thích hoàn toàn trên cả **Node.js 20** mà không bị lỗi thiếu Native WebSocket.
+> * Luôn khởi động lại (restart) Backend Server sau khi thay đổi nội dung file `.env`.
+
+---
+
 ## 🚀 Hướng Dẫn Khởi Chạy Hệ Thống
 
 Để vận hành toàn bộ dự án trên máy tính của bạn, hãy mở các cửa sổ Terminal riêng biệt để chạy 3 phần sau:

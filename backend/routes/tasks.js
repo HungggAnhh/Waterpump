@@ -4,6 +4,18 @@ const { query } = require('../config/supabase');
 const jwt = require('jsonwebtoken');
 const router = express.Router();
 
+const logTaskActivity = async (taskId, userId, action, oldValue, newValue) => {
+  try {
+    await query(
+      `INSERT INTO task_activities (task_id, user_id, action, old_value, new_value)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [taskId, userId, action, oldValue || null, newValue || null]
+    );
+  } catch (err) {
+    console.error('❌ Lỗi ghi log hoạt động công việc:', err.message);
+  }
+};
+
 const JWT_SECRET = process.env.JWT_SECRET || 'SecretCompanyKeySecret_9988';
 
 // Helper: Giải mã user từ token hoặc lấy fallback trong môi trường dev
@@ -213,8 +225,8 @@ router.post('/tasks', async (req, res) => {
 
     const isCompleted = status === 'completed';
     const result = await query(
-      `INSERT INTO tasks (workspace_id, page_id, title, description, status, priority, assigned_to, created_by, deadline, completed)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO tasks (workspace_id, page_id, title, description, status, priority, assigned_to, created_by, deadline, completed, approval_status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
       [
         parseInt(workspace_id),
@@ -226,7 +238,8 @@ router.post('/tasks', async (req, res) => {
         finalAssignedTo,
         user.id,
         deadline || null,
-        isCompleted
+        isCompleted,
+        'pending'
       ]
     );
 
@@ -239,6 +252,12 @@ router.post('/tasks', async (req, res) => {
         newTask.assignee_name = userRes.rows[0].name;
         newTask.assignee_avatar = userRes.rows[0].avatar;
       }
+    }
+
+    // Ghi log hoạt động
+    await logTaskActivity(newTask.id, user.id, 'created', null, newTask.title);
+    if (newTask.assigned_to) {
+      await logTaskActivity(newTask.id, user.id, 'assigned', null, newTask.assignee_name || `User #${newTask.assigned_to}`);
     }
 
     // Phát realtime socket
@@ -297,8 +316,8 @@ router.put('/tasks/:taskId', async (req, res) => {
     let params = [];
 
     if (user.role === 'admin') {
-      const { title, description, status, priority, assigned_to, deadline, completed, is_reviewed } = req.body;
-      const finalCompleted = completed !== undefined ? completed : (status === 'completed');
+      const { title, description, status, priority, assigned_to, deadline, completed, is_reviewed, approval_status } = req.body;
+      const finalCompleted = completed !== undefined ? completed : (approval_status === 'completed' || status === 'completed');
       
       queryStr = `
         UPDATE tasks 
@@ -310,10 +329,11 @@ router.put('/tasks/:taskId', async (req, res) => {
             deadline = $6, 
             completed = $7, 
             is_reviewed = $8, 
+            approval_status = $9,
             updated_at = NOW(),
             reminder_interval = CASE WHEN $7 = TRUE THEN NULL ELSE reminder_interval END,
             last_reminded_at = CASE WHEN $7 = TRUE THEN NULL ELSE last_reminded_at END
-        WHERE id = $9 
+        WHERE id = $10 
         RETURNING *`;
       params = [
         title !== undefined ? title : currentTask.title,
@@ -324,6 +344,7 @@ router.put('/tasks/:taskId', async (req, res) => {
         deadline !== undefined ? (deadline || null) : currentTask.deadline,
         finalCompleted,
         is_reviewed !== undefined ? is_reviewed : (currentTask.is_reviewed || false),
+        approval_status !== undefined ? approval_status : currentTask.approval_status,
         taskId
       ];
     } else {
@@ -331,25 +352,20 @@ router.put('/tasks/:taskId', async (req, res) => {
         return res.status(403).json({ status: 'error', message: 'Bạn không được phân quyền cập nhật công việc của người khác.' });
       }
 
-      const { status, priority, description, completed } = req.body;
-      const finalCompleted = completed !== undefined ? completed : (status === 'completed');
+      const { priority, description, progress } = req.body;
 
       queryStr = `
         UPDATE tasks 
-        SET status = $1, 
-            priority = $2, 
-            description = $3, 
-            completed = $4, 
-            updated_at = NOW(),
-            reminder_interval = CASE WHEN $4 = TRUE THEN NULL ELSE reminder_interval END,
-            last_reminded_at = CASE WHEN $4 = TRUE THEN NULL ELSE last_reminded_at END
-        WHERE id = $5 
+        SET priority = $1, 
+            description = $2, 
+            progress = $3,
+            updated_at = NOW()
+        WHERE id = $4 
         RETURNING *`;
       params = [
-        status !== undefined ? status : currentTask.status,
         priority !== undefined ? priority : currentTask.priority,
         description !== undefined ? description : currentTask.description,
-        finalCompleted,
+        progress !== undefined ? parseInt(progress) : (currentTask.progress || 0),
         taskId
       ];
     }
@@ -365,6 +381,38 @@ router.put('/tasks/:taskId', async (req, res) => {
         updatedTask.assignee_avatar = userRes.rows[0].avatar;
       }
     }
+
+    // Ghi log hoạt động khi có thay đổi (bất đồng bộ)
+    (async () => {
+      if (currentTask.status !== updatedTask.status) {
+        await logTaskActivity(taskId, user.id, 'status_changed', currentTask.status, updatedTask.status);
+      }
+      if (currentTask.priority !== updatedTask.priority) {
+        await logTaskActivity(taskId, user.id, 'priority_changed', currentTask.priority, updatedTask.priority);
+      }
+      if (currentTask.assigned_to !== updatedTask.assigned_to) {
+        let oldAssigneeName = 'Không ai';
+        let newAssigneeName = 'Không ai';
+        
+        if (currentTask.assigned_to) {
+          const uRes = await query('SELECT name FROM users WHERE id = $1', [currentTask.assigned_to]);
+          if (uRes.rows.length > 0) oldAssigneeName = uRes.rows[0].name;
+        }
+        if (updatedTask.assigned_to) {
+          newAssigneeName = updatedTask.assignee_name || `User #${updatedTask.assigned_to}`;
+        }
+        await logTaskActivity(taskId, user.id, 'assigned', oldAssigneeName, newAssigneeName);
+      }
+      if (currentTask.title !== updatedTask.title) {
+        await logTaskActivity(taskId, user.id, 'title_changed', currentTask.title, updatedTask.title);
+      }
+      if (currentTask.description !== updatedTask.description) {
+        await logTaskActivity(taskId, user.id, 'desc_changed', currentTask.description, updatedTask.description);
+      }
+      if (currentTask.is_reviewed !== updatedTask.is_reviewed) {
+        await logTaskActivity(taskId, user.id, 'reviewed', currentTask.is_reviewed ? 'true' : 'false', updatedTask.is_reviewed ? 'true' : 'false');
+      }
+    })();
 
     // Gửi Push Notification nếu thay đổi người thực hiện (hoặc được giao mới)
     if (updatedTask.assigned_to && updatedTask.assigned_to !== currentTask.assigned_to) {
@@ -446,23 +494,41 @@ router.get('/stats', async (req, res) => {
       result = await query(`
         SELECT 
           COUNT(*)::int AS total,
-          COUNT(CASE WHEN status = 'in_progress' THEN 1 END)::int AS in_progress,
-          COUNT(CASE WHEN completed = TRUE OR status = 'completed' THEN 1 END)::int AS completed,
-          COUNT(CASE WHEN priority = 'high' AND completed = FALSE THEN 1 END)::int AS urgent
+          COUNT(CASE WHEN approval_status = 'in_progress' THEN 1 END)::int AS in_progress,
+          COUNT(CASE WHEN approval_status = 'waiting_approval' THEN 1 END)::int AS waiting_approval,
+          COUNT(CASE WHEN approval_status = 'revision_required' THEN 1 END)::int AS revision_required,
+          COUNT(CASE WHEN approval_status = 'completed' THEN 1 END)::int AS completed
         FROM tasks
+        WHERE is_deleted = FALSE OR is_deleted IS NULL
       `);
     } else {
       result = await query(`
         SELECT 
           COUNT(*)::int AS total,
-          COUNT(CASE WHEN status = 'in_progress' THEN 1 END)::int AS in_progress,
-          COUNT(CASE WHEN completed = TRUE OR status = 'completed' THEN 1 END)::int AS completed,
-          COUNT(CASE WHEN priority = 'high' AND completed = FALSE THEN 1 END)::int AS urgent
+          COUNT(CASE WHEN approval_status = 'in_progress' THEN 1 END)::int AS in_progress,
+          COUNT(CASE WHEN approval_status = 'waiting_approval' THEN 1 END)::int AS waiting_approval,
+          COUNT(CASE WHEN approval_status = 'revision_required' THEN 1 END)::int AS revision_required,
+          COUNT(CASE WHEN approval_status = 'completed' THEN 1 END)::int AS completed
         FROM tasks
-        WHERE assigned_to = $1
+        WHERE (assigned_to = $1) AND (is_deleted = FALSE OR is_deleted IS NULL)
       `, [user.id]);
     }
-    return res.status(200).json({ status: 'success', data: result.rows[0] });
+
+    const row = result.rows[0];
+    const total = row.total || 0;
+    const completed = row.completed || 0;
+    const completion_rate = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+    const statsData = {
+      total,
+      in_progress: row.in_progress || 0,
+      waiting_approval: row.waiting_approval || 0,
+      revision_required: row.revision_required || 0,
+      completed,
+      completion_rate
+    };
+
+    return res.status(200).json({ status: 'success', data: statsData });
   } catch (err) {
     return res.status(500).json({ status: 'error', message: 'Lỗi tính toán thống kê: ' + err.message });
   }
@@ -585,6 +651,341 @@ router.post('/tasks/:taskId/urge', async (req, res) => {
   } catch (err) {
     console.error('❌ Lỗi API hối thúc:', err.message);
     return res.status(500).json({ status: 'error', message: 'Lỗi hệ thống khi xử lý hối thúc: ' + err.message });
+  }
+});
+
+// 9. GET /api/tasks/tasks/:taskId/activities — Lấy lịch sử hoạt động của nhiệm vụ
+router.get('/tasks/:taskId/activities', async (req, res) => {
+  const user = getAuthUser(req);
+  if (!user) {
+    return res.status(401).json({ status: 'error', message: 'Không thể xác thực người dùng.' });
+  }
+
+  const taskId = parseInt(req.params.taskId);
+
+  try {
+    const result = await query(
+      `SELECT ta.*, u.name AS user_name, u.avatar AS user_avatar, u.role AS user_role
+       FROM task_activities ta
+       JOIN users u ON ta.user_id = u.id
+       WHERE ta.task_id = $1
+       ORDER BY ta.id DESC`,
+      [taskId]
+    );
+    return res.status(200).json({ status: 'success', data: result.rows });
+  } catch (err) {
+    return res.status(500).json({ status: 'error', message: 'Lỗi lấy lịch sử hoạt động: ' + err.message });
+  }
+});
+
+// 10. POST /api/tasks/tasks/:taskId/start — Bắt đầu thực hiện (User/Admin)
+router.post('/tasks/:taskId/start', async (req, res) => {
+  const user = getAuthUser(req);
+  if (!user) {
+    return res.status(401).json({ status: 'error', message: 'Không thể xác thực người dùng.' });
+  }
+
+  const taskId = parseInt(req.params.taskId);
+
+  try {
+    const taskRes = await query('SELECT * FROM tasks WHERE id = $1', [taskId]);
+    if (taskRes.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'Không tìm thấy nhiệm vụ.' });
+    }
+
+    const task = taskRes.rows[0];
+    if (user.role !== 'admin' && task.assigned_to !== user.id) {
+      return res.status(403).json({ status: 'error', message: 'Bạn không được phân quyền thực hiện công việc này.' });
+    }
+
+    const oldStatus = task.approval_status || 'pending';
+    const result = await query(
+      `UPDATE tasks 
+       SET approval_status = 'in_progress', 
+           status = 'in_progress',
+           updated_at = NOW() 
+       WHERE id = $1 RETURNING *`,
+      [taskId]
+    );
+
+    const updatedTask = result.rows[0];
+
+    // Lấy thông tin assignee
+    if (updatedTask.assigned_to) {
+      const userRes = await query('SELECT name, avatar FROM users WHERE id = $1', [updatedTask.assigned_to]);
+      if (userRes.rows.length > 0) {
+        updatedTask.assignee_name = userRes.rows[0].name;
+        updatedTask.assignee_avatar = userRes.rows[0].avatar;
+      }
+    }
+
+    // Ghi log hoạt động
+    await logTaskActivity(taskId, user.id, 'status_changed', oldStatus, 'in_progress');
+
+    // Socket realtime
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('task_updated', updatedTask);
+    }
+
+    return res.status(200).json({ status: 'success', data: updatedTask });
+  } catch (err) {
+    return res.status(500).json({ status: 'error', message: 'Lỗi bắt đầu thực hiện: ' + err.message });
+  }
+});
+
+// 11. POST /api/tasks/tasks/:taskId/submit — Gửi duyệt công việc (User/Admin)
+router.post('/tasks/:taskId/submit', async (req, res) => {
+  const user = getAuthUser(req);
+  if (!user) {
+    return res.status(401).json({ status: 'error', message: 'Không thể xác thực người dùng.' });
+  }
+
+  const taskId = parseInt(req.params.taskId);
+
+  try {
+    const taskRes = await query('SELECT * FROM tasks WHERE id = $1', [taskId]);
+    if (taskRes.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'Không tìm thấy nhiệm vụ.' });
+    }
+
+    const task = taskRes.rows[0];
+    if (user.role !== 'admin' && task.assigned_to !== user.id) {
+      return res.status(403).json({ status: 'error', message: 'Bạn không được phân quyền gửi duyệt công việc này.' });
+    }
+
+    const oldStatus = task.approval_status || 'in_progress';
+    const result = await query(
+      `UPDATE tasks 
+       SET approval_status = 'waiting_approval', 
+           status = 'in_progress',
+           updated_at = NOW() 
+       WHERE id = $1 RETURNING *`,
+      [taskId]
+    );
+
+    const updatedTask = result.rows[0];
+
+    // Lấy thông tin assignee
+    if (updatedTask.assigned_to) {
+      const userRes = await query('SELECT name, avatar FROM users WHERE id = $1', [updatedTask.assigned_to]);
+      if (userRes.rows.length > 0) {
+        updatedTask.assignee_name = userRes.rows[0].name;
+        updatedTask.assignee_avatar = userRes.rows[0].avatar;
+      }
+    }
+
+    // Ghi log hoạt động
+    await logTaskActivity(taskId, user.id, 'status_changed', oldStatus, 'waiting_approval');
+
+    // Socket realtime
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('task_updated', updatedTask);
+      io.emit('task_submitted', updatedTask);
+    }
+
+    // Gửi Push Notification cho tất cả Admin
+    (async () => {
+      try {
+        const adminsRes = await query("SELECT id FROM users WHERE role = 'admin'");
+        if (adminsRes.rows.length > 0) {
+          const adminIds = adminsRes.rows.map(r => r.id);
+          const tokensRes = await query(
+            'SELECT fcm_token FROM user_push_tokens WHERE user_id = ANY($1)',
+            [adminIds]
+          );
+          if (tokensRes.rows.length > 0) {
+            const { sendPWAPushNotification } = require('../config/firebaseAdmin');
+            const submitterName = user.name || 'Nhân viên';
+            const title = `📋 Nhiệm vụ chờ duyệt`;
+            const body = `${submitterName} vừa gửi duyệt nhiệm vụ: "${updatedTask.title}"`;
+            const dataUrl = `/workspace/${updatedTask.workspace_id}`;
+            for (const row of tokensRes.rows) {
+              await sendPWAPushNotification(row.fcm_token, title, body, dataUrl, 'task');
+            }
+          }
+        }
+      } catch (pushErr) {
+        console.error('⚠️ Lỗi gửi push cho admin khi gửi duyệt:', pushErr.message);
+      }
+    })();
+
+    return res.status(200).json({ status: 'success', data: updatedTask });
+  } catch (err) {
+    return res.status(500).json({ status: 'error', message: 'Lỗi gửi duyệt: ' + err.message });
+  }
+});
+
+// 12. POST /api/tasks/tasks/:taskId/approve — Duyệt hoàn thành (Chỉ Admin)
+router.post('/tasks/:taskId/approve', async (req, res) => {
+  const user = getAuthUser(req);
+  if (!user || user.role !== 'admin') {
+    return res.status(403).json({ status: 'error', message: 'Chỉ quản trị viên mới được phép duyệt hoàn thành công việc.' });
+  }
+
+  const taskId = parseInt(req.params.taskId);
+
+  try {
+    const taskRes = await query('SELECT * FROM tasks WHERE id = $1', [taskId]);
+    if (taskRes.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'Không tìm thấy nhiệm vụ.' });
+    }
+
+    const task = taskRes.rows[0];
+    const oldStatus = task.approval_status || 'waiting_approval';
+
+    const result = await query(
+      `UPDATE tasks 
+       SET approval_status = 'completed', 
+           status = 'completed',
+           completed = TRUE, 
+           completed_at = NOW(),
+           approved_by = $1,
+           approved_at = NOW(),
+           updated_at = NOW(),
+           reminder_interval = NULL,
+           last_reminded_at = NULL
+       WHERE id = $2 RETURNING *`,
+      [user.id, taskId]
+    );
+
+    const updatedTask = result.rows[0];
+
+    // Lấy thông tin assignee
+    if (updatedTask.assigned_to) {
+      const userRes = await query('SELECT name, avatar FROM users WHERE id = $1', [updatedTask.assigned_to]);
+      if (userRes.rows.length > 0) {
+        updatedTask.assignee_name = userRes.rows[0].name;
+        updatedTask.assignee_avatar = userRes.rows[0].avatar;
+      }
+    }
+
+    // Ghi log hoạt động
+    await logTaskActivity(taskId, user.id, 'status_changed', oldStatus, 'completed');
+    await logTaskActivity(taskId, user.id, 'reviewed', 'false', 'true');
+
+    // Socket realtime
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('task_updated', updatedTask);
+      io.emit('task_approved', updatedTask);
+      io.emit('task_completed', updatedTask);
+    }
+
+    // Gửi Push Notification cho Assignee
+    if (updatedTask.assigned_to) {
+      (async () => {
+        try {
+          const tokensRes = await query(
+            'SELECT fcm_token FROM user_push_tokens WHERE user_id = $1',
+            [updatedTask.assigned_to]
+          );
+          if (tokensRes.rows.length > 0) {
+            const { sendPWAPushNotification } = require('../config/firebaseAdmin');
+            const title = `🎉 Nhiệm vụ đã hoàn thành`;
+            const body = `Nhiệm vụ "${updatedTask.title}" đã được quản lý phê duyệt.`;
+            const dataUrl = `/workspace/${updatedTask.workspace_id}`;
+            for (const row of tokensRes.rows) {
+              await sendPWAPushNotification(row.fcm_token, title, body, dataUrl, 'task');
+            }
+          }
+        } catch (pushErr) {
+          console.error('⚠️ Lỗi gửi push cho assignee khi duyệt:', pushErr.message);
+        }
+      })();
+    }
+
+    return res.status(200).json({ status: 'success', data: updatedTask });
+  } catch (err) {
+    return res.status(500).json({ status: 'error', message: 'Lỗi duyệt hoàn tất công việc: ' + err.message });
+  }
+});
+
+// 13. POST /api/tasks/tasks/:taskId/reject — Yêu cầu làm lại (Chỉ Admin)
+router.post('/tasks/:taskId/reject', async (req, res) => {
+  const user = getAuthUser(req);
+  if (!user || user.role !== 'admin') {
+    return res.status(403).json({ status: 'error', message: 'Chỉ quản trị viên mới có quyền yêu cầu làm lại công việc.' });
+  }
+
+  const taskId = parseInt(req.params.taskId);
+  const { reason } = req.body;
+
+  if (!reason || !reason.trim()) {
+    return res.status(400).json({ status: 'error', message: 'Vui lòng nhập lý do yêu cầu chỉnh sửa.' });
+  }
+
+  try {
+    const taskRes = await query('SELECT * FROM tasks WHERE id = $1', [taskId]);
+    if (taskRes.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'Không tìm thấy nhiệm vụ.' });
+    }
+
+    const task = taskRes.rows[0];
+    const oldStatus = task.approval_status || 'waiting_approval';
+    const newCount = (task.revision_count || 0) + 1;
+
+    const result = await query(
+      `UPDATE tasks 
+       SET approval_status = 'revision_required', 
+           status = 'in_progress',
+           completed = FALSE,
+           revision_note = $1,
+           revision_count = $2,
+           updated_at = NOW() 
+       WHERE id = $3 RETURNING *`,
+      [reason.trim(), newCount, taskId]
+    );
+
+    const updatedTask = result.rows[0];
+
+    // Lấy thông tin assignee
+    if (updatedTask.assigned_to) {
+      const userRes = await query('SELECT name, avatar FROM users WHERE id = $1', [updatedTask.assigned_to]);
+      if (userRes.rows.length > 0) {
+        updatedTask.assignee_name = userRes.rows[0].name;
+        updatedTask.assignee_avatar = userRes.rows[0].avatar;
+      }
+    }
+
+    // Ghi log hoạt động
+    await logTaskActivity(taskId, user.id, 'status_changed', oldStatus, 'revision_required');
+    await logTaskActivity(taskId, user.id, 'revision_note', null, reason.trim());
+
+    // Socket realtime
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('task_updated', updatedTask);
+      io.emit('task_rejected', updatedTask);
+    }
+
+    // Gửi Push Notification cho Assignee
+    if (updatedTask.assigned_to) {
+      (async () => {
+        try {
+          const tokensRes = await query(
+            'SELECT fcm_token FROM user_push_tokens WHERE user_id = $1',
+            [updatedTask.assigned_to]
+          );
+          if (tokensRes.rows.length > 0) {
+            const { sendPWAPushNotification } = require('../config/firebaseAdmin');
+            const title = `⚠️ Nhiệm vụ cần chỉnh sửa`;
+            const body = `Lý do: ${reason.trim()}`;
+            const dataUrl = `/workspace/${updatedTask.workspace_id}`;
+            for (const row of tokensRes.rows) {
+              await sendPWAPushNotification(row.fcm_token, title, body, dataUrl, 'task');
+            }
+          }
+        } catch (pushErr) {
+          console.error('⚠️ Lỗi gửi push cho assignee khi từ chối:', pushErr.message);
+        }
+      })();
+    }
+
+    return res.status(200).json({ status: 'success', data: updatedTask });
+  } catch (err) {
+    return res.status(500).json({ status: 'error', message: 'Lỗi yêu cầu sửa lại: ' + err.message });
   }
 });
 
