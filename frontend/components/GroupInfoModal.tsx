@@ -15,6 +15,7 @@ import {
   Platform,
   SafeAreaView,
   ScrollView,
+  Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL, endpoints } from '@/constants/Config';
@@ -48,6 +49,7 @@ interface GroupInfoModalProps {
     border: string;
     tint: string;
   };
+  position?: { x: number; y: number } | null;
 }
 
 export function GroupInfoModal({
@@ -56,6 +58,7 @@ export function GroupInfoModal({
   conversationId,
   currentUser,
   colors,
+  position,
 }: GroupInfoModalProps) {
   const { socket } = useSocket();
   const conversations = useConversationStore((state) => state.conversations);
@@ -383,12 +386,43 @@ export function GroupInfoModal({
       transparent={true}
       onRequestClose={onClose}
     >
-      <SafeAreaView style={[styles.modalOverlay, { backgroundColor: 'rgba(0, 0, 0, 0.5)' }]}>
+      <SafeAreaView style={[
+        styles.modalOverlay, 
+        { 
+          backgroundColor: (Platform.OS === 'web' && position) ? 'transparent' : 'rgba(0, 0, 0, 0.5)',
+          justifyContent: (Platform.OS === 'web' && position) ? 'flex-start' : 'flex-end'
+        }
+      ]}>
+        {(Platform.OS === 'web' && position) && (
+          <TouchableOpacity 
+            style={StyleSheet.absoluteFill} 
+            activeOpacity={1} 
+            onPress={onClose} 
+          />
+        )}
         <KeyboardAvoidingView
-          style={{ flex: 1, justifyContent: 'flex-end' }}
+          style={{ flex: 1, justifyContent: (Platform.OS === 'web' && position) ? 'flex-start' : 'flex-end' }}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
-          <View style={[styles.modalContainer, { backgroundColor: colors.background }]}>
+          <View style={[
+            styles.modalContainer, 
+            { backgroundColor: colors.background },
+            (Platform.OS === 'web' && position) ? {
+              position: 'absolute',
+              top: Math.max(10, position.y + 8),
+              left: Math.min(Dimensions.get('window').width - 340, Math.max(10, position.x - 300)),
+              width: 320,
+              maxHeight: 500,
+              borderRadius: 16,
+              borderWidth: 1,
+              borderColor: colors.border,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 4 },
+              shadowOpacity: 0.15,
+              shadowRadius: 12,
+              elevation: 5,
+            } : {}
+          ]}>
             {/* Header */}
             <View style={[styles.header, { borderBottomColor: colors.border }]}>
               <Text style={[styles.headerTitle, { color: colors.text }]}>Chi tiết nhóm</Text>

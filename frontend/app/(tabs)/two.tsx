@@ -745,7 +745,7 @@ export default function SettingsScreen() {
             ) : (
               <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
                 {filteredUsers.length === 0 ? (
-                  <View style={{ py: 40, alignItems: 'center' }}>
+                  <View style={{ paddingVertical: 40, alignItems: 'center' }}>
                     <Ionicons name="people-outline" size={48} color={colors.border} />
                     <Text style={{ color: colors.textSecondary, marginTop: 12, fontSize: 14 }}>Không tìm thấy tài khoản phù hợp</Text>
                   </View>
@@ -798,7 +798,6 @@ export default function SettingsScreen() {
                         <TouchableOpacity
                           style={[styles.miniBtn, { backgroundColor: colors.background, borderColor: colors.border }]}
                           onPress={() => startEditUser(item)}
-                          title="Chỉnh sửa thông tin"
                         >
                           <Ionicons name="create-outline" size={15} color={colors.tint} />
                         </TouchableOpacity>
@@ -806,7 +805,6 @@ export default function SettingsScreen() {
                         <TouchableOpacity
                           style={[styles.miniBtn, { backgroundColor: colors.background, borderColor: colors.border }]}
                           onPress={() => setResettingUser(item)}
-                          title="Reset mật khẩu"
                         >
                           <Ionicons name="key-outline" size={15} color="#eab308" />
                         </TouchableOpacity>
@@ -820,7 +818,6 @@ export default function SettingsScreen() {
                             }
                           ]}
                           onPress={() => handleToggleStatus(item)}
-                          title={item.status === 'active' ? 'Khóa tài khoản' : 'Mở khóa tài khoản'}
                         >
                           <Ionicons 
                             name={item.status === 'active' ? 'lock-closed-outline' : 'lock-open-outline'} 
@@ -830,9 +827,7 @@ export default function SettingsScreen() {
                         </TouchableOpacity>
 
                         <TouchableOpacity
-                          style={[styles.miniBtn, { backgroundColor: colors.background, borderColor: colors.border }]}
                           onPress={() => handleDeleteUser(item)}
-                          title="Xóa tài khoản"
                           disabled={item.id === user?.id || item.id === 1}
                           style={[
                             styles.miniBtn, 
@@ -886,12 +881,11 @@ export default function SettingsScreen() {
 
               <Text style={styles.label}>Địa chỉ Email *</Text>
               <TextInput
-                style={[styles.input, { borderColor: colors.border, color: colors.text }]}
                 keyboardType="email-address"
                 autoCapitalize="none"
                 value={editEmail}
                 onChangeText={setEditEmail}
-                disabled={editingUser?.id === 1} // Không cho đổi email Super Admin
+                editable={editingUser?.id !== 1} // Không cho đổi email Super Admin
                 style={[
                   styles.input, 
                   { 
@@ -906,12 +900,6 @@ export default function SettingsScreen() {
               <Text style={styles.label}>Quyền tài khoản</Text>
               <View style={styles.roleSelector}>
                 <TouchableOpacity
-                  style={[
-                    styles.roleOption,
-                    editRole === 'user'
-                      ? { backgroundColor: colors.tint, borderColor: colors.tint }
-                      : { borderColor: colors.border }
-                  ]}
                   onPress={() => {
                     if (editingUser?.id === 1) return;
                     setEditRole('user');
@@ -958,12 +946,6 @@ export default function SettingsScreen() {
                   </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[
-                    styles.roleOption,
-                    editStatus === 'inactive'
-                      ? { backgroundColor: colors.danger, borderColor: colors.danger }
-                      : { borderColor: colors.border }
-                  ]}
                   onPress={() => {
                     if (editingUser?.id === 1 || editingUser?.id === user?.id) {
                       Alert.alert('Lỗi', 'Không thể tự khóa tài khoản của mình hoặc Super Admin!');

@@ -18,6 +18,8 @@ import {
   UIManager,
   AppState,
   AppStateStatus,
+  Clipboard,
+  ScrollView,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -27,26 +29,12 @@ import { API_BASE_URL } from '@/constants/Config';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUser } from '../../context/UserContext';
 import { useSocket } from '../../context/SocketContext';
-import { MessageItem } from '../../components/MessageItem';
-import * as ImagePicker from 'expo-image-picker';
+import { MessageItem, Message } from '../../components/MessageItem';
 import { EmojiPanel } from '../../components/EmojiPanel';
 import { ScreenshotPreviewModal } from '../../components/ScreenshotPreviewModal';
-import { useConversationStore } from '../../store/useConversationStore';
+import { useConversationStore, ChatThread } from '../../store/useConversationStore';
 import { GroupInfoModal } from '../../components/GroupInfoModal';
 import { useIsFocused } from '@react-navigation/native';
-
-interface Message {
-  id: number;
-  conversation_id: number;
-  sender_id: number;
-  sender_name: string;
-  sender_avatar: string | null;
-  message: string;
-  type: 'text' | 'image' | 'file';
-  file_url: string | null;
-  created_at: string;
-  raw_time?: string;
-}
 
 export default function ChatRoomScreen() {
   const { id } = useLocalSearchParams();
@@ -75,14 +63,14 @@ export default function ChatRoomScreen() {
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
 
-  // Nhập tin nhắn & Typing
+  // Input & Typing
   const [inputMessage, setInputMessage] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [otherUserTyping, setOtherUserTyping] = useState<string | null>(null);
   const [uploadingMedia, setUploadingMedia] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
 
-  // Xem ảnh phóng to
+  // Image viewer
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [imageModalVisible, setImageModalVisible] = useState(false);
 
@@ -93,15 +81,44 @@ export default function ChatRoomScreen() {
   // Screenshot share
   const [screenshotModalVisible, setScreenshotModalVisible] = useState(false);
   const [capturedImagePath, setCapturedImagePath] = useState<string | null>(null);
-  const [infoModalVisible, setInfoModalVisible] = useState(false);
+  const [infoModalVisible, setInfoModalVisible] = useState(false); // Group details modal
 
   // Mentions (@tag)
   const [showTagList, setShowTagList] = useState(false);
   const [tagSearchQuery, setTagSearchQuery] = useState('');
 
+  // --- NEW ADVANCED CHAT ACTIONS STATES ---
+  // Highlight flash
+  const [highlightedMessageId, setHighlightedMessageId] = useState<number | null>(null);
+
+  // Pinned Banner
+  const [pinnedMessages, setPinnedMessages] = useState<any[]>([]);
+
+  // Replying/Edit
+  const [replyingToMessage, setReplyingToMessage] = useState<Message | null>(null);
+  const [editingMessage, setEditingMessage] = useState<Message | null>(null);
+
+  // Long press bottom sheet action menu
+  const [actionMenuVisible, setActionMenuVisible] = useState(false);
+  const [selectedMenuMessage, setSelectedMenuMessage] = useState<Message | null>(null);
+  const [menuPosition, setMenuPosition] = useState<{ x: number, y: number } | null>(null);
+  const [headerMenuPosition, setHeaderMenuPosition] = useState<{ x: number, y: number } | null>(null);
+
+  // Forward Modal
+  const [forwardModalVisible, setForwardModalVisible] = useState(false);
+  const [selectedForwardMessage, setSelectedForwardMessage] = useState<Message | null>(null);
+  const [forwardSearchQuery, setForwardSearchQuery] = useState('');
+
+  // Message Info Modal
+  const [messageInfoVisible, setMessageInfoVisible] = useState(false);
+  const [selectedInfoMessage, setSelectedInfoMessage] = useState<Message | null>(null);
+
+  // Reactions detailed viewer modal
+  const [reactionsViewerVisible, setReactionsViewerVisible] = useState(false);
+  const [selectedReactionsMessage, setSelectedReactionsMessage] = useState<Message | null>(null);
+
   const filteredMembersForTag = useMemo(() => {
     if (!activeThread?.members) return [];
-    // Loại trừ bản thân người dùng khỏi danh sách tag để đỡ rối
     const allMembers = activeThread.members.filter(m => (m.user_id || m.id) !== currentUser.id);
     if (!tagSearchQuery.trim()) return allMembers;
     return allMembers.filter(m => 
@@ -113,7 +130,7 @@ export default function ChatRoomScreen() {
   const inputRef = useRef<TextInput>(null);
   const typingTimeoutRef = useRef<any>(null);
 
-  // Production-grade seen-message flow refs
+  // Seen flow
   const lastSeenMessageIdRef = useRef<number | null>(null);
 
   const isFocused = useIsFocused();
@@ -121,7 +138,7 @@ export default function ChatRoomScreen() {
   const [appState, setAppState] = useState(AppState.currentState);
   const appStateRef = useRef(appState);
 
-  // LayoutAnimation cho Android
+  // LayoutAnimation Android
   useEffect(() => {
     if (Platform.OS === 'android') {
       UIManager.setLayoutAnimationEnabledExperimental?.(true);
@@ -144,7 +161,7 @@ export default function ChatRoomScreen() {
     return () => subscription.remove();
   }, []);
 
-  // Keyboard listener để ẩn emoji panel khi bàn phím mở
+  // Keyboard listener to hide emoji panel
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const showSub = Keyboard.addListener(showEvent, () => {
@@ -157,7 +174,7 @@ export default function ChatRoomScreen() {
     return () => showSub.remove();
   }, [showEmojiPanel]);
 
-  // Tự động cuộn xuống cuối (tức offset = 0 trong FlatList inverted) khi bàn phím mở
+  // Auto scroll FlatList on keyboard open
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const showSub = Keyboard.addListener(showEvent, () => {
@@ -170,7 +187,7 @@ export default function ChatRoomScreen() {
     return () => showSub.remove();
   }, []);
 
-  // Hook tự động tải lại danh sách hội thoại nếu chưa có trong Zustand store
+  // Auto fetch conversations from store
   useEffect(() => {
     if (!activeThread && conversationId && currentUser.id) {
       const fetchThreadInfo = async () => {
@@ -188,63 +205,111 @@ export default function ChatRoomScreen() {
     }
   }, [activeThread, conversationId, currentUser.id]);
 
-  // Khởi tạo và đăng ký sự kiện Socket.IO dùng chung
-  useEffect(() => {
-    if (!socket) {
-      console.log('🔌 [CHAT_ROOM:SOCKET] Không tìm thấy socket client (socket: null).');
-      return;
+  // Load Pinned Messages
+  const fetchPinnedMessages = async () => {
+    if (!conversationId) return;
+    try {
+      const response = await fetch(`${API_BASE_URL}/messages/conversations/${conversationId}/pinned`);
+      const result = await response.json();
+      if (response.ok && result.status === 'success') {
+        setPinnedMessages(result.data);
+      }
+    } catch (error) {
+      console.error("Lỗi tải tin nhắn ghim:", error);
     }
-    if (!conversationId) {
-      console.log('🔌 [CHAT_ROOM:SOCKET] Không tìm thấy conversationId.');
-      return;
-    }
+  };
 
-    console.log(`🔌 [CHAT_ROOM:MOUNT] Đã đăng ký Socket trong phòng chat! socket.id: ${socket.id}, conversationId: ${conversationId}`);
-    console.log(`🔌 [CHAT_ROOM:EMIT] Emitting join_room: room_${conversationId} for user ${currentUser.id}`);
+  useEffect(() => {
+    if (conversationId) {
+      fetchPinnedMessages();
+    }
+  }, [conversationId]);
+
+  // Setup Socket Events
+  useEffect(() => {
+    if (!socket || !conversationId) return;
+
+    console.log(`🔌 [CHAT_ROOM:MOUNT] Registering socket events. conversationId: ${conversationId}`);
     
     const joinRoomPayload = {
       conversation_id: parseInt(conversationId),
       user_id: currentUser.id
     };
-
-    console.log(`🔌 [CHAT_ROOM:EMIT] Emitting join_room: room_${conversationId} for user ${currentUser.id}`);
     socket.emit('join_room', joinRoomPayload);
 
-    // Tự động re-join phòng chat khi socket kết nối lại thành công
     const handleSocketReconnect = () => {
-      console.log(`🔌 [CHAT_ROOM:RECONNECT] Socket kết nối lại thành công. Re-emitting join_room: room_${conversationId}`);
       socket.emit('join_room', joinRoomPayload);
     };
     socket.on('connect', handleSocketReconnect);
 
-    // Nhận tin nhắn realtime
+    // --- SOCKET.IO EVENTS TỰ ĐỘNG ĐỒNG BỘ REALTIME ---
+    
+    // 1. Nhận tin nhắn mới
     const handleReceiveMessage = (msg: Message) => {
-      console.log('🔊 [CHAT_ROOM:RECEIVE_SOCKET_EVENT] Nhận sự kiện receive_message trên socket!');
-      console.log(`🔊 [CHAT_ROOM:RECEIVE_SOCKET_EVENT] Đang xem phòng: ${conversationId}, Tin nhắn thuộc phòng: ${msg.conversation_id}, socket.id hiện tại: ${socket.id}`);
-      console.log('[CHAT_ROOM:RECEIVE_SOCKET_EVENT] payload:', msg);
+      if (String(msg.conversation_id) !== conversationId) return;
 
-      if (String(msg.conversation_id) !== conversationId) {
-        console.log(`[CHAT_ROOM:RECEIVE_SOCKET_EVENT] Message conversation_id ${msg.conversation_id} không khớp với phòng active ${conversationId}. Bỏ qua.`);
-        return;
-      }
-
-      console.log('📨 [CHAT_ROOM] Hợp lệ! Đang thêm tin nhắn realtime vào state local:', msg);
-      
       setMessages((prev) => {
-        if (prev.some(m => m.id === msg.id)) {
-          console.log(`[CHAT_ROOM] Tin nhắn ID ${msg.id} đã tồn tại trong local state. Bỏ qua duplicate.`);
-          return prev;
-        }
+        if (prev.some(m => m.id === msg.id)) return prev;
         return [msg, ...prev];
       });
 
-      // Tự động cuộn xuống
       setTimeout(() => {
         flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
       }, 100);
     };
 
-    // Chỉ báo đang gõ
+    // 2. Nhận cảm xúc (Reactions) added/removed
+    const handleReactionUpdated = (data: { message_id: number, conversation_id: number, reactions: any[] }) => {
+      if (String(data.conversation_id) !== conversationId) return;
+      setMessages((prev) => 
+        prev.map(m => m.id === data.message_id ? { ...m, reactions: data.reactions } : m)
+      );
+    };
+
+    // 3. Chỉnh sửa tin nhắn (Edit)
+    const handleMessageEdited = (data: { id: number, conversation_id: number, message: string, edited: boolean }) => {
+      if (String(data.conversation_id) !== conversationId) return;
+      setMessages((prev) => 
+        prev.map(m => m.id === data.id ? { ...m, message: data.message, edited: true } : m)
+      );
+      useConversationStore.getState().updateLastMessage(conversationId, data.id, data.message);
+    };
+
+    // 4. Thu hồi tin nhắn (Recall)
+    const handleMessageRecalled = (data: { id: number, conversation_id: number }) => {
+      if (String(data.conversation_id) !== conversationId) return;
+      setMessages((prev) => 
+        prev.map(m => m.id === data.id ? { ...m, message: "Tin nhắn đã được thu hồi", recalled: true } : m)
+      );
+      useConversationStore.getState().recallLastMessage(conversationId, data.id);
+      
+      // Đồng thời cập nhật list ghim nếu tin bị thu hồi
+      fetchPinnedMessages();
+    };
+
+    // 5. Xóa tin nhắn với tất cả (Delete For Everyone)
+    const handleMessageDeleted = (data: { id: number, conversation_id: number }) => {
+      if (String(data.conversation_id) !== conversationId) return;
+      setMessages((prev) => prev.map(m => m.id === data.id ? { ...m, deleted: true } : m));
+      useConversationStore.getState().deleteLastMessage(conversationId, data.id);
+      
+      // Cập nhật list ghim
+      fetchPinnedMessages();
+    };
+
+    // 6. Xóa chỉ mình tôi (Delete For Me)
+    const handleMessageDeletedForMe = (data: { id: number, conversation_id: number }) => {
+      if (String(data.conversation_id) !== conversationId) return;
+      setMessages((prev) => prev.map(m => m.id === data.id ? { ...m, deleted_for_me: true } : m));
+    };
+
+    // 7. Ghim / Bỏ ghim tin nhắn
+    const handleMessagePinned = (data: { conversation_id: number }) => {
+      if (String(data.conversation_id) !== conversationId) return;
+      fetchPinnedMessages();
+    };
+
+    // Typing Indicators
     const handleUserTyping = (data: { conversation_id: string, userId: number, userName: string, isTyping: boolean }) => {
       if (String(data.conversation_id) === conversationId && data.userId !== currentUser.id) {
         setOtherUserTyping(data.isTyping ? data.userName : null);
@@ -252,101 +317,71 @@ export default function ChatRoomScreen() {
     };
 
     const handleEjection = () => {
-      console.log('🚪 [CHAT_ROOM] Kicked from room, executing safe ejection');
-      // 1. leave socket room
-      socket.emit('leave_room', {
-        conversation_id: parseInt(conversationId),
-        user_id: currentUser.id
-      });
-      // 2. clear local messages state
+      socket.emit('leave_room', joinRoomPayload);
       setMessages([]);
-      // 3. remove activeThread
       useConversationStore.getState().removeConversation(conversationId);
-      
-      // Show Alert/Toast
       Alert.alert('Thông báo', 'Bạn đã bị xóa khỏi nhóm trò chuyện này.');
-      
-      // 4. redirect safely
       router.replace('/(tabs)/messages');
     };
 
     const handleMemberAdded = (data: { conversation_id: string | number, user: any }) => {
       if (String(data.conversation_id) !== conversationId) return;
-      console.log('👥 [CHAT_ROOM] Thành viên mới được thêm:', data.user);
       useConversationStore.getState().addMemberToGroup(conversationId, data.user);
     };
 
     const handleMemberRemoved = (data: { conversation_id: string | number, user_id: number }) => {
       if (String(data.conversation_id) !== conversationId) return;
-      console.log('👥 [CHAT_ROOM] Thành viên bị xóa:', data.user_id);
-      
       if (data.user_id === currentUser.id) {
         handleEjection();
         return;
       }
-      
       useConversationStore.getState().removeMemberFromGroup(conversationId, data.user_id);
     };
 
     const handleGroupUpdated = (data: { conversation_id: string | number, name: string }) => {
       if (String(data.conversation_id) !== conversationId) return;
-      console.log('👥 [CHAT_ROOM] Tên nhóm được cập nhật:', data.name);
       useConversationStore.getState().updateGroupName(conversationId, data.name);
     };
 
-    const handleCreatorTransferred = (data: { conversation_id: string | number, created_by: string | number }) => {
-      if (String(data.conversation_id) !== conversationId) return;
-      console.log('👥 [CHAT_ROOM] Trưởng nhóm được chuyển nhượng:', data.created_by);
-      useConversationStore.getState().transferCreator(conversationId, data.created_by);
-    };
-
-    const handleGroupKicked = (data: { conversation_id: string | number, message: string }) => {
-      if (String(data.conversation_id) !== conversationId) return;
-      console.log('👥 [CHAT_ROOM] Nhóm bị kick:', data);
-      handleEjection();
-    };
-
     socket.on('receive_message', handleReceiveMessage);
+    socket.on('reaction_added', handleReactionUpdated);
+    socket.on('reaction_removed', handleReactionUpdated);
+    socket.on('message_edited', handleMessageEdited);
+    socket.on('message_recalled', handleMessageRecalled);
+    socket.on('message_deleted', handleMessageDeleted);
+    socket.on('message_deleted_for_me', handleMessageDeletedForMe);
+    socket.on('message_pinned', handleMessagePinned);
+    socket.on('message_unpinned', handleMessagePinned);
     socket.on('user_typing', handleUserTyping);
     socket.on('member_added', handleMemberAdded);
     socket.on('member_removed', handleMemberRemoved);
     socket.on('group_updated', handleGroupUpdated);
-    socket.on('creator_transferred', handleCreatorTransferred);
-    socket.on('group_kicked', handleGroupKicked);
-
-    // Electron Quick Screenshot
-    const electronInstance = (window as any).electronAPI;
-    if (electronInstance && typeof electronInstance.onScreenshotCaptured === 'function') {
-      electronInstance.onScreenshotCaptured((filePath: string) => {
-        console.log('📸 Nhận screenshot từ Electron:', filePath);
-        setCapturedImagePath(filePath);
-        setScreenshotModalVisible(true);
-      });
-    }
 
     return () => {
-      console.log(`🔌 [CHAT_ROOM:UNMOUNT] Unregistered socket listener for room: room_${conversationId}, socket.id: ${socket.id}`);
-      socket.emit('leave_room', {
-        conversation_id: parseInt(conversationId),
-        user_id: currentUser.id
-      });
+      socket.emit('leave_room', joinRoomPayload);
       socket.off('connect', handleSocketReconnect);
       socket.off('receive_message', handleReceiveMessage);
+      socket.off('reaction_added', handleReactionUpdated);
+      socket.off('reaction_removed', handleReactionUpdated);
+      socket.off('message_edited', handleMessageEdited);
+      socket.off('message_recalled', handleMessageRecalled);
+      socket.off('message_deleted', handleMessageDeleted);
+      socket.off('message_deleted_for_me', handleMessageDeletedForMe);
+      socket.off('message_pinned', handleMessagePinned);
+      socket.off('message_unpinned', handleMessagePinned);
       socket.off('user_typing', handleUserTyping);
       socket.off('member_added', handleMemberAdded);
       socket.off('member_removed', handleMemberRemoved);
       socket.off('group_updated', handleGroupUpdated);
-      socket.off('creator_transferred', handleCreatorTransferred);
-      socket.off('group_kicked', handleGroupKicked);
     };
   }, [socket, conversationId, currentUser.id]);
 
-  // Tải tin nhắn phân trang
+  // Load Messages History
   const fetchMessages = async (convId: string, pageNum: number, append = false) => {
     if (loadingMessages) return;
     setLoadingMessages(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/messages?conversation_id=${convId}&page=${pageNum}&limit=30`);
+      const response = await fetch(`${API_BASE_URL}/messages?conversation_id=${convId}&user_id=${currentUser.id}&page=${pageNum}&limit=30`);
       const result = await response.json();
       
       if (response.ok && result.status === 'success') {
@@ -367,46 +402,37 @@ export default function ChatRoomScreen() {
 
   useEffect(() => {
     if (conversationId) {
-      console.log(`📌 [CHAT_ROOM:ACTIVE] Thiết lập activeConversationId: ${conversationId}`);
       useConversationStore.getState().setActiveConversationId(conversationId);
-      
       setPage(1);
       setHasMoreMessages(true);
       setMessages([]);
       setOtherUserTyping(null);
       setShowAttachMenu(false);
       setShowEmojiPanel(false);
-      // Đặt lại ref tin nhắn đã xem cuối cùng khi đổi phòng chat
+      setReplyingToMessage(null);
+      setEditingMessage(null);
       lastSeenMessageIdRef.current = null;
       fetchMessages(conversationId, 1);
     }
-
     return () => {
-      console.log(`📌 [CHAT_ROOM:ACTIVE] Giải phóng activeConversationId (set null)`);
       useConversationStore.getState().setActiveConversationId(null);
     };
   }, [conversationId]);
 
-  // Xác định ID tin nhắn mới nhất để tối ưu dependencies cho useEffect seen flow
   const newestMessageId = useMemo(() => {
     return messages[0]?.id || activeThread?.lastMessageId || null;
   }, [messages[0]?.id, activeThread?.lastMessageId]);
 
-  // Hook tự động mark seen khi xem tin nhắn (đảm bảo không lặp, không spam)
+  // Automatic mark as seen
   useEffect(() => {
     if (!isFocused || appState !== 'active' || !conversationId || !newestMessageId) return;
 
     const targetMsgId = messages[0]?.id || activeThread?.lastMessageId;
     const targetSenderId = messages[0]?.sender_id || activeThread?.lastMessageSenderId;
 
-    if (!targetMsgId) return;
-    if (targetSenderId === currentUser.id) return;
-    
-    // Nếu tin nhắn này đã được đánh dấu đã xem trước đó thì bỏ qua để chặn vòng lặp vô hạn
+    if (!targetMsgId || targetSenderId === currentUser.id) return;
     if (lastSeenMessageIdRef.current === targetMsgId) return;
 
-    console.log(`[CLIENT:SEEN_MESSAGE_EMIT] Emitting seen_message for conversation ${conversationId}, message ${targetMsgId}`);
-    
     if (socket) {
       socket.emit('seen_message', {
         conversation_id: parseInt(conversationId),
@@ -415,12 +441,42 @@ export default function ChatRoomScreen() {
       });
       useConversationStore.getState().markAsSeen(conversationId, targetMsgId);
     }
-
     lastSeenMessageIdRef.current = targetMsgId;
   }, [newestMessageId, isFocused, appState, socket, currentUser.id, conversationId, activeThread?.lastMessageSenderId]);
 
   const handleBack = () => {
     router.back();
+  };
+
+  const handleConfirmDeleteCurrentConversation = () => {
+    Alert.alert(
+      'Xóa cuộc trò chuyện',
+      'Bạn có chắc muốn xóa cuộc trò chuyện này khỏi hộp thư của mình không?',
+      [
+        { text: 'Hủy', style: 'cancel' },
+        {
+          text: 'Xóa',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const response = await fetch(`${API_BASE_URL}/conversations/${conversationId}?user_id=${currentUser.id}`, {
+                method: 'DELETE'
+              });
+              const result = await response.json();
+              if (response.ok && (result.success || result.status === 'success')) {
+                useConversationStore.getState().deleteConversation(conversationId);
+                router.replace('/(tabs)/messages');
+              } else {
+                Alert.alert('Thất bại', result.message || 'Không thể xóa cuộc trò chuyện.');
+              }
+            } catch (error) {
+              console.error("Lỗi khi xóa cuộc trò chuyện:", error);
+              Alert.alert('Lỗi kết nối', 'Không thể kết nối đến máy chủ.');
+            }
+          }
+        }
+      ]
+    );
   };
 
   const handleLoadMoreMessages = () => {
@@ -429,17 +485,30 @@ export default function ChatRoomScreen() {
     }
   };
 
+  // --- ACTIONS LOGIC (POST / EDIT / DELETE / RECALL / PIN / FORWARD) ---
+
   const handleSendMessage = () => {
     if (!inputMessage.trim() || !conversationId) return;
 
+    if (editingMessage) {
+      // Đang ở chế độ chỉnh sửa (Edit Message)
+      handleEditMessageSubmit();
+      return;
+    }
+
     if (socket) {
-      socket.emit('send_message', {
+      const payload: any = {
         conversation_id: parseInt(conversationId),
         sender_id: currentUser.id,
         message: inputMessage.trim(),
         type: 'text'
-      });
+      };
 
+      if (replyingToMessage) {
+        payload.reply_to = replyingToMessage.id;
+      }
+
+      socket.emit('send_message', payload);
       socket.emit('stop_typing', {
         conversation_id: parseInt(conversationId),
         user_id: currentUser.id
@@ -447,15 +516,292 @@ export default function ChatRoomScreen() {
     }
 
     setInputMessage('');
+    setReplyingToMessage(null);
     setIsTyping(false);
     setShowAttachMenu(false);
-
     inputRef.current?.focus();
 
     setTimeout(() => {
       flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
     }, 100);
   };
+
+  // Double Tap Thả Tim nhanh
+  const handleDoubleTapMessage = async (message: Message) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/messages/${message.id}/reaction`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: currentUser.id,
+          reaction: '❤️'
+        })
+      });
+      const result = await response.json();
+      if (response.ok && result.status === 'success') {
+        // Cập nhật local state optimistic
+        setMessages(prev => prev.map(m => m.id === message.id ? { ...m, reactions: result.data.reactions } : m));
+      }
+    } catch (error) {
+      console.error("Lỗi thả tim nhanh:", error);
+    }
+  };
+
+  // Thả cảm xúc từ Action Menu
+  const handleAddReaction = async (message: Message, reactionSymbol: string) => {
+    setActionMenuVisible(false);
+    try {
+      const response = await fetch(`${API_BASE_URL}/messages/${message.id}/reaction`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: currentUser.id,
+          reaction: reactionSymbol
+        })
+      });
+      const result = await response.json();
+      if (response.ok && result.status === 'success') {
+        setMessages(prev => prev.map(m => m.id === message.id ? { ...m, reactions: result.data.reactions } : m));
+      }
+    } catch (error) {
+      console.error("Lỗi thả cảm xúc:", error);
+    }
+  };
+
+  // Kích hoạt Reply Quote
+  const handleTriggerReply = (message: Message) => {
+    setActionMenuVisible(false);
+    setEditingMessage(null);
+    setReplyingToMessage(message);
+    inputRef.current?.focus();
+  };
+
+  // Kích hoạt Chỉnh sửa tin nhắn (Edit Mode)
+  const handleTriggerEdit = (message: Message) => {
+    setActionMenuVisible(false);
+    setReplyingToMessage(null);
+    setEditingMessage(message);
+    setInputMessage(message.message);
+    inputRef.current?.focus();
+  };
+
+  const handleEditMessageSubmit = async () => {
+    if (!editingMessage || !inputMessage.trim()) return;
+    const msgId = editingMessage.id;
+    const newText = inputMessage.trim();
+
+    // Reset input immediately (optimistic UI flow)
+    setInputMessage('');
+    setEditingMessage(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/messages/${msgId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: currentUser.id,
+          message: newText
+        })
+      });
+      const result = await response.json();
+      if (!response.ok || result.status !== 'success') {
+        Alert.alert("Lỗi", result.message || "Không thể chỉnh sửa tin nhắn.");
+        // Rollback on fail
+        fetchMessages(conversationId, 1);
+      }
+    } catch (error) {
+      console.error("Lỗi chỉnh sửa tin nhắn:", error);
+      Alert.alert("Lỗi kết nối", "Không thể chỉnh sửa tin nhắn.");
+      fetchMessages(conversationId, 1);
+    }
+  };
+
+  // Sao chép tin nhắn
+  const handleCopyMessage = (message: Message) => {
+    setActionMenuVisible(false);
+    Clipboard.setString(message.message);
+    Alert.alert("Thông báo", "Đã sao chép tin nhắn vào bộ nhớ tạm.");
+  };
+
+  // Ghim tin nhắn
+  const handlePinMessage = async (message: Message) => {
+    setActionMenuVisible(false);
+    try {
+      const response = await fetch(`${API_BASE_URL}/messages/${message.id}/pin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: currentUser.id,
+          conversation_id: parseInt(conversationId)
+        })
+      });
+      const result = await response.json();
+      if (response.ok && result.status === 'success') {
+        fetchPinnedMessages();
+        Alert.alert("Thông báo", "Đã ghim tin nhắn này.");
+      } else {
+        Alert.alert("Thất bại", result.message || "Không thể ghim tin nhắn.");
+      }
+    } catch (error) {
+      console.error("Lỗi ghim tin nhắn:", error);
+    }
+  };
+
+  const handleUnpinMessage = async (messageId: number) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/messages/${messageId}/pin?conversation_id=${conversationId}`, {
+        method: 'DELETE'
+      });
+      const result = await response.json();
+      if (response.ok && result.status === 'success') {
+        fetchPinnedMessages();
+        Alert.alert("Thông báo", "Đã bỏ ghim tin nhắn.");
+      }
+    } catch (error) {
+      console.error("Lỗi bỏ ghim:", error);
+    }
+  };
+
+  // Thu hồi tin nhắn (Recall)
+  const handleRecallMessage = async (message: Message) => {
+    setActionMenuVisible(false);
+    try {
+      const response = await fetch(`${API_BASE_URL}/messages/${message.id}/recall`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: currentUser.id })
+      });
+      const result = await response.json();
+      if (response.ok && result.status === 'success') {
+        setMessages(prev => 
+          prev.map(m => m.id === message.id ? { ...m, message: "Tin nhắn đã được thu hồi", recalled: true } : m)
+        );
+        useConversationStore.getState().recallLastMessage(conversationId, message.id);
+        fetchPinnedMessages();
+      }
+    } catch (error) {
+      console.error("Lỗi thu hồi tin nhắn:", error);
+    }
+  };
+
+  // Xóa với tất cả (Delete For Everyone)
+  const handleDeleteForEveryone = async (message: Message) => {
+    setActionMenuVisible(false);
+    // Mark as deleted for everyone locally
+    setMessages(prev => prev.map(m => m.id === message.id ? { ...m, deleted: true } : m));
+    
+    try {
+      const response = await fetch(`${API_BASE_URL}/messages/${message.id}/everyone`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: currentUser.id })
+      });
+      const result = await response.json();
+      if (response.ok && result.status === 'success') {
+        useConversationStore.getState().deleteLastMessage(conversationId, message.id);
+        fetchPinnedMessages();
+      } else {
+        // Rollback on fail
+        fetchMessages(conversationId, 1);
+      }
+    } catch (error) {
+      console.error("Lỗi xóa với tất cả:", error);
+      fetchMessages(conversationId, 1);
+    }
+  };
+
+  // Xóa chỉ mình tôi (Delete For Me)
+  const handleDeleteForMe = async (message: Message) => {
+    setActionMenuVisible(false);
+    // Mark as deleted for me locally
+    setMessages(prev => prev.map(m => m.id === message.id ? { ...m, deleted_for_me: true } : m));
+    
+    try {
+      const response = await fetch(`${API_BASE_URL}/messages/${message.id}/me`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: currentUser.id })
+      });
+      const result = await response.json();
+      if (!response.ok || result.status !== 'success') {
+        // Rollback on fail
+        fetchMessages(conversationId, 1);
+      }
+    } catch (error) {
+      console.error("Lỗi xóa chỉ mình tôi:", error);
+      fetchMessages(conversationId, 1);
+    }
+  };
+
+  // Quote scroll to index & flash highlight
+  const handlePressQuote = (parentId: number) => {
+    const idx = messages.findIndex(m => m.id === parentId);
+    if (idx !== -1) {
+      flatListRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
+      setHighlightedMessageId(parentId);
+      setTimeout(() => setHighlightedMessageId(null), 2000);
+    } else {
+      Alert.alert("Thông báo", "Tin nhắn gốc nằm quá xa hoặc đã quá cũ.");
+    }
+  };
+
+  // Chia sẻ / Chuyển tiếp (Forward)
+  const handleTriggerForward = (message: Message) => {
+    setActionMenuVisible(false);
+    setSelectedForwardMessage(message);
+    setForwardModalVisible(true);
+    setForwardSearchQuery('');
+  };
+
+  const handleForwardMessageTo = async (thread: ChatThread) => {
+    if (!selectedForwardMessage) return;
+    setForwardModalVisible(false);
+    
+    const textToForward = selectedForwardMessage.message;
+    const mediaType = selectedForwardMessage.type;
+    const mediaUrl = selectedForwardMessage.file_url;
+
+    try {
+      // Gửi qua HTTP API hoặc socket
+      if (socket) {
+        socket.emit('send_message', {
+          conversation_id: parseInt(thread.id),
+          sender_id: currentUser.id,
+          message: textToForward,
+          type: mediaType,
+          file_url: mediaUrl,
+          forwarded: true // gắn cờ đã chuyển tiếp
+        });
+        
+        Alert.alert("Thành công", `Đã chuyển tiếp tin nhắn tới ${thread.name}`);
+      }
+    } catch (error) {
+      console.error("Lỗi chuyển tiếp tin nhắn:", error);
+    }
+  };
+
+  // Lọc luồng chat cho Forward modal
+  const filteredThreadsForForward = useMemo(() => {
+    if (!forwardSearchQuery.trim()) return conversations;
+    return conversations.filter(c => 
+      c.name.toLowerCase().includes(forwardSearchQuery.toLowerCase())
+    );
+  }, [conversations, forwardSearchQuery]);
+
+  // Xem Thông tin chi tiết tin nhắn
+  const handleTriggerInfo = (message: Message) => {
+    setActionMenuVisible(false);
+    setSelectedInfoMessage(message);
+    setMessageInfoVisible(true);
+  };
+
+  // Xem chi tiết Reactions list
+  const handlePressReactions = (message: Message) => {
+    setSelectedReactionsMessage(message);
+    setReactionsViewerVisible(true);
+  };
+
+  // --- HẾT PHẦN LOGIC NÂNG CAO ---
 
   const handleTriggerScreenshot = (excludeSelf: boolean = true) => {
     const electronInstance = (window as any).electronAPI;
@@ -501,10 +847,6 @@ export default function ChatRoomScreen() {
             file_url: fileUrl
           });
         }
-        
-        setTimeout(() => {
-          flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
-        }, 150);
       } else {
         Alert.alert("Lỗi tải lên", result.message || "Không thể tải ảnh chụp lên.");
       }
@@ -522,6 +864,7 @@ export default function ChatRoomScreen() {
   }, []);
 
   const handlePickMedia = async (mediaType: 'image' | 'video') => {
+    const ImagePicker = require('expo-image-picker');
     const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
     
     if (permissionResult.granted === false) {
@@ -596,10 +939,6 @@ export default function ChatRoomScreen() {
             file_url: fileUrl
           });
         }
-        
-        setTimeout(() => {
-          flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
-        }, 150);
       } else {
         Alert.alert("Lỗi tải lên", uploadResult.message || "Không thể tải tệp lên.");
       }
@@ -614,7 +953,7 @@ export default function ChatRoomScreen() {
   const handleSelectMemberTag = (memberName: string) => {
     setInputMessage(prev => {
       const words = prev.split(/\s/);
-      words.pop(); // Xóa cụm @... đang gõ dở
+      words.pop();
       const base = words.join(' ');
       const space = base ? ' ' : '';
       return `${base}${space}@${memberName} `;
@@ -626,7 +965,6 @@ export default function ChatRoomScreen() {
   const handleTextChange = (text: string) => {
     setInputMessage(text);
 
-    // Phát hiện gõ ký tự '@' để mở danh sách tag thành viên
     const lastWord = text.split(/\s/).pop() || '';
     if (lastWord.startsWith('@')) {
       setTagSearchQuery(lastWord.slice(1));
@@ -680,12 +1018,21 @@ export default function ChatRoomScreen() {
     }
   }, [showEmojiPanel]);
 
+  const handleOpenActionMenu = (msg: Message, event?: any) => {
+    setSelectedMenuMessage(msg);
+    setActionMenuVisible(true);
+    if (Platform.OS === 'web' && event && event.currentTarget) {
+      const rect = event.currentTarget.getBoundingClientRect();
+      setMenuPosition({ x: rect.left, y: rect.bottom });
+    }
+  };
+
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.background }]} edges={['top', 'left', 'right']}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={0}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
       >
         <View style={styles.container}>
           {/* Chat Header */}
@@ -703,18 +1050,66 @@ export default function ChatRoomScreen() {
               </Text>
             </View>
 
-            {activeThread?.type === 'group' && (
-              <TouchableOpacity style={styles.menuBtn} onPress={() => setInfoModalVisible(true)}>
-                <Ionicons name="menu" size={26} color={colors.text} />
+            {activeThread && (
+              <TouchableOpacity 
+                style={styles.menuBtn} 
+                onPress={(event) => {
+                  if (activeThread.type === 'group') {
+                    if (Platform.OS === 'web' && event && event.currentTarget) {
+                      const rect = (event.currentTarget as any).getBoundingClientRect();
+                      setHeaderMenuPosition({ x: rect.left, y: rect.bottom });
+                    }
+                    setInfoModalVisible(true);
+                  } else {
+                    handleConfirmDeleteCurrentConversation();
+                  }
+                }}
+              >
+                <Ionicons 
+                  name={activeThread.type === 'group' ? "menu" : "trash-outline"} 
+                  size={activeThread.type === 'group' ? 26 : 22} 
+                  color={colors.text} 
+                />
               </TouchableOpacity>
             )}
           </View>
+
+          {/* Banner ghim tin nhắn (Pinned Messages Banner) */}
+          {pinnedMessages.length > 0 && (
+            <View style={[styles.pinnedBanner, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+              <View style={styles.pinnedBannerInfo}>
+                <Ionicons name="pin" size={16} color={colors.tint} style={{ marginRight: 8 }} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.pinnedBannerTitle, { color: colors.text }]} numberOfLines={1}>
+                    Tin nhắn đã ghim ({pinnedMessages.length})
+                  </Text>
+                  <Text style={[styles.pinnedBannerContent, { color: colors.textSecondary }]} numberOfLines={1}>
+                    {pinnedMessages[0].pinned_by_name}: {pinnedMessages[0].message}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.pinnedBannerActions}>
+                <TouchableOpacity 
+                  onPress={() => handlePressQuote(pinnedMessages[0].message_id)} 
+                  style={styles.pinnedBannerBtn}
+                >
+                  <Text style={[styles.pinnedBannerBtnText, { color: colors.tint }]}>Đi tới</Text>
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  onPress={() => handleUnpinMessage(pinnedMessages[0].message_id)} 
+                  style={{ padding: 4 }}
+                >
+                  <Ionicons name="close-circle" size={18} color={colors.textSecondary} />
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
 
           {/* Messages flatlist */}
           <FlatList
             ref={flatListRef}
             data={messages}
-            extraData={messages}
+            extraData={[messages, highlightedMessageId]}
             keyExtractor={(item) => item.id.toString()}
             style={{ flex: 1 }}
             contentContainerStyle={styles.messageStream}
@@ -739,7 +1134,13 @@ export default function ChatRoomScreen() {
                 isMine={item.sender_id === currentUser.id}
                 colors={colors}
                 onPressImage={handlePressImage}
+                onLongPress={(msg, event) => handleOpenActionMenu(msg, event)}
+                onDoubleTap={handleDoubleTapMessage}
+                onPressQuote={handlePressQuote}
+                onPressReactions={handlePressReactions}
                 currentUserName={currentUser.name}
+                isHighlighted={item.id === highlightedMessageId}
+                onRecallPress={handleRecallMessage}
               />
             )}
           />
@@ -810,6 +1211,52 @@ export default function ChatRoomScreen() {
             </View>
           )}
 
+          {/* Reply Quote Preview Bar */}
+          {replyingToMessage && (
+            <View style={[styles.replyPreviewBar, { backgroundColor: colors.card, borderTopColor: colors.border, borderTopWidth: 1 }]}>
+              <View style={[styles.replyIndicator, { backgroundColor: colors.tint }]} />
+              <View style={{ flex: 1, paddingLeft: 8 }}>
+                <Text style={[styles.replySenderText, { color: colors.tint }]}>
+                  Đang trả lời {replyingToMessage.sender_name}
+                </Text>
+                <Text style={[styles.replyMessageText, { color: colors.textSecondary }]} numberOfLines={1}>
+                  {replyingToMessage.type === 'image' 
+                    ? "📷 [Hình ảnh]" 
+                    : replyingToMessage.type === 'file' 
+                      ? "📁 [Video]" 
+                      : replyingToMessage.message}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setReplyingToMessage(null)} style={{ padding: 6 }}>
+                <Ionicons name="close-circle" size={20} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Edit Message Indicator Bar */}
+          {editingMessage && (
+            <View style={[styles.replyPreviewBar, { backgroundColor: colors.card, borderTopColor: colors.border, borderTopWidth: 1 }]}>
+              <View style={[styles.replyIndicator, { backgroundColor: '#f59e0b' }]} />
+              <View style={{ flex: 1, paddingLeft: 8 }}>
+                <Text style={[styles.replySenderText, { color: '#f59e0b' }]}>
+                  Đang chỉnh sửa tin nhắn
+                </Text>
+                <Text style={[styles.replyMessageText, { color: colors.textSecondary }]} numberOfLines={1}>
+                  {editingMessage.message}
+                </Text>
+              </View>
+              <TouchableOpacity 
+                onPress={() => {
+                  setEditingMessage(null);
+                  setInputMessage('');
+                }} 
+                style={{ padding: 6 }}
+              >
+                <Ionicons name="close-circle" size={20} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+          )}
+
           {/* Input Bar */}
           <View style={[
             styles.inputBar, 
@@ -861,12 +1308,12 @@ export default function ChatRoomScreen() {
             <TextInput
               ref={inputRef}
               style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
-              placeholder="Nhập tin nhắn..."
+              placeholder={editingMessage ? "Chỉnh sửa tin nhắn..." : "Nhập tin nhắn..."}
               placeholderTextColor="#a0aec0"
               value={inputMessage}
               onChangeText={handleTextChange}
               onSubmitEditing={handleSendMessage}
-              returnKeyType="send"
+              returnKeyType={editingMessage ? "done" : "send"}
               blurOnSubmit={false}
               onFocus={() => {
                 if (showEmojiPanel) {
@@ -876,8 +1323,8 @@ export default function ChatRoomScreen() {
               }}
             />
 
-            <TouchableOpacity style={[styles.sendBtn, { backgroundColor: colors.tint }]} onPress={handleSendMessage}>
-              <Ionicons name="send" size={18} color="#fff" />
+            <TouchableOpacity style={[styles.sendBtn, { backgroundColor: editingMessage ? '#f59e0b' : colors.tint }]} onPress={handleSendMessage}>
+              <Ionicons name={editingMessage ? "checkmark" : "send"} size={18} color="#fff" />
             </TouchableOpacity>
           </View>
 
@@ -942,7 +1389,10 @@ export default function ChatRoomScreen() {
       {/* Group Details Modal */}
       <GroupInfoModal
         visible={infoModalVisible}
-        onClose={() => setInfoModalVisible(false)}
+        onClose={() => {
+          setInfoModalVisible(false);
+          setHeaderMenuPosition(null);
+        }}
         conversationId={conversationId}
         currentUser={currentUser}
         colors={{
@@ -953,7 +1403,295 @@ export default function ChatRoomScreen() {
           border: colors.border,
           tint: colors.tint,
         }}
+        position={headerMenuPosition}
       />
+
+      {/* --- NEW PREMIUM MESSENGER INTERACTION MODALS --- */}
+
+      {/* 1. LongPress Premium Action Menu Bottom Sheet */}
+      <Modal
+        visible={actionMenuVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setActionMenuVisible(false)}
+      >
+        <TouchableOpacity 
+          style={[
+            styles.modalBackdrop,
+            Platform.OS === 'web' ? {
+              backgroundColor: 'transparent',
+              justifyContent: 'flex-start',
+            } : {}
+          ]} 
+          activeOpacity={1} 
+          onPress={() => setActionMenuVisible(false)}
+        >
+          {(Platform.OS === 'web' && menuPosition) && (
+            <TouchableOpacity 
+              style={StyleSheet.absoluteFill} 
+              activeOpacity={1} 
+              onPress={() => setActionMenuVisible(false)} 
+            />
+          )}
+          <View style={[
+            styles.bottomSheetContainer, 
+            { backgroundColor: colors.card },
+            (Platform.OS === 'web' && menuPosition) ? {
+              position: 'absolute',
+              top: Math.min((typeof window !== 'undefined' ? window.innerHeight : 800) - 300, Math.max(10, menuPosition.y - 50)),
+              left: Math.min((typeof window !== 'undefined' ? window.innerWidth : 600) - 190, Math.max(10, menuPosition.x - 170)),
+            } : {}
+          ]}>
+            {Platform.OS !== 'web' && <View style={styles.sheetHeaderIndicator} />}
+
+            {selectedMenuMessage && (
+              <>
+                {/* Reactions Floating Bar */}
+                <View style={[styles.sheetReactionsBar, { backgroundColor: colors.background, borderColor: colors.border }]}>
+                  {['👍', '❤️', '😂', '😮', '😢', '😡'].map((emoji) => (
+                    <TouchableOpacity
+                      key={emoji}
+                      style={styles.sheetReactionEmojiBtn}
+                      onPress={() => handleAddReaction(selectedMenuMessage, emoji)}
+                    >
+                      <Text style={styles.sheetReactionEmoji}>{emoji}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                {/* Vertical Interactive Menu Items */}
+                <View style={styles.sheetMenuOptions}>
+                  {/* Trả lời (Reply) */}
+                  <TouchableOpacity style={styles.sheetOptionRow} onPress={() => handleTriggerReply(selectedMenuMessage)}>
+                    <Ionicons name="arrow-undo-outline" size={Platform.OS === 'web' ? 16 : 20} color={colors.text} />
+                    <Text style={[styles.sheetOptionText, { color: colors.text }]}>Trả lời</Text>
+                  </TouchableOpacity>
+
+                  {/* Chuyển tiếp (Forward) */}
+                  <TouchableOpacity style={styles.sheetOptionRow} onPress={() => handleTriggerForward(selectedMenuMessage)}>
+                    <Ionicons name="share-social-outline" size={Platform.OS === 'web' ? 16 : 20} color={colors.text} />
+                    <Text style={[styles.sheetOptionText, { color: colors.text }]}>Chia sẻ</Text>
+                  </TouchableOpacity>
+
+                  {/* Sao chép (Copy) */}
+                  <TouchableOpacity style={styles.sheetOptionRow} onPress={() => handleCopyMessage(selectedMenuMessage)}>
+                    <Ionicons name="copy-outline" size={Platform.OS === 'web' ? 16 : 20} color={colors.text} />
+                    <Text style={[styles.sheetOptionText, { color: colors.text }]}>Copy tin nhắn</Text>
+                  </TouchableOpacity>
+
+                  {Platform.OS === 'web' && <View style={[styles.divider, { backgroundColor: colors.border }]} />}
+
+                  {/* Ghim tin nhắn (Pin) */}
+                  <TouchableOpacity style={styles.sheetOptionRow} onPress={() => handlePinMessage(selectedMenuMessage)}>
+                    <Ionicons name="pin-outline" size={Platform.OS === 'web' ? 16 : 20} color={colors.text} />
+                    <Text style={[styles.sheetOptionText, { color: colors.text }]}>Ghim tin nhắn</Text>
+                  </TouchableOpacity>
+
+                  {/* Chỉnh sửa (Edit) - Only own message */}
+                  {selectedMenuMessage.sender_id === currentUser.id && (
+                    <TouchableOpacity style={styles.sheetOptionRow} onPress={() => handleTriggerEdit(selectedMenuMessage)}>
+                      <Ionicons name="pencil-outline" size={Platform.OS === 'web' ? 16 : 20} color="#f59e0b" />
+                      <Text style={[styles.sheetOptionText, { color: '#f59e0b' }]}>Chỉnh sửa</Text>
+                    </TouchableOpacity>
+                  )}
+
+                  {/* Thu hồi (Recall) - Only own message */}
+                  {selectedMenuMessage.sender_id === currentUser.id && (
+                    <TouchableOpacity style={styles.sheetOptionRow} onPress={() => handleRecallMessage(selectedMenuMessage)}>
+                      <Ionicons name="refresh-outline" size={Platform.OS === 'web' ? 16 : 20} color={colors.tint} />
+                      <Text style={[styles.sheetOptionText, { color: colors.tint }]}>Thu hồi tin nhắn</Text>
+                    </TouchableOpacity>
+                  )}
+
+                  {Platform.OS === 'web' && <View style={[styles.divider, { backgroundColor: colors.border }]} />}
+
+                  {/* Thông tin tin nhắn (Info Modal) */}
+                  <TouchableOpacity style={styles.sheetOptionRow} onPress={() => handleTriggerInfo(selectedMenuMessage)}>
+                    <Ionicons name="information-circle-outline" size={Platform.OS === 'web' ? 16 : 20} color={colors.text} />
+                    <Text style={[styles.sheetOptionText, { color: colors.text }]}>Xem chi tiết</Text>
+                  </TouchableOpacity>
+
+                  {/* Xóa với tất cả (Delete For Everyone) - Own or Admin */}
+                  {(selectedMenuMessage.sender_id === currentUser.id || currentUser.role === 'admin') && (
+                    <TouchableOpacity style={styles.sheetOptionRow} onPress={() => handleDeleteForEveryone(selectedMenuMessage)}>
+                      <Ionicons name="trash-outline" size={Platform.OS === 'web' ? 16 : 20} color="#ef4444" />
+                      <Text style={[styles.sheetOptionText, { color: '#ef4444' }]}>Xóa với tất cả</Text>
+                    </TouchableOpacity>
+                  )}
+
+                  {/* Xóa chỉ mình tôi (Delete For Me) */}
+                  <TouchableOpacity style={styles.sheetOptionRow} onPress={() => handleDeleteForMe(selectedMenuMessage)}>
+                    <Ionicons name="eye-off-outline" size={Platform.OS === 'web' ? 16 : 20} color="#ef4444" />
+                    <Text style={[styles.sheetOptionText, { color: '#ef4444' }]}>Xóa chỉ ở phía tôi</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* 2. Forward / Share Message Modal */}
+      <Modal
+        visible={forwardModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setForwardModalVisible(false)}
+      >
+        <View style={styles.modalCenterOverlay}>
+          <View style={[styles.forwardDialog, { backgroundColor: colors.card }]}>
+            <View style={styles.forwardHeader}>
+              <Text style={[styles.forwardTitle, { color: colors.text }]}>Chuyển tiếp tin nhắn</Text>
+              <TouchableOpacity onPress={() => setForwardModalVisible(false)}>
+                <Ionicons name="close" size={24} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            <TextInput
+              style={[styles.forwardSearchInput, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+              placeholder="Tìm kiếm cuộc trò chuyện..."
+              placeholderTextColor="#a0aec0"
+              value={forwardSearchQuery}
+              onChangeText={setForwardSearchQuery}
+            />
+
+            <FlatList
+              data={filteredThreadsForForward}
+              keyExtractor={(item) => item.id}
+              style={{ maxHeight: 300 }}
+              renderItem={({ item }) => (
+                <View style={[styles.forwardRow, { borderBottomColor: colors.border }]}>
+                  <Image source={{ uri: item.avatar }} style={styles.forwardAvatar} />
+                  <View style={{ flex: 1, marginLeft: 10 }}>
+                    <Text style={[styles.forwardName, { color: colors.text }]}>{item.name}</Text>
+                    <Text style={{ fontSize: 11, color: colors.textSecondary }}>
+                      {item.type === 'group' ? 'Group Chat' : 'Direct Message'}
+                    </Text>
+                  </View>
+                  <TouchableOpacity 
+                    onPress={() => handleForwardMessageTo(item)}
+                    style={[styles.forwardSendBtn, { backgroundColor: colors.tint }]}
+                  >
+                    <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>Gửi</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            />
+          </View>
+        </View>
+      </Modal>
+
+      {/* 3. Detailed Message Information Modal */}
+      <Modal
+        visible={messageInfoVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setMessageInfoVisible(false)}
+      >
+        <View style={styles.modalCenterOverlay}>
+          <View style={[styles.infoDialog, { backgroundColor: colors.card }]}>
+            <View style={styles.forwardHeader}>
+              <Text style={[styles.forwardTitle, { color: colors.text }]}>Chi tiết tin nhắn</Text>
+              <TouchableOpacity onPress={() => setMessageInfoVisible(false)}>
+                <Ionicons name="close" size={24} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            {selectedInfoMessage && (
+              <ScrollView style={{ padding: 12 }}>
+                {/* Message preview bubble */}
+                <View style={[styles.infoMsgPreview, { backgroundColor: colors.background, borderColor: colors.border }]}>
+                  <Text style={{ fontSize: 11, color: colors.tint, fontWeight: '700', marginBottom: 4 }}>
+                    {selectedInfoMessage.sender_name}
+                  </Text>
+                  <Text style={{ fontSize: 13, color: colors.text }}>{selectedInfoMessage.message}</Text>
+                </View>
+
+                {/* Details list */}
+                <View style={styles.infoDetailsList}>
+                  <View style={styles.infoDetailRow}>
+                    <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>Thời gian gửi:</Text>
+                    <Text style={[styles.infoVal, { color: colors.text }]}>
+                      {new Date(selectedInfoMessage.raw_time || selectedInfoMessage.created_at).toLocaleString()}
+                    </Text>
+                  </View>
+
+                  <View style={styles.infoDetailRow}>
+                    <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>Đã chỉnh sửa:</Text>
+                    <Text style={[styles.infoVal, { color: selectedInfoMessage.edited ? '#f59e0b' : colors.text }]}>
+                      {selectedInfoMessage.edited ? 'Có (đã chỉnh sửa)' : 'Không'}
+                    </Text>
+                  </View>
+
+                  <View style={styles.infoDetailRow}>
+                    <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>Trạng thái thu hồi:</Text>
+                    <Text style={[styles.infoVal, { color: selectedInfoMessage.recalled ? colors.tint : colors.text }]}>
+                      {selectedInfoMessage.recalled ? 'Đã thu hồi' : 'Bình thường'}
+                    </Text>
+                  </View>
+
+                  <View style={styles.infoDetailRow}>
+                    <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>Đã chuyển tiếp:</Text>
+                    <Text style={[styles.infoVal, { color: colors.text }]}>
+                      {selectedInfoMessage.forwarded ? 'Có' : 'Không'}
+                    </Text>
+                  </View>
+
+                  <View style={{ marginTop: 12 }}>
+                    <Text style={[styles.infoSectionTitle, { color: colors.tint }]}>Cảm xúc nhận được ({selectedInfoMessage.reactions?.length || 0})</Text>
+                    {(!selectedInfoMessage.reactions || selectedInfoMessage.reactions.length === 0) ? (
+                      <Text style={{ fontStyle: 'italic', fontSize: 12, color: colors.textSecondary, marginTop: 4 }}>Chưa có ai thả cảm xúc.</Text>
+                    ) : (
+                      selectedInfoMessage.reactions.map((react, index) => (
+                        <View key={index} style={styles.infoReactRow}>
+                          <Text style={{ fontSize: 13, color: colors.text, flex: 1 }}>{react.user_name}</Text>
+                          <Text style={{ fontSize: 16 }}>{react.reaction}</Text>
+                        </View>
+                      ))
+                    )}
+                  </View>
+                </View>
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* 4. Reactions Viewer Detailed Popup */}
+      <Modal
+        visible={reactionsViewerVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setReactionsViewerVisible(false)}
+      >
+        <TouchableOpacity 
+          style={styles.modalCenterOverlay}
+          activeOpacity={1}
+          onPress={() => setReactionsViewerVisible(false)}
+        >
+          <View style={[styles.reactionsViewerDialog, { backgroundColor: colors.card }]}>
+            <View style={styles.forwardHeader}>
+              <Text style={[styles.forwardTitle, { color: colors.text }]}>Biểu cảm tin nhắn</Text>
+              <TouchableOpacity onPress={() => setReactionsViewerVisible(false)}>
+                <Ionicons name="close" size={24} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            {selectedReactionsMessage && (
+              <FlatList
+                data={selectedReactionsMessage.reactions}
+                keyExtractor={(item, index) => index.toString()}
+                renderItem={({ item }) => (
+                  <View style={styles.reactViewerRow}>
+                    <Text style={[styles.reactViewerName, { color: colors.text }]}>{item.user_name}</Text>
+                    <Text style={{ fontSize: 20 }}>{item.reaction}</Text>
+                  </View>
+                )}
+              />
+            )}
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -995,6 +1733,42 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#727785',
     marginTop: 2,
+  },
+  pinnedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    justifyContent: 'space-between',
+  },
+  pinnedBannerInfo: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  pinnedBannerTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  pinnedBannerContent: {
+    fontSize: 11,
+    marginTop: 1,
+  },
+  pinnedBannerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  pinnedBannerBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+  },
+  pinnedBannerBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
   },
   messageStream: {
     paddingHorizontal: 16,
@@ -1100,7 +1874,7 @@ const styles = StyleSheet.create({
   },
   tagListContainer: {
     position: 'absolute',
-    bottom: 65, // Phía trên Input Bar một chút
+    bottom: 65,
     left: 12,
     right: 12,
     maxHeight: 200,
@@ -1135,4 +1909,213 @@ const styles = StyleSheet.create({
     fontSize: 11,
     flex: 1,
   },
+  replyPreviewBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  replyIndicator: {
+    width: 4,
+    height: '100%',
+    borderRadius: 2,
+  },
+  replySenderText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  replyMessageText: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: Platform.OS === 'web' ? 'center' : 'flex-end',
+  },
+  bottomSheetContainer: {
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingTop: 10,
+    paddingHorizontal: 16,
+    paddingBottom: Platform.OS === 'ios' ? 36 : 24,
+    alignItems: 'center',
+    ...(Platform.OS === 'web' ? {
+      borderRadius: 10,
+      width: 170,
+      alignSelf: 'center',
+      marginBottom: 'auto',
+      marginTop: 'auto',
+      shadowOpacity: 0.15,
+      shadowRadius: 10,
+      elevation: 5,
+      paddingHorizontal: 4,
+      paddingTop: 4,
+      paddingBottom: 4,
+      alignItems: 'stretch',
+    } : {})
+  },
+  sheetHeaderIndicator: {
+    width: 40,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: '#cbd5e1',
+    marginBottom: 16,
+  },
+  sheetReactionsBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    paddingVertical: Platform.OS === 'web' ? 4 : 12,
+    paddingHorizontal: Platform.OS === 'web' ? 6 : 16,
+    borderRadius: 30,
+    borderWidth: 1,
+    marginBottom: Platform.OS === 'web' ? 4 : 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  sheetReactionEmojiBtn: {
+    padding: Platform.OS === 'web' ? 2 : 4,
+    transform: [{ scale: Platform.OS === 'web' ? 0.8 : 1.15 }],
+  },
+  sheetReactionEmoji: {
+    fontSize: Platform.OS === 'web' ? 16 : 26,
+  },
+  sheetMenuOptions: {
+    width: '100%',
+    gap: 2,
+  },
+  sheetOptionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: Platform.OS === 'web' ? 4 : 14,
+    paddingHorizontal: Platform.OS === 'web' ? 6 : 12,
+    borderRadius: Platform.OS === 'web' ? 6 : 12,
+    gap: Platform.OS === 'web' ? 8 : 14,
+  },
+  sheetOptionText: {
+    fontSize: Platform.OS === 'web' ? 11 : 14,
+    fontWeight: Platform.OS === 'web' ? '500' : '600',
+  },
+  modalCenterOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  forwardDialog: {
+    width: '100%',
+    maxWidth: 400,
+    borderRadius: 20,
+    padding: 16,
+    gap: 12,
+  },
+  forwardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  forwardTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  forwardSearchInput: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 13,
+  },
+  forwardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+  },
+  forwardAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+  },
+  forwardName: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  forwardSendBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 14,
+  },
+  infoDialog: {
+    width: '100%',
+    maxWidth: 440,
+    borderRadius: 20,
+    padding: 16,
+    maxHeight: '80%',
+  },
+  infoMsgPreview: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 16,
+  },
+  infoDetailsList: {
+    gap: 12,
+  },
+  infoDetailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingBottom: 8,
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#e2e8f0',
+  },
+  infoLabel: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  infoVal: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  infoSectionTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    marginTop: 8,
+    marginBottom: 6,
+  },
+  infoReactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#f1f5f9',
+  },
+  reactionsViewerDialog: {
+    width: '100%',
+    maxWidth: 320,
+    maxHeight: 280,
+    borderRadius: 20,
+    padding: 16,
+  },
+  reactViewerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#f1f5f9',
+  },
+  reactViewerName: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  divider: {
+    height: 0.5,
+    width: '100%',
+    marginVertical: 4,
+  }
 });

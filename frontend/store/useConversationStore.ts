@@ -69,6 +69,11 @@ interface ConversationStore {
   transferCreator: (conversationId: string, newCreatorId: string | number) => void;
   removeConversation: (conversationId: string) => void;
   replaceConversation: (updatedConversation: ChatThread) => void;
+  updateLastMessage: (conversationId: string, messageId: number, newMessageText: string) => void;
+  recallLastMessage: (conversationId: string, messageId: number) => void;
+  deleteLastMessage: (conversationId: string, messageId: number) => void;
+  deleteConversation: (conversationId: string) => void;
+  restoreConversation: (conversation: ChatThread) => void;
 }
 
 export const useConversationStore = create<ConversationStore>((set, get) => ({
@@ -245,12 +250,74 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
     }));
   },
 
+  deleteConversation: (conversationId) => {
+    const convId = String(conversationId);
+    set((state) => ({
+      conversations: state.conversations.filter((c) => String(c.id) !== convId),
+    }));
+  },
+
+  restoreConversation: (conversation) => {
+    const convId = String(conversation.id);
+    set((state) => {
+      const exists = state.conversations.some((c) => String(c.id) === convId);
+      if (exists) return state;
+
+      const newConversations = [conversation, ...state.conversations];
+      const sorted = [...newConversations].sort((a, b) => {
+        const timeA = new Date(a.rawTime || a.updated_at || 0).getTime();
+        const timeB = new Date(b.rawTime || b.updated_at || 0).getTime();
+        return timeB - timeA;
+      });
+      return { conversations: sorted };
+    });
+  },
+
   replaceConversation: (updatedConversation) => {
     const convId = String(updatedConversation.id);
     set((state) => ({
       conversations: state.conversations.map((c) =>
         String(c.id) === convId ? updatedConversation : c
       ),
+    }));
+  },
+
+  updateLastMessage: (conversationId, messageId, newMessageText) => {
+    const convId = String(conversationId);
+    set((state) => ({
+      conversations: state.conversations.map((c) => {
+        if (String(c.id) !== convId) return c;
+        if (c.lastMessageId === messageId) {
+          return { ...c, lastMessage: newMessageText };
+        }
+        return c;
+      }),
+    }));
+  },
+
+  recallLastMessage: (conversationId, messageId) => {
+    const convId = String(conversationId);
+    set((state) => ({
+      conversations: state.conversations.map((c) => {
+        if (String(c.id) !== convId) return c;
+        if (c.lastMessageId === messageId) {
+          return { ...c, lastMessage: "Tin nhắn đã được thu hồi" };
+        }
+        return c;
+      }),
+    }));
+  },
+
+  deleteLastMessage: (conversationId, messageId) => {
+    const convId = String(conversationId);
+    set((state) => ({
+      conversations: state.conversations.map((c) => {
+        if (String(c.id) !== convId) return c;
+        if (c.lastMessageId === messageId) {
+          return { ...c, lastMessage: "Tin nhắn đã bị xóa" };
+        }
+        return c;
+      }),
     }));
   },
 }));

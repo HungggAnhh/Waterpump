@@ -62,6 +62,8 @@ export default function MessagesScreen() {
 
   const threads = useConversationStore(state => state.conversations);
   const [loadingThreads, setLoadingThreads] = useState(true);
+  const [selectedThreadForMenu, setSelectedThreadForMenu] = useState<ChatThread | null>(null);
+  const [threadMenuVisible, setThreadMenuVisible] = useState(false);
 
   // Modal chọn user bắt đầu chat
   const [newChatModalVisible, setNewChatModalVisible] = useState(false);
@@ -155,6 +157,16 @@ export default function MessagesScreen() {
       useConversationStore.getState().removeConversation(String(data.conversation_id));
     };
 
+    const handleConversationDeleted = (data: { conversation_id: string | number }) => {
+      console.log('[SOCKET:CONVERSATION_DELETED] Removing from store:', data);
+      useConversationStore.getState().deleteConversation(String(data.conversation_id));
+    };
+
+    const handleConversationRestored = (data: { conversation_id: string | number }) => {
+      console.log('[SOCKET:CONVERSATION_RESTORED] Fetching conversation info:', data);
+      fetchConversations(true);
+    };
+
     socket.on('update_online_users', handleUpdateOnlineUsers);
     socket.on('conversation_seen', handleConversationSeen);
     socket.on('receive_message', handleReceiveMessage);
@@ -163,6 +175,8 @@ export default function MessagesScreen() {
     socket.on('creator_transferred', handleCreatorTransferred);
     socket.on('group_deleted', handleGroupDeleted);
     socket.on('group_kicked', handleGroupKicked);
+    socket.on('conversation_deleted', handleConversationDeleted);
+    socket.on('conversation_restored', handleConversationRestored);
 
     // Tải danh sách hội thoại ban đầu
     fetchConversations();
@@ -177,8 +191,50 @@ export default function MessagesScreen() {
       socket.off('creator_transferred', handleCreatorTransferred);
       socket.off('group_deleted', handleGroupDeleted);
       socket.off('group_kicked', handleGroupKicked);
+      socket.off('conversation_deleted', handleConversationDeleted);
+      socket.off('conversation_restored', handleConversationRestored);
     };
   }, [socket, currentUser.id]);
+
+  // Custom Actions for Thread long press menu
+  const handlePinThread = (thread: ChatThread) => {
+    Alert.alert('Ghim cuộc trò chuyện', `Đã ghim cuộc trò chuyện với "${thread.name}" lên đầu.`);
+  };
+
+  const handleMuteThread = (thread: ChatThread) => {
+    Alert.alert('Tắt thông báo', `Đã tắt thông báo cho cuộc trò chuyện với "${thread.name}".`);
+  };
+
+  // Long press -> Xóa cuộc trò chuyện
+  const handleConfirmDeleteThread = (thread: ChatThread) => {
+    Alert.alert(
+      'Xóa cuộc trò chuyện',
+      'Bạn có chắc muốn xóa cuộc trò chuyện này khỏi hộp thư của mình không?',
+      [
+        { text: 'Hủy', style: 'cancel' },
+        {
+          text: 'Xóa',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const response = await fetch(`${API_BASE_URL}/conversations/${thread.id}?user_id=${currentUser.id}`, {
+                method: 'DELETE'
+              });
+              const result = await response.json();
+              if (response.ok && (result.success || result.status === 'success')) {
+                useConversationStore.getState().deleteConversation(thread.id);
+              } else {
+                Alert.alert('Thất bại', result.message || 'Không thể xóa cuộc trò chuyện.');
+              }
+            } catch (error) {
+              console.error("Lỗi khi xóa cuộc trò chuyện:", error);
+              Alert.alert('Lỗi kết nối', 'Không thể kết nối đến máy chủ.');
+            }
+          }
+        }
+      ]
+    );
+  };
 
   // Click vào cuộc hội thoại -> Điều hướng ra chat chi tiết
   const handleSelectThread = (thread: ChatThread) => {
@@ -304,6 +360,11 @@ export default function MessagesScreen() {
     <TouchableOpacity
       style={[styles.threadCard, { backgroundColor: colors.card, borderColor: colors.border }]}
       onPress={() => handleSelectThread(item)}
+      onLongPress={() => {
+        setSelectedThreadForMenu(item);
+        setThreadMenuVisible(true);
+      }}
+      delayLongPress={500}
     >
       <View style={styles.avatarWrapper}>
         <Image source={{ uri: item.avatar }} style={styles.threadAvatar} />
@@ -387,8 +448,24 @@ export default function MessagesScreen() {
         />
       ) : (
         <View style={styles.centered}>
-          <Ionicons name="chatbubbles-outline" size={48} color="#cbd5e1" />
-          <Text style={{ color: colors.textSecondary, marginTop: 12, fontSize: 14 }}>Chưa có cuộc trò chuyện nào.</Text>
+          <Text style={{ fontSize: 40, marginBottom: 8 }}>📭</Text>
+          <Text style={{ color: colors.textSecondary, marginBottom: 16, fontSize: 14, fontWeight: '700' }}>
+            Chưa có cuộc trò chuyện nào
+          </Text>
+          <TouchableOpacity 
+            style={{ 
+              paddingVertical: 10, 
+              paddingHorizontal: 20, 
+              borderRadius: 20, 
+              backgroundColor: colors.tint 
+            }}
+            onPress={handleOpenNewChat}
+            activeOpacity={0.8}
+          >
+            <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>
+              Bắt đầu trò chuyện
+            </Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -535,6 +612,86 @@ export default function MessagesScreen() {
             )}
           </KeyboardAvoidingView>
         </SafeAreaView>
+      </Modal>
+
+      {/* ================== BOTTOM SHEET MENU CUỘC TRÒ CHUYỆN ================== */}
+      <Modal
+        visible={threadMenuVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setThreadMenuVisible(false)}
+      >
+        <TouchableOpacity 
+          style={styles.sheetBackdrop} 
+          activeOpacity={1} 
+          onPress={() => setThreadMenuVisible(false)}
+        >
+          <View style={[styles.sheetContent, { backgroundColor: colors.card }]}>
+            {/* Drag Handle Indicator */}
+            <View style={[styles.sheetHandle, { backgroundColor: colors.border }]} />
+
+            {selectedThreadForMenu && (
+              <View style={styles.sheetHeader}>
+                <Image source={{ uri: selectedThreadForMenu.avatar }} style={styles.sheetAvatar} />
+                <Text style={[styles.sheetTitle, { color: colors.text }]} numberOfLines={1}>
+                  {selectedThreadForMenu.name}
+                </Text>
+              </View>
+            )}
+
+            <View style={[styles.sheetDivider, { backgroundColor: colors.border }]} />
+
+            {/* Ghim Cuộc trò chuyện */}
+            <TouchableOpacity 
+              style={styles.sheetOption} 
+              onPress={() => {
+                setThreadMenuVisible(false);
+                if (selectedThreadForMenu) handlePinThread(selectedThreadForMenu);
+              }}
+            >
+              <View style={[styles.sheetIconWrapper, { backgroundColor: 'rgba(59, 130, 246, 0.1)' }]}>
+                <Ionicons name="pin" size={20} color="#3b82f6" />
+              </View>
+              <Text style={[styles.sheetOptionText, { color: colors.text }]}>📌 Ghim cuộc trò chuyện</Text>
+            </TouchableOpacity>
+
+            {/* Tắt Thông báo */}
+            <TouchableOpacity 
+              style={styles.sheetOption} 
+              onPress={() => {
+                setThreadMenuVisible(false);
+                if (selectedThreadForMenu) handleMuteThread(selectedThreadForMenu);
+              }}
+            >
+              <View style={[styles.sheetIconWrapper, { backgroundColor: 'rgba(245, 158, 11, 0.1)' }]}>
+                <Ionicons name="notifications-off" size={20} color="#f59e0b" />
+              </View>
+              <Text style={[styles.sheetOptionText, { color: colors.text }]}>🔕 Tắt thông báo</Text>
+            </TouchableOpacity>
+
+            {/* Xóa Cuộc trò chuyện */}
+            <TouchableOpacity 
+              style={[styles.sheetOption, styles.sheetOptionDelete]} 
+              onPress={() => {
+                setThreadMenuVisible(false);
+                if (selectedThreadForMenu) handleConfirmDeleteThread(selectedThreadForMenu);
+              }}
+            >
+              <View style={[styles.sheetIconWrapper, { backgroundColor: 'rgba(239, 68, 68, 0.1)' }]}>
+                <Ionicons name="trash" size={20} color="#ef4444" />
+              </View>
+              <Text style={[styles.sheetOptionText, { color: '#ef4444', fontWeight: '700' }]}>🗑️ Xóa cuộc trò chuyện</Text>
+            </TouchableOpacity>
+
+            {/* Nút Hủy */}
+            <TouchableOpacity 
+              style={[styles.sheetCancelBtn, { borderColor: colors.border }]} 
+              onPress={() => setThreadMenuVisible(false)}
+            >
+              <Text style={[styles.sheetCancelText, { color: colors.textSecondary }]}>Hủy</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
       </Modal>
     </SafeAreaView>
   );
@@ -707,5 +864,82 @@ const styles = StyleSheet.create({
     height: 36,
     fontSize: 14,
     padding: 0,
+  },
+  sheetBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'flex-end',
+  },
+  sheetContent: {
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === 'ios' ? 36 : 24,
+    maxHeight: '60%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 20,
+  },
+  sheetHandle: {
+    width: 40,
+    height: 5,
+    borderRadius: 2.5,
+    alignSelf: 'center',
+    marginBottom: 16,
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+    gap: 12,
+  },
+  sheetAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+  },
+  sheetTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    flex: 1,
+  },
+  sheetDivider: {
+    height: 1,
+    marginBottom: 16,
+  },
+  sheetOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    gap: 14,
+  },
+  sheetOptionDelete: {
+    marginTop: 4,
+  },
+  sheetIconWrapper: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  sheetOptionText: {
+    fontSize: 15,
+    fontWeight: '500',
+  },
+  sheetCancelBtn: {
+    marginTop: 16,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sheetCancelText: {
+    fontSize: 14,
+    fontWeight: '600',
   },
 });

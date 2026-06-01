@@ -113,7 +113,7 @@ io.on('connection', (socket) => {
 
   // 4. Gửi & lưu tin nhắn vào Supabase
   socket.on('send_message', async (data) => {
-    const { conversation_id, sender_id, message, type = 'text', file_url = null } = data;
+    const { conversation_id, sender_id, message, type = 'text', file_url = null, reply_to = null, forwarded = false } = data;
 
     if (!conversation_id || !sender_id || !message) {
       console.error('⚠️ send_message: thiếu tham số');
@@ -125,8 +125,8 @@ io.on('connection', (socket) => {
     try {
       // Lưu vào Supabase PostgreSQL
       const insertRes = await query(
-        'INSERT INTO messages (conversation_id, sender_id, message, type, file_url) VALUES ($1,$2,$3,$4,$5) RETURNING id, created_at',
-        [parseInt(conversation_id), parseInt(sender_id), message, type, file_url]
+        'INSERT INTO messages (conversation_id, sender_id, message, type, file_url, reply_to, forwarded) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, created_at',
+        [parseInt(conversation_id), parseInt(sender_id), message, type, file_url, reply_to ? parseInt(reply_to) : null, !!forwarded]
       );
       const messageId = insertRes.rows[0].id;
       const createdAt = insertRes.rows[0].created_at;
@@ -138,6 +138,29 @@ io.on('connection', (socket) => {
       );
       const sender = userRes.rows[0] || {};
 
+      // Lấy thông tin tin nhắn gốc được trích dẫn (Reply Quote) nếu có
+      let replyToMessage = null;
+      if (reply_to) {
+        const parentRes = await query(
+          `SELECT m.id, m.message, m.type, m.file_url, m.recalled, u.name AS sender_name
+           FROM messages m
+           JOIN users u ON m.sender_id = u.id
+           WHERE m.id = $1 LIMIT 1`,
+          [parseInt(reply_to)]
+        );
+        if (parentRes.rows.length > 0) {
+          const parent = parentRes.rows[0];
+          replyToMessage = {
+            id: parseInt(parent.id),
+            sender_name: parent.sender_name,
+            message: parent.recalled ? "Tin nhắn đã được thu hồi" : parent.message,
+            type: parent.type,
+            file_url: parent.file_url,
+            recalled: !!parent.recalled
+          };
+        }
+      }
+
       const messageObject = {
         id:              parseInt(messageId),
         conversation_id: parseInt(conversation_id),
@@ -148,12 +171,92 @@ io.on('connection', (socket) => {
         type,
         file_url,
         created_at:      createdAt, // Server database timestamp (ISO Timestamptz)
+        raw_time:        createdAt,
+        reply_to:        reply_to ? parseInt(reply_to) : null,
+        reply_to_message: replyToMessage,
+        forwarded:       !!forwarded,
+        reactions:       [],
         sender_info: {
           id:     parseInt(sender_id),
           name:   sender.name,
           avatar: sender.avatar,
         }
       };
+
+      // Kiểm tra tự động khôi phục cuộc trò chuyện Direct cho thành viên đã xóa
+      const convCheck = await query(
+        'SELECT type FROM conversations WHERE id = $1 LIMIT 1',
+        [parseInt(conversation_id)]
+      );
+      const isDirect = convCheck.rows.length > 0 && convCheck.rows[0].type === 'direct';
+
+      if (isDirect) {
+        const currentParticipants = await query(
+          'SELECT user_id FROM conversation_users WHERE conversation_id = $1',
+          [parseInt(conversation_id)]
+        );
+        
+        if (currentParticipants.rows.length === 1) {
+          // Find the exact other participant in this direct conversation
+          const matchingRes = await query(
+            `SELECT u.id 
+             FROM users u
+             WHERE u.id != $1 AND u.status = 'active'
+               AND EXISTS (
+                 SELECT 1 
+                 FROM conversations c
+                 WHERE c.id = $2 AND c.type = 'direct'
+                   AND (
+                     EXISTS (
+                       SELECT 1 FROM conversation_users cu1 
+                       JOIN conversation_users cu2 ON cu1.conversation_id = cu2.conversation_id
+                       WHERE cu1.conversation_id = c.id AND cu1.user_id = $1 AND cu2.user_id = u.id
+                     )
+                     OR (
+                       EXISTS (SELECT 1 FROM conversation_users cu WHERE cu.conversation_id = c.id AND cu.user_id = $1)
+                       AND NOT EXISTS (SELECT 1 FROM conversation_users cu WHERE cu.conversation_id = c.id AND cu.user_id = u.id)
+                       AND (
+                         EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.sender_id = u.id)
+                         OR EXISTS (SELECT 1 FROM deleted_messages dm JOIN messages m ON dm.message_id = m.id WHERE m.conversation_id = c.id AND dm.user_id = u.id)
+                       )
+                     )
+                     OR (
+                       EXISTS (SELECT 1 FROM conversation_users cu WHERE cu.conversation_id = c.id AND cu.user_id = u.id)
+                       AND NOT EXISTS (SELECT 1 FROM conversation_users cu WHERE cu.conversation_id = c.id AND cu.user_id = $1)
+                       AND (
+                         EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.sender_id = $1)
+                         OR EXISTS (SELECT 1 FROM deleted_messages dm JOIN messages m ON dm.message_id = m.id WHERE m.conversation_id = c.id AND dm.user_id = $1)
+                       )
+                     )
+                     OR (
+                       NOT EXISTS (SELECT 1 FROM conversation_users cu WHERE cu.conversation_id = c.id AND cu.user_id = $1)
+                       AND NOT EXISTS (SELECT 1 FROM conversation_users cu WHERE cu.conversation_id = c.id AND cu.user_id = u.id)
+                       AND (
+                         EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND (m.sender_id = $1 OR m.sender_id = u.id))
+                         OR EXISTS (SELECT 1 FROM deleted_messages dm JOIN messages m ON dm.message_id = m.id WHERE m.conversation_id = c.id AND (dm.user_id = $1 OR dm.user_id = u.id))
+                       )
+                     )
+                   )
+               )
+             LIMIT 1`,
+            [parseInt(sender_id), parseInt(conversation_id)]
+          );
+          
+          let missingUserId = matchingRes.rows.length > 0 ? matchingRes.rows[0].id : null;
+          
+          if (missingUserId) {
+            console.log(`[RESTORE] Recreating missing conversation_users row for user ${missingUserId} in conv ${conversation_id}`);
+            await query(
+              'INSERT INTO conversation_users (conversation_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+              [parseInt(conversation_id), parseInt(missingUserId)]
+            );
+            
+            io.to(`user_${missingUserId}`).emit('conversation_restored', {
+              conversation_id: String(conversation_id)
+            });
+          }
+        }
+      }
 
       // Phát tới tất cả thành viên phòng chat qua phòng cá nhân
       const memberRes = await query(

@@ -1656,7 +1656,7 @@ export default function PageTasksScreen() {
               numberOfLines={4}
             />
 
-            <View style={styles.modalButtons}>
+            <View style={styles.formButtons}>
               <TouchableOpacity
                 style={[styles.btnCancel, { borderColor: colors.border }]}
                 onPress={() => setIsRejectModalOpen(false)}
