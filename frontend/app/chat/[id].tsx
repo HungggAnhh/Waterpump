@@ -190,22 +190,51 @@ export default function ChatRoomScreen() {
 
   // Khởi tạo và đăng ký sự kiện Socket.IO dùng chung
   useEffect(() => {
-    if (!socket || !conversationId) return;
+    if (!socket) {
+      console.log('🔌 [CHAT_ROOM:SOCKET] Không tìm thấy socket client (socket: null).');
+      return;
+    }
+    if (!conversationId) {
+      console.log('🔌 [CHAT_ROOM:SOCKET] Không tìm thấy conversationId.');
+      return;
+    }
 
-    console.log(`🔌 [CHAT_ROOM] Joining room: room_${conversationId}`);
-    socket.emit('join_room', {
+    console.log(`🔌 [CHAT_ROOM:MOUNT] Đã đăng ký Socket trong phòng chat! socket.id: ${socket.id}, conversationId: ${conversationId}`);
+    console.log(`🔌 [CHAT_ROOM:EMIT] Emitting join_room: room_${conversationId} for user ${currentUser.id}`);
+    
+    const joinRoomPayload = {
       conversation_id: parseInt(conversationId),
       user_id: currentUser.id
-    });
+    };
+
+    console.log(`🔌 [CHAT_ROOM:EMIT] Emitting join_room: room_${conversationId} for user ${currentUser.id}`);
+    socket.emit('join_room', joinRoomPayload);
+
+    // Tự động re-join phòng chat khi socket kết nối lại thành công
+    const handleSocketReconnect = () => {
+      console.log(`🔌 [CHAT_ROOM:RECONNECT] Socket kết nối lại thành công. Re-emitting join_room: room_${conversationId}`);
+      socket.emit('join_room', joinRoomPayload);
+    };
+    socket.on('connect', handleSocketReconnect);
 
     // Nhận tin nhắn realtime
     const handleReceiveMessage = (msg: Message) => {
-      if (String(msg.conversation_id) !== conversationId) return;
+      console.log('🔊 [CHAT_ROOM:RECEIVE_SOCKET_EVENT] Nhận sự kiện receive_message trên socket!');
+      console.log(`🔊 [CHAT_ROOM:RECEIVE_SOCKET_EVENT] Đang xem phòng: ${conversationId}, Tin nhắn thuộc phòng: ${msg.conversation_id}, socket.id hiện tại: ${socket.id}`);
+      console.log('[CHAT_ROOM:RECEIVE_SOCKET_EVENT] payload:', msg);
 
-      console.log('📨 [CHAT_ROOM] Nhận tin nhắn realtime:', msg);
+      if (String(msg.conversation_id) !== conversationId) {
+        console.log(`[CHAT_ROOM:RECEIVE_SOCKET_EVENT] Message conversation_id ${msg.conversation_id} không khớp với phòng active ${conversationId}. Bỏ qua.`);
+        return;
+      }
+
+      console.log('📨 [CHAT_ROOM] Hợp lệ! Đang thêm tin nhắn realtime vào state local:', msg);
       
       setMessages((prev) => {
-        if (prev.some(m => m.id === msg.id)) return prev;
+        if (prev.some(m => m.id === msg.id)) {
+          console.log(`[CHAT_ROOM] Tin nhắn ID ${msg.id} đã tồn tại trong local state. Bỏ qua duplicate.`);
+          return prev;
+        }
         return [msg, ...prev];
       });
 
@@ -296,11 +325,12 @@ export default function ChatRoomScreen() {
     }
 
     return () => {
-      console.log(`🔌 [CHAT_ROOM] Leaving room: room_${conversationId}`);
+      console.log(`🔌 [CHAT_ROOM:UNMOUNT] Unregistered socket listener for room: room_${conversationId}, socket.id: ${socket.id}`);
       socket.emit('leave_room', {
         conversation_id: parseInt(conversationId),
         user_id: currentUser.id
       });
+      socket.off('connect', handleSocketReconnect);
       socket.off('receive_message', handleReceiveMessage);
       socket.off('user_typing', handleUserTyping);
       socket.off('member_added', handleMemberAdded);
@@ -337,6 +367,9 @@ export default function ChatRoomScreen() {
 
   useEffect(() => {
     if (conversationId) {
+      console.log(`📌 [CHAT_ROOM:ACTIVE] Thiết lập activeConversationId: ${conversationId}`);
+      useConversationStore.getState().setActiveConversationId(conversationId);
+      
       setPage(1);
       setHasMoreMessages(true);
       setMessages([]);
@@ -347,6 +380,11 @@ export default function ChatRoomScreen() {
       lastSeenMessageIdRef.current = null;
       fetchMessages(conversationId, 1);
     }
+
+    return () => {
+      console.log(`📌 [CHAT_ROOM:ACTIVE] Giải phóng activeConversationId (set null)`);
+      useConversationStore.getState().setActiveConversationId(null);
+    };
   }, [conversationId]);
 
   // Xác định ID tin nhắn mới nhất để tối ưu dependencies cho useEffect seen flow

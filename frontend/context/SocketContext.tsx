@@ -55,25 +55,37 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     socketRef.current = socket;
 
     socket.on('connect', () => {
-      console.log('🟢 [GLOBAL_SOCKET] Đã kết nối Socket.IO thành công!');
+      console.log(`🟢 [GLOBAL_SOCKET:CONNECT] Kết nối thành công! socket.id: ${socket.id}`);
       setIsConnected(true);
       socket.emit('join', user);
     });
 
-    socket.on('disconnect', () => {
-      console.log('🔴 [GLOBAL_SOCKET] Đã ngắt kết nối Socket.IO');
+    socket.on('disconnect', (reason) => {
+      console.log(`🔴 [GLOBAL_SOCKET:DISCONNECT] Đã ngắt kết nối. Lý do: ${reason}. socket.id: ${socket.id}`);
       setIsConnected(false);
     });
 
     socket.on('connect_error', (error) => {
-      console.log('⚠️ [GLOBAL_SOCKET] Lỗi kết nối socket, đang tự động thử lại...', error);
+      console.log('⚠️ [GLOBAL_SOCKET:CONNECT_ERROR] Lỗi kết nối socket, đang tự động thử lại...', error.message);
+    });
+
+    socket.on('reconnect_attempt', (attemptNumber) => {
+      console.log(`🔄 [GLOBAL_SOCKET:RECONNECT_ATTEMPT] Đang thử kết nối lại lần thứ ${attemptNumber}...`);
+    });
+
+    socket.on('reconnect', (attemptNumber) => {
+      console.log(`🟢 [GLOBAL_SOCKET:RECONNECT] Kết nối lại thành công sau ${attemptNumber} lần thử! socket.id: ${socket.id}`);
+      setIsConnected(true);
+      socket.emit('join', user);
     });
 
     return () => {
-      console.log('🧹 [GLOBAL_SOCKET] Dọn dẹp kết nối socket toàn cục');
+      console.log('🧹 [GLOBAL_SOCKET:CLEANUP] Dọn dẹp kết nối socket toàn cục');
       socket.off('connect');
       socket.off('disconnect');
       socket.off('connect_error');
+      socket.off('reconnect_attempt');
+      socket.off('reconnect');
       socket.disconnect();
       socketRef.current = null;
       setIsConnected(false);

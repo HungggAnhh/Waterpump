@@ -39,6 +39,10 @@ interface ConversationStore {
   // Preserves strict order physically in an array
   conversations: ChatThread[];
   
+  // Track active conversation ID globally
+  activeConversationId: string | null;
+  setActiveConversationId: (id: string | null) => void;
+  
   // Set all conversations initially (e.g. after API fetch)
   setConversations: (threads: ChatThread[]) => void;
   
@@ -69,6 +73,8 @@ interface ConversationStore {
 
 export const useConversationStore = create<ConversationStore>((set, get) => ({
   conversations: [],
+  activeConversationId: null,
+  setActiveConversationId: (id) => set({ activeConversationId: id }),
 
   setConversations: (threads) => {
     // Initial sort by database timestamp descending to prepare order

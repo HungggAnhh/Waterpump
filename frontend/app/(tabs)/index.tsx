@@ -26,6 +26,7 @@ interface User {
   avatar: string | null;
   role: string;
   status: 'active' | 'inactive';
+  created_at: string;
 }
 
 interface KPIStats {
@@ -55,18 +56,19 @@ export default function HomeScreen() {
   const [statsLoading, setStatsLoading] = useState(true);
 
   // Fetch users list to show active company directory
-  useEffect(() => {
-    const fetchUsers = async () => {
-      try {
-        const response = await fetch(endpoints.users);
-        const result = await response.json();
-        if (result.status === 'success') {
-          setOnlineUsers(result.data || []);
-        }
-      } catch (err) {
-        console.error('⚠️ [Home] Lỗi lấy danh sách thành viên:', err);
+  const fetchUsers = async () => {
+    try {
+      const response = await fetch(endpoints.users);
+      const result = await response.json();
+      if (result.status === 'success') {
+        setOnlineUsers(result.data || []);
       }
-    };
+    } catch (err) {
+      console.error('⚠️ [Home] Lỗi lấy danh sách thành viên:', err);
+    }
+  };
+
+  useEffect(() => {
     fetchUsers();
   }, []);
 
@@ -90,7 +92,7 @@ export default function HomeScreen() {
     fetchKPIStats();
   }, [user]);
 
-  // Realtime Socket updates for KPIs
+  // Realtime Socket updates for KPIs and User Directory
   useEffect(() => {
     if (!socket) return;
 
@@ -99,18 +101,42 @@ export default function HomeScreen() {
       fetchKPIStats();
     };
 
+    const handleUserChange = () => {
+      console.log('📡 [SOCKET] Realtime: Cập nhật lại danh sách thành viên trang chủ');
+      fetchUsers();
+    };
+
     socket.on('task_created', handleTaskChange);
     socket.on('task_updated', handleTaskChange);
     socket.on('task_deleted', handleTaskChange);
     socket.on('task_completed', handleTaskChange);
+
+    socket.on('user_created', handleUserChange);
+    socket.on('user_updated', handleUserChange);
+    socket.on('user_deleted', handleUserChange);
+    socket.on('user_role_changed', handleUserChange);
+    socket.on('user_status_changed', handleUserChange);
 
     return () => {
       socket.off('task_created', handleTaskChange);
       socket.off('task_updated', handleTaskChange);
       socket.off('task_deleted', handleTaskChange);
       socket.off('task_completed', handleTaskChange);
+
+      socket.off('user_created', handleUserChange);
+      socket.off('user_updated', handleUserChange);
+      socket.off('user_deleted', handleUserChange);
+      socket.off('user_role_changed', handleUserChange);
+      socket.off('user_status_changed', handleUserChange);
     };
   }, [socket]);
+
+  // Tính toán nhanh số liệu tài khoản hệ thống cho Admin
+  const totalAccounts = onlineUsers.length;
+  const adminCount = onlineUsers.filter(u => u.role === 'admin').length;
+  const userCount = onlineUsers.filter(u => u.role === 'user').length;
+  const activeCount = onlineUsers.filter(u => u.status === 'active').length;
+  const lockedCount = onlineUsers.filter(u => u.status === 'inactive').length;
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['bottom']}>
@@ -249,6 +275,73 @@ export default function HomeScreen() {
                 </View>
               </TouchableOpacity>
             </View>
+
+            {/* Admin-only: Realtime User Account Stats card */}
+            {user?.role === 'admin' && (
+              <View 
+                style={{
+                  width: '100%',
+                  borderWidth: 1,
+                  borderRadius: 18,
+                  padding: 16,
+                  backgroundColor: colors.card,
+                  borderColor: colors.border,
+                  ...Platform.select({
+                    ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.03, shadowRadius: 4 },
+                    android: { elevation: 1 }
+                  })
+                }}
+              >
+                <Text style={{ fontSize: 11.5, fontWeight: '700', color: colors.tint, marginBottom: 12, letterSpacing: 0.5 }}>
+                  📊 THỐNG KÊ TÀI KHOẢN HỆ THỐNG (ADMIN)
+                </Text>
+                
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: 10 }}>
+                  {/* Tổng số tài khoản */}
+                  <View style={{ width: '47%', padding: 10, backgroundColor: colors.background, borderRadius: 10, borderWidth: 1, borderColor: colors.border, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <View style={{ width: 28, height: 28, borderRadius: 8, backgroundColor: '#eff6ff', justifyContent: 'center', alignItems: 'center' }}>
+                      <Ionicons name="people" size={14} color="#2563eb" />
+                    </View>
+                    <View>
+                      <Text style={{ fontSize: 10, color: colors.tabIconDefault, fontWeight: '700' }}>Tổng tài khoản</Text>
+                      <Text style={{ fontSize: 14, fontWeight: '800', color: colors.text, marginTop: 2 }}>{totalAccounts}</Text>
+                    </View>
+                  </View>
+
+                  {/* Hoạt động */}
+                  <View style={{ width: '47%', padding: 10, backgroundColor: colors.background, borderRadius: 10, borderWidth: 1, borderColor: colors.border, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <View style={{ width: 28, height: 28, borderRadius: 8, backgroundColor: '#ecfdf5', justifyContent: 'center', alignItems: 'center' }}>
+                      <Ionicons name="checkmark-circle" size={14} color="#10b981" />
+                    </View>
+                    <View>
+                      <Text style={{ fontSize: 10, color: colors.tabIconDefault, fontWeight: '700' }}>Hoạt động</Text>
+                      <Text style={{ fontSize: 14, fontWeight: '800', color: colors.text, marginTop: 2 }}>{activeCount}</Text>
+                    </View>
+                  </View>
+
+                  {/* Admins */}
+                  <View style={{ width: '31%', padding: 8, backgroundColor: colors.background, borderRadius: 10, borderWidth: 1, borderColor: colors.border, alignItems: 'center' }}>
+                    <Ionicons name="key" size={14} color="#dc2626" style={{ marginBottom: 4 }} />
+                    <Text style={{ fontSize: 9, color: colors.tabIconDefault, fontWeight: '700' }}>Admin</Text>
+                    <Text style={{ fontSize: 13, fontWeight: '800', color: colors.text, marginTop: 2 }}>{adminCount}</Text>
+                  </View>
+
+                  {/* Users */}
+                  <View style={{ width: '31%', padding: 8, backgroundColor: colors.background, borderRadius: 10, borderWidth: 1, borderColor: colors.border, alignItems: 'center' }}>
+                    <Ionicons name="person" size={14} color="#0284c7" style={{ marginBottom: 4 }} />
+                    <Text style={{ fontSize: 9, color: colors.tabIconDefault, fontWeight: '700' }}>User</Text>
+                    <Text style={{ fontSize: 13, fontWeight: '800', color: colors.text, marginTop: 2 }}>{userCount}</Text>
+                  </View>
+
+                  {/* Bị khóa */}
+                  <View style={{ width: '31%', padding: 8, backgroundColor: colors.background, borderRadius: 10, borderWidth: 1, borderColor: colors.border, alignItems: 'center' }}>
+                    <Ionicons name="lock-closed" size={14} color="#4b5563" style={{ marginBottom: 4 }} />
+                    <Text style={{ fontSize: 9, color: colors.tabIconDefault, fontWeight: '700' }}>Bị khóa</Text>
+                    <Text style={{ fontSize: 13, fontWeight: '800', color: colors.text, marginTop: 2 }}>{lockedCount}</Text>
+                  </View>
+                </View>
+              </View>
+            )}
           </View>
         )}
 

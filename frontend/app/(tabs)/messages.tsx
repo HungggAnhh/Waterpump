@@ -94,9 +94,12 @@ export default function MessagesScreen() {
 
   // 2. Lắng nghe sự kiện từ Socket.IO toàn cục
   useEffect(() => {
-    if (!socket) return;
+    if (!socket) {
+      console.log('🔌 [INBOX:SOCKET] Không tìm thấy socket client (socket: null).');
+      return;
+    }
 
-    console.log('🟢 [INBOX] Đang sử dụng Socket toàn cục và đăng ký sự kiện');
+    console.log(`🟢 [INBOX:MOUNT] Đăng ký Socket toàn cục cho hòm thư! socket.id: ${socket.id}`);
 
     // Đăng ký trạng thái trực tuyến
     socket.emit('join', currentUser);
@@ -112,7 +115,8 @@ export default function MessagesScreen() {
     };
 
     const handleReceiveMessage = (msg: Message) => {
-      console.log('📨 [INBOX] Nhận tin nhắn mới realtime qua socket:', msg);
+      console.log('📨 [INBOX:RECEIVE_SOCKET_EVENT] Nhận tin nhắn mới realtime qua socket:', msg);
+      console.log(`📨 [INBOX:RECEIVE_SOCKET_EVENT] socket.id hiện tại: ${socket.id}`);
       
       // 1. Kiểm tra xem hội thoại đã tồn tại cục bộ chưa, nếu chưa hãy tải lại danh sách âm thầm
       const hasConv = useConversationStore.getState().conversations.some(c => String(c.id) === String(msg.conversation_id));
@@ -120,8 +124,10 @@ export default function MessagesScreen() {
         fetchConversations(true);
       }
 
-      // 2. Cập nhật Zustand store
-      useConversationStore.getState().receiveMessage(msg, null, currentUser.id);
+      // 2. Cập nhật Zustand store bằng activeConversationId hiện tại
+      const activeConversationId = useConversationStore.getState().activeConversationId;
+      console.log(`📨 [INBOX:RECEIVE_SOCKET_EVENT] activeConversationId trong store: ${activeConversationId}`);
+      useConversationStore.getState().receiveMessage(msg, activeConversationId, currentUser.id);
     };
 
     const handleGroupAddedNotify = (data: { conversation_id: string | number }) => {
@@ -162,7 +168,7 @@ export default function MessagesScreen() {
     fetchConversations();
 
     return () => {
-      console.log('🧹 [INBOX] Hủy đăng ký sự kiện socket cho hòm thư');
+      console.log(`🧹 [INBOX:UNMOUNT] Hủy đăng ký sự kiện socket cho hòm thư, socket.id: ${socket.id}`);
       socket.off('update_online_users', handleUpdateOnlineUsers);
       socket.off('conversation_seen', handleConversationSeen);
       socket.off('receive_message', handleReceiveMessage);

@@ -163,7 +163,9 @@ io.on('connection', (socket) => {
 
       memberRes.rows.forEach(({ user_id }) => {
         io.to(`user_${user_id}`).emit('receive_message', messageObject);
-        console.log(`🚀 → user_${user_id}`);
+        console.log('[SERVER] Sent receive_message to room:', `user_${user_id}`);
+        console.log('[SERVER] roomId (conversation_id):', conversation_id);
+        console.log('[SERVER] message.id:', messageId);
       });
 
       // Gửi Push Notification cho các thành viên khác trong phòng chat (chạy bất đồng bộ)
