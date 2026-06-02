@@ -22,6 +22,7 @@ import { useUser } from '../../context/UserContext';
 import { useSocket } from '../../context/SocketContext';
 import { endpoints, API_BASE_URL } from '@/constants/Config';
 import * as ImagePicker from 'expo-image-picker';
+import { AvatarUploader } from '@/components/AvatarUploader';
 
 export default function SettingsScreen() {
   const colorScheme = useColorScheme();
@@ -112,7 +113,7 @@ export default function SettingsScreen() {
       mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.7,
+      quality: 0.5,
     });
 
     if (result.canceled || !result.assets || result.assets.length === 0) {
@@ -121,6 +122,12 @@ export default function SettingsScreen() {
 
     const pickedAsset = result.assets[0];
     const pickedUri = pickedAsset.uri;
+
+    // Validate size (5MB limit)
+    if (pickedAsset.fileSize && pickedAsset.fileSize > 5 * 1024 * 1024) {
+      Alert.alert('Tệp quá lớn', 'Ảnh đại diện tối đa là 5MB. Vui lòng chọn ảnh khác!');
+      return;
+    }
 
     setUploadingAvatar(true);
 
@@ -133,7 +140,7 @@ export default function SettingsScreen() {
           const rawExt = mimeParts[1].toLowerCase();
           if (rawExt === 'jpeg' || rawExt === 'jpg') fileExt = 'jpg';
           else if (rawExt === 'png') fileExt = 'png';
-          else if (rawExt === 'gif') fileExt = 'gif';
+          else if (rawExt === 'webp') fileExt = 'webp';
           else fileExt = rawExt;
         }
       } else if (pickedAsset.fileName) {
@@ -158,7 +165,7 @@ export default function SettingsScreen() {
         } as any);
       }
 
-      const uploadResponse = await fetch(`${API_BASE_URL}/upload`, {
+      const uploadResponse = await fetch(`${API_BASE_URL}/users/${user?.id}/avatar`, {
         method: 'POST',
         body: formData,
       });
@@ -169,34 +176,17 @@ export default function SettingsScreen() {
         uploadResult = JSON.parse(responseText);
       } catch (parseError) {
         console.error("❌ Lỗi phân tích JSON từ server:", responseText);
-        Alert.alert("Lỗi phản hồi", "Máy chủ trả về phản hồi không hợp lệ. Vui lòng kiểm tra cấu hình server!");
+        Alert.alert("Lỗi phản hồi", "Máy chủ trả về phản hồi không hợp lệ.");
         setUploadingAvatar(false);
         return;
       }
 
       if (uploadResponse.ok && uploadResult.status === 'success') {
-        const newAvatarUrl = uploadResult.file_url;
-
-        const updateResponse = await fetch(endpoints.users, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'update_avatar',
-            id: user?.id,
-            avatar: newAvatarUrl
-          })
-        });
-
-        const updateResult = await updateResponse.json();
-
-        if (updateResponse.ok && updateResult.status === 'success') {
-          if (user) {
-            const updatedUser = { ...user, avatar: newAvatarUrl };
-            await updateUserInContext(updatedUser);
-            Alert.alert("Thành công", "Đã cập nhật ảnh đại diện thành công!");
-          }
-        } else {
-          Alert.alert("Lỗi cập nhật", updateResult.message || "Không thể cập nhật ảnh đại diện vào CSDL.");
+        const newAvatarUrl = uploadResult.data.avatar;
+        if (user) {
+          const updatedUser = { ...user, avatar: newAvatarUrl };
+          await updateUserInContext(updatedUser);
+          Alert.alert("Thành công", "Đã cập nhật ảnh đại diện thành công!");
         }
       } else {
         Alert.alert("Lỗi tải lên", uploadResult.message || "Không thể tải tệp lên.");
@@ -479,26 +469,19 @@ export default function SettingsScreen() {
         
         {/* 1. Profile Card */}
         <View style={[styles.profileCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <TouchableOpacity 
-            style={styles.avatarContainer} 
-            onPress={handleUpdateAvatar}
-            disabled={uploadingAvatar}
-            activeOpacity={0.7}
-          >
-            <Image 
-              source={{ uri: user?.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150&q=80' }} 
-              style={styles.avatar} 
+          <View style={styles.avatarContainer}>
+            <AvatarUploader
+              targetUserId={user?.id || 0}
+              currentAvatarUrl={user?.avatar || null}
+              size={68}
+              onUploadSuccess={async (newAvatarUrl) => {
+                if (user) {
+                  const updatedUser = { ...user, avatar: newAvatarUrl };
+                  await updateUserInContext(updatedUser);
+                }
+              }}
             />
-            {uploadingAvatar ? (
-              <View style={styles.avatarOverlay}>
-                <ActivityIndicator size="small" color="#fff" />
-              </View>
-            ) : (
-              <View style={styles.avatarOverlay}>
-                <Ionicons name="camera" size={12} color="#fff" />
-              </View>
-            )}
-          </TouchableOpacity>
+          </View>
           <View style={styles.profileInfo}>
             <Text style={[styles.profileName, { color: colors.text }]}>{user?.name || 'Thành viên'}</Text>
             <Text style={[styles.profileRole, { color: colors.tint }]}>
@@ -872,6 +855,20 @@ export default function SettingsScreen() {
             </View>
 
             <View style={styles.formContainer}>
+              {editingUser && (
+                <View style={{ alignItems: 'center', marginBottom: 12 }}>
+                  <AvatarUploader
+                    targetUserId={editingUser.id}
+                    currentAvatarUrl={editingUser.avatar}
+                    size={80}
+                    onUploadSuccess={(newAvatarUrl) => {
+                      setEditingUser((prev: any) => prev ? { ...prev, avatar: newAvatarUrl } : null);
+                      fetchUsers();
+                    }}
+                  />
+                </View>
+              )}
+
               <Text style={styles.label}>Họ và tên *</Text>
               <TextInput
                 style={[styles.input, { borderColor: colors.border, color: colors.text }]}

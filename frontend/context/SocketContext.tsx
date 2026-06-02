@@ -1,14 +1,21 @@
 // frontend/context/SocketContext.tsx
 import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
+import { Alert } from 'react-native';
 import io, { Socket } from 'socket.io-client';
 import { API_BASE_URL } from '@/constants/Config';
 import { useConversationStore } from '../store/useConversationStore';
 import { useOnlineStore } from '../store/useOnlineStore';
 import { useUser } from './UserContext';
+import { useWebRTC } from '../hooks/useWebRTC';
+import { useCallStore } from '../store/useCallStore';
+import { IncomingCallModal } from '../components/IncomingCallModal';
+import { CallScreen } from '../components/CallScreen';
+import { playRingtone, stopRingtone } from '../utils/webrtcShim';
 
 interface SocketContextType {
   socket: Socket | null;
   isConnected: boolean;
+  startCall?: (target: { id: number; name: string; avatar?: string }, type: 'voice' | 'video') => void;
 }
 
 const SocketContext = createContext<SocketContextType>({
@@ -17,9 +24,21 @@ const SocketContext = createContext<SocketContextType>({
 });
 
 export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user } = useUser();
+  const { user, updateUserInContext } = useUser();
   const [isConnected, setIsConnected] = useState(false);
   const socketRef = useRef<Socket | null>(null);
+
+  // Khởi tạo WebRTC hook toàn cục
+  const webrtc = useWebRTC(
+    socketRef.current,
+    user ? { id: Number(user.id), name: user.name, avatar: user.avatar || undefined } : { id: 0, name: 'Guest' }
+  );
+
+  // Dùng Ref để tránh stale closures khi gọi hàm của WebRTC hook trong socket listener
+  const webrtcRef = useRef(webrtc);
+  useEffect(() => {
+    webrtcRef.current = webrtc;
+  }, [webrtc]);
 
   useEffect(() => {
     if (!user) {
@@ -63,6 +82,22 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
 
     // --- ĐĂNG KÝ BỘ LẮNG NGHE TOÀN CỤC CHO ZUSTAND STORE ---
+
+    socket.on('user_updated', (updatedUser: any) => {
+      console.log('📡 [SOCKET:USER_UPDATED] User updated event received:', updatedUser);
+      if (user && updatedUser && Number(updatedUser.id) === Number(user.id)) {
+        console.log('🔄 [SOCKET:USER_UPDATED] Current user avatar/info updated. Syncing context...');
+        updateUserInContext({
+          ...user,
+          ...updatedUser,
+        });
+      }
+    });
+
+    socket.on('task_assigned_notification', (data: { task: any, message: string }) => {
+      console.log('📡 [SOCKET:TASK_ASSIGNED] Received assignment notification:', data);
+      Alert.alert('Nhiệm vụ mới 📋', data.message || 'Bạn vừa được giao nhiệm vụ mới');
+    });
 
     socket.on('update_online_users', (onlineUsers: any[]) => {
       const onlineUserIds = onlineUsers.map(ou => ou.id);
@@ -132,6 +167,51 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         .catch(e => console.error("Lỗi sync restore:", e));
     });
 
+    // ─── SIGNALING VOICE & VIDEO CALL LISTENERS ───
+
+    socket.on('incoming_call', ({ callerInfo, callType }) => {
+      console.log('📡 [SOCKET:INCOMING_CALL] Cuộc gọi đến từ:', callerInfo?.name);
+      useCallStore.getState().setIncoming(callerInfo, callType);
+      playRingtone();
+    });
+
+    socket.on('call_accepted', () => {
+      console.log('📡 [SOCKET:CALL_ACCEPTED] Đối phương đã đồng ý cuộc gọi. Tiến hành bắt đầu đàm phán WebRTC...');
+      const targetId = useCallStore.getState().targetInfo?.id;
+      if (targetId) {
+        webrtcRef.current.initiateOffer(targetId);
+      }
+    });
+
+    socket.on('call_rejected', () => {
+      console.log('📡 [SOCKET:CALL_REJECTED] Đối phương đã từ chối cuộc gọi');
+      webrtcRef.current.handleHangUp(false);
+      Alert.alert('Từ chối', 'Đối phương hiện không thể nghe máy.');
+    });
+
+    socket.on('offer', ({ offer }) => {
+      webrtcRef.current.handleOffer(offer);
+    });
+
+    socket.on('answer', ({ answer }) => {
+      webrtcRef.current.handleAnswer(answer);
+    });
+
+    socket.on('ice_candidate', ({ candidate }) => {
+      webrtcRef.current.handleIceCandidate(candidate);
+    });
+
+    socket.on('call_ended', () => {
+      console.log('📡 [SOCKET:CALL_ENDED] Đối phương đã cúp máy hoặc kết thúc cuộc gọi');
+      webrtcRef.current.handleHangUp(false);
+    });
+
+    socket.on('user_offline', () => {
+      console.log('📡 [SOCKET:USER_OFFLINE] Đối phương hiện ngoại tuyến');
+      webrtcRef.current.handleHangUp(false);
+      Alert.alert('Ngoại tuyến', 'Người dùng hiện không hoạt động.');
+    });
+
     socket.on('disconnect', (reason) => {
       console.log(`🔴 [GLOBAL_SOCKET:DISCONNECT] Đã ngắt kết nối. Lý do: ${reason}. socket.id: ${socket.id}`);
       setIsConnected(false);
@@ -159,6 +239,8 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       socket.off('reconnect_attempt');
       socket.off('reconnect');
       socket.off('update_online_users');
+      socket.off('user_updated');
+      socket.off('task_assigned_notification');
       socket.off('conversation_seen');
       socket.off('receive_message');
       socket.off('group_added_notify');
@@ -168,6 +250,17 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       socket.off('group_kicked');
       socket.off('conversation_deleted');
       socket.off('conversation_restored');
+      
+      // Dọn dẹp các sự kiện call
+      socket.off('incoming_call');
+      socket.off('call_accepted');
+      socket.off('call_rejected');
+      socket.off('offer');
+      socket.off('answer');
+      socket.off('ice_candidate');
+      socket.off('call_ended');
+      socket.off('user_offline');
+
       socket.disconnect();
       socketRef.current = null;
       setIsConnected(false);
@@ -175,8 +268,22 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, [user]);
 
   return (
-    <SocketContext.Provider value={{ socket: socketRef.current, isConnected }}>
+    <SocketContext.Provider value={{ socket: socketRef.current, isConnected, startCall: webrtc.startCall }}>
       {children}
+      <IncomingCallModal
+        visible={webrtc.callState === 'incoming'}
+        callerInfo={webrtc.callerInfo}
+        callType={webrtc.callType}
+        onAccept={webrtc.acceptCall}
+        onReject={webrtc.rejectCall}
+      />
+      <CallScreen
+        localStream={webrtc.localStream}
+        remoteStream={webrtc.remoteStream}
+        onHangUp={() => webrtc.handleHangUp(true)}
+        onToggleMute={webrtc.toggleMute}
+        onToggleVideo={webrtc.toggleVideo}
+      />
     </SocketContext.Provider>
   );
 };

@@ -10,6 +10,7 @@ import {
   Modal,
   ActivityIndicator,
   Platform,
+  Image,
   Alert
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -32,6 +33,9 @@ interface Task {
   assignee_name?: string;
   assignee_avatar?: string;
   created_by: number | null;
+  creator_name?: string;
+  creator_avatar?: string;
+  creator_role?: string;
   deadline: string | null;
   completed: boolean;
   is_reviewed?: boolean;
@@ -86,6 +90,9 @@ export default function PageTasksScreen() {
   const [formAssignedTo, setFormAssignedTo] = useState<string>('');
   const [submittingTask, setSubmittingTask] = useState(false);
 
+  // Users List for Assignment
+  const [usersList, setUsersList] = useState<any[]>([]);
+
   // Quick Status Edit Dropdown State
   const [quickStatusTask, setQuickStatusTask] = useState<Task | null>(null);
   const [quickPriorityTask, setQuickPriorityTask] = useState<Task | null>(null);
@@ -123,6 +130,27 @@ export default function PageTasksScreen() {
       }
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const fetchUsers = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/users`);
+      const result = await res.json();
+      if (result.status === 'success') {
+        setUsersList(result.data || []);
+      }
+    } catch (err) {
+      console.error('Lỗi tải danh sách User:', err);
+    }
+  };
+
+  const getAssigneeOptions = () => {
+    if (!user) return [];
+    if (user.role === 'admin') {
+      return usersList;
+    } else {
+      return usersList.filter(u => u.role === 'admin' || u.id === user.id);
     }
   };
 
@@ -236,6 +264,7 @@ export default function PageTasksScreen() {
   useEffect(() => {
     fetchTasks();
     fetchWorkspaceDetails();
+    fetchUsers();
   }, [workspaceId, user]);
 
   // Realtime Socket Sync
@@ -258,13 +287,13 @@ export default function PageTasksScreen() {
           if (!exists) {
             return [...prev, updatedTask];
           }
-          return prev.map(t => t.id === updatedTask.id ? updatedTask : t);
+          return prev.map(t => t.id === updatedTask.id ? { ...t, ...updatedTask } : t);
         });
 
         setSelectedTask(prev => {
           if (prev && prev.id === updatedTask.id) {
             fetchActivities(updatedTask.id);
-            return updatedTask;
+            return { ...prev, ...updatedTask };
           }
           return prev;
         });
@@ -767,6 +796,14 @@ export default function PageTasksScreen() {
                 <Ionicons name="options-outline" size={12} color={colors.tabIconDefault} style={{ marginRight: 5 }} />
                 <Text style={[styles.colHeaderText, { color: colors.tabIconDefault }]}>Mức độ</Text>
               </View>
+              <View style={[styles.colHeader, styles.colUser, { borderRightColor: colors.border }]}>
+                <Ionicons name="person-outline" size={12} color={colors.tabIconDefault} style={{ marginRight: 5 }} />
+                <Text style={[styles.colHeaderText, { color: colors.tabIconDefault }]}>Người giao</Text>
+              </View>
+              <View style={[styles.colHeader, styles.colUser, { borderRightColor: colors.border }]}>
+                <Ionicons name="people-outline" size={12} color={colors.tabIconDefault} style={{ marginRight: 5 }} />
+                <Text style={[styles.colHeaderText, { color: colors.tabIconDefault }]}>Người nhận</Text>
+              </View>
               <View style={[styles.colHeader, styles.colReviewed, { borderRightColor: colors.border }]}>
                 <Ionicons name="checkmark-done-outline" size={12} color={colors.tabIconDefault} style={{ marginRight: 5 }} />
                 <Text style={[styles.colHeaderText, { color: colors.tabIconDefault }]}>Duyệt</Text>
@@ -862,6 +899,46 @@ export default function PageTasksScreen() {
                     </TouchableOpacity>
                   </View>
 
+                  {/* Column 3.1: Người giao */}
+                  <View style={[styles.colCell, styles.colUser, { borderRightColor: colors.border }]}>
+                    <View style={styles.assigneeContainer}>
+                      {task.creator_avatar ? (
+                        <Image source={{ uri: task.creator_avatar }} style={styles.assigneeAvatar} />
+                      ) : (
+                        <View style={[styles.assigneeAvatar, { backgroundColor: colors.border, justifyContent: 'center', alignItems: 'center' }]}>
+                          <Text style={{ fontSize: 10, color: colors.text, fontWeight: '700' }}>
+                            {task.creator_name ? task.creator_name.charAt(0).toUpperCase() : '?'}
+                          </Text>
+                        </View>
+                      )}
+                      <Text style={[styles.assigneeNameText, { color: colors.text }]} numberOfLines={1}>
+                        {task.creator_name || 'Không xác định'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {/* Column 3.2: Người nhận */}
+                  <View style={[styles.colCell, styles.colUser, { borderRightColor: colors.border }]}>
+                    {task.assigned_to ? (
+                      <View style={styles.assigneeContainer}>
+                        {task.assignee_avatar ? (
+                          <Image source={{ uri: task.assignee_avatar }} style={styles.assigneeAvatar} />
+                        ) : (
+                          <View style={[styles.assigneeAvatar, { backgroundColor: colors.border, justifyContent: 'center', alignItems: 'center' }]}>
+                            <Text style={{ fontSize: 10, color: colors.text, fontWeight: '700' }}>
+                              {task.assignee_name ? task.assignee_name.charAt(0).toUpperCase() : '?'}
+                            </Text>
+                          </View>
+                        )}
+                        <Text style={[styles.assigneeNameText, { color: colors.text }]} numberOfLines={1}>
+                          {task.assignee_name} {task.assigned_to === user?.id ? '(Tôi)' : ''}
+                        </Text>
+                      </View>
+                    ) : (
+                      <Text style={{ color: colors.tabIconDefault, fontSize: 13, fontStyle: 'italic' }}>Chưa gán</Text>
+                    )}
+                  </View>
+
                   {/* Column 4: Duyệt */}
                   <View style={[styles.colCell, styles.colReviewed, { borderRightColor: colors.border, alignItems: 'center', justifyContent: 'center' }]}>
                     {isAdmin ? (
@@ -949,57 +1026,70 @@ export default function PageTasksScreen() {
             })}
 
             {/* Bottom Row: "+ nhiệm vụ mới" */}
-            {isAdmin && (
-              <View style={[styles.tableRow, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
-                <View style={[styles.colCell, styles.colTitle]}>
-                  {isInlineAdding ? (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', width: '100%' }}>
-                      <TextInput
-                        style={{
-                          flex: 1,
-                          fontSize: 13.5,
-                          fontWeight: '700',
-                          color: colors.text,
-                          paddingVertical: 2,
-                          paddingHorizontal: 6,
-                          borderWidth: 1,
-                          borderColor: colors.tint,
-                          borderRadius: 4,
-                          backgroundColor: colors.background,
-                        }}
-                        autoFocus
-                        placeholder="Nhập tên nhiệm vụ..."
-                        placeholderTextColor={colors.tabIconDefault}
-                        value={inlineTitle}
-                        onChangeText={setInlineTitle}
-                        onSubmitEditing={handleCreateTaskInline}
-                      />
-                      <TouchableOpacity onPress={handleCreateTaskInline} style={{ padding: 4, marginLeft: 4 }}>
-                        <Ionicons name="checkmark-circle" size={20} color="#10b981" />
-                      </TouchableOpacity>
-                      <TouchableOpacity onPress={() => { setIsInlineAdding(false); setInlineTitle(''); }} style={{ padding: 4 }}>
-                        <Ionicons name="close-circle" size={20} color="#ef4444" />
-                      </TouchableOpacity>
-                    </View>
-                  ) : (
-                    <TouchableOpacity
-                      style={{ flexDirection: 'row', alignItems: 'center', width: '100%', paddingVertical: 4 }}
-                      onPress={() => setIsInlineAdding(true)}
-                      activeOpacity={0.6}
-                    >
-                      <Ionicons name="add" size={16} color={colors.tabIconDefault} style={{ marginRight: 6 }} />
-                      <Text style={{ color: colors.tabIconDefault, fontSize: 13.5, fontWeight: '500' }}>nhiệm vụ mới</Text>
+            <View style={[styles.tableRow, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+              <View style={[styles.colCell, styles.colTitle]}>
+                {isInlineAdding ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', width: '100%' }}>
+                    <TextInput
+                      style={{
+                        flex: 1,
+                        fontSize: 13.5,
+                        fontWeight: '700',
+                        color: colors.text,
+                        paddingVertical: 2,
+                        paddingHorizontal: 6,
+                        borderWidth: 1,
+                        borderColor: colors.tint,
+                        borderRadius: 4,
+                        backgroundColor: colors.background,
+                      }}
+                      autoFocus
+                      placeholder="Nhập tên nhiệm vụ..."
+                      placeholderTextColor={colors.tabIconDefault}
+                      value={inlineTitle}
+                      onChangeText={setInlineTitle}
+                      onSubmitEditing={handleCreateTaskInline}
+                    />
+                    <TouchableOpacity onPress={handleCreateTaskInline} style={{ padding: 4, marginLeft: 4 }}>
+                      <Ionicons name="checkmark-circle" size={20} color="#10b981" />
                     </TouchableOpacity>
-                  )}
-                </View>
-                
-                <View style={[styles.colCell, styles.colStatus, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
-                <View style={[styles.colCell, styles.colPriority, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
-                <View style={[styles.colCell, styles.colReviewed, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
-                <View style={[styles.colCell, styles.colUrge, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
-                <View style={[styles.colCell, styles.colDesc, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
+                    <TouchableOpacity onPress={() => { setIsInlineAdding(false); setInlineTitle(''); }} style={{ padding: 4 }}>
+                      <Ionicons name="close-circle" size={20} color="#ef4444" />
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <TouchableOpacity
+                    style={{ flexDirection: 'row', alignItems: 'center', width: '100%', paddingVertical: 4 }}
+                    onPress={() => {
+                      if (isAdmin) {
+                        setIsInlineAdding(true);
+                      } else {
+                        // For standard users, open Modal immediately to let them select assignee
+                        setFormTitle('');
+                        setFormDesc('');
+                        setFormStatus('todo');
+                        setFormPriority('medium');
+                        setFormAssignedTo('');
+                        setSelectedTask(null);
+                        setIsTaskModalOpen(true);
+                      }
+                    }}
+                    activeOpacity={0.6}
+                  >
+                    <Ionicons name="add" size={16} color={colors.tabIconDefault} style={{ marginRight: 6 }} />
+                    <Text style={{ color: colors.tabIconDefault, fontSize: 13.5, fontWeight: '500' }}>nhiệm vụ mới</Text>
+                  </TouchableOpacity>
+                )}
               </View>
-            )}
+              
+              <View style={[styles.colCell, styles.colStatus, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
+              <View style={[styles.colCell, styles.colPriority, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
+              <View style={[styles.colCell, styles.colUser, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
+              <View style={[styles.colCell, styles.colUser, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
+              <View style={[styles.colCell, styles.colReviewed, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
+              <View style={[styles.colCell, styles.colUrge, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
+              <View style={[styles.colCell, styles.colDesc, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
+            </View>
           </ScrollView>
         </ScrollView>
       )}
@@ -1108,12 +1198,20 @@ export default function PageTasksScreen() {
 
               <Text style={[styles.formLabel, { color: colors.text }]}>Tên nhiệm vụ *</Text>
               <TextInput
-                style={[styles.formInput, { color: colors.text, borderColor: colors.border, backgroundColor: isAdmin ? colors.background : colors.card, opacity: isAdmin ? 1 : 0.6 }]}
+                style={[
+                  styles.formInput, 
+                  { 
+                    color: colors.text, 
+                    borderColor: colors.border, 
+                    backgroundColor: (!selectedTask || isAdmin) ? colors.background : colors.card, 
+                    opacity: (!selectedTask || isAdmin) ? 1 : 0.6 
+                  }
+                ]}
                 placeholder="Nhập tên nhiệm vụ..."
                 placeholderTextColor={colors.tabIconDefault}
                 value={formTitle}
                 onChangeText={setFormTitle}
-                editable={isAdmin}
+                editable={!selectedTask || isAdmin}
               />
 
               <Text style={[styles.formLabel, { color: colors.text }]}>Mô tả</Text>
@@ -1126,6 +1224,76 @@ export default function PageTasksScreen() {
                 multiline
                 numberOfLines={3}
               />
+
+              {/* Assignee Selection */}
+              {(!selectedTask || isAdmin) && (
+                <View style={{ marginBottom: 12 }}>
+                  <Text style={[styles.formLabel, { color: colors.text, marginBottom: 6 }]}>Người nhận việc *</Text>
+                  {getAssigneeOptions().length === 0 ? (
+                    <Text style={{ color: colors.tabIconDefault, fontSize: 13, fontStyle: 'italic' }}>
+                      Không tìm thấy người nhận phù hợp.
+                    </Text>
+                  ) : (
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexDirection: 'row', paddingVertical: 4 }}>
+                      {isAdmin && (
+                        <TouchableOpacity
+                          style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            paddingHorizontal: 12,
+                            paddingVertical: 6,
+                            borderRadius: 20,
+                            borderWidth: 1,
+                            borderColor: formAssignedTo === '' ? colors.tint : colors.border,
+                            backgroundColor: formAssignedTo === '' ? colors.tint + '15' : colors.card,
+                            marginRight: 8,
+                          }}
+                          onPress={() => setFormAssignedTo('')}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={{ fontSize: 12.5, color: colors.text, fontWeight: formAssignedTo === '' ? '700' : '500' }}>Không gán</Text>
+                        </TouchableOpacity>
+                      )}
+                      
+                      {getAssigneeOptions().map((u) => {
+                        const isSelected = String(u.id) === formAssignedTo;
+                        return (
+                          <TouchableOpacity
+                            key={u.id}
+                            style={{
+                              flexDirection: 'row',
+                              alignItems: 'center',
+                              paddingHorizontal: 12,
+                              paddingVertical: 6,
+                              borderRadius: 20,
+                              borderWidth: 1,
+                              borderColor: isSelected ? colors.tint : colors.border,
+                              backgroundColor: isSelected ? colors.tint + '15' : colors.card,
+                              marginRight: 8,
+                              gap: 6
+                            }}
+                            onPress={() => setFormAssignedTo(isSelected ? '' : String(u.id))}
+                            activeOpacity={0.7}
+                          >
+                            {u.avatar ? (
+                              <Image source={{ uri: u.avatar }} style={{ width: 18, height: 18, borderRadius: 9 }} />
+                            ) : (
+                              <View style={{ width: 18, height: 18, borderRadius: 9, backgroundColor: colors.border, justifyContent: 'center', alignItems: 'center' }}>
+                                <Text style={{ fontSize: 9, color: colors.text, fontWeight: '700' }}>
+                                  {u.name ? u.name.charAt(0).toUpperCase() : '?'}
+                                </Text>
+                              </View>
+                            )}
+                            <Text style={{ fontSize: 12.5, color: colors.text, fontWeight: isSelected ? '700' : '500' }}>
+                              {u.name} {u.id === user?.id ? '(Tôi)' : ''}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </ScrollView>
+                  )}
+                </View>
+              )}
 
               <View style={styles.formRow}>
                 <View style={{ flex: 1, marginRight: 8 }}>
@@ -1281,6 +1449,51 @@ export default function PageTasksScreen() {
                     </View>
                   </View>
                 )}
+
+                {/* Meta Row 1: Assignor & Assignee */}
+                <View style={[styles.detailMetaRow, { marginBottom: 12 }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.detailLabel, { color: colors.tabIconDefault }]}>NGƯỜI GIAO VIỆC</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6 }}>
+                      {selectedTask.creator_avatar ? (
+                        <Image source={{ uri: selectedTask.creator_avatar }} style={{ width: 24, height: 24, borderRadius: 12, marginRight: 8 }} />
+                      ) : (
+                        <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: colors.border, justifyContent: 'center', alignItems: 'center', marginRight: 8 }}>
+                          <Text style={{ fontSize: 12, color: colors.text, fontWeight: '700' }}>
+                            {selectedTask.creator_name ? selectedTask.creator_name.charAt(0).toUpperCase() : '?'}
+                          </Text>
+                        </View>
+                      )}
+                      <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
+                        {selectedTask.creator_name || 'Không xác định'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={{ flex: 1, paddingLeft: 8 }}>
+                    <Text style={[styles.detailLabel, { color: colors.tabIconDefault }]}>NGƯỜI NHẬN VIỆC</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6 }}>
+                      {selectedTask.assigned_to ? (
+                        <>
+                          {selectedTask.assignee_avatar ? (
+                            <Image source={{ uri: selectedTask.assignee_avatar }} style={{ width: 24, height: 24, borderRadius: 12, marginRight: 8 }} />
+                          ) : (
+                            <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: colors.border, justifyContent: 'center', alignItems: 'center', marginRight: 8 }}>
+                              <Text style={{ fontSize: 12, color: colors.text, fontWeight: '700' }}>
+                                {selectedTask.assignee_name ? selectedTask.assignee_name.charAt(0).toUpperCase() : '?'}
+                              </Text>
+                            </View>
+                          )}
+                          <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
+                            {selectedTask.assignee_name} {selectedTask.assigned_to === user?.id ? '(Tôi)' : ''}
+                          </Text>
+                        </>
+                      ) : (
+                        <Text style={{ color: colors.tabIconDefault, fontSize: 13, fontStyle: 'italic' }}>Chưa gán</Text>
+                      )}
+                    </View>
+                  </View>
+                </View>
 
                 {/* Meta Row 2: Timestamps */}
                 <View style={styles.detailMetaRow}>
@@ -1836,7 +2049,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     paddingVertical: 8,
     width: '100%',
-    minWidth: 750,
+    minWidth: 1070,
   },
   colHeader: {
     flexDirection: 'row',
@@ -1853,7 +2066,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     alignItems: 'center',
     width: '100%',
-    minWidth: 750,
+    minWidth: 1070,
   },
 colCell: {
     flexDirection: 'row',     // Thêm dòng này để các phần tử nằm ngang hàng

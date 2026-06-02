@@ -33,6 +33,9 @@ interface Task {
   assignee_name?: string;
   assignee_avatar?: string;
   created_by: number | null;
+  creator_name?: string;
+  creator_avatar?: string;
+  creator_role?: string;
   deadline: string | null;
   completed: boolean;
   created_at: string;
@@ -43,6 +46,7 @@ interface UserListItem {
   id: number;
   name: string;
   avatar: string | null;
+  role?: string;
 }
 
 export default function PageTasksScreen() {
@@ -133,6 +137,15 @@ export default function PageTasksScreen() {
     }
   };
 
+  const getAssigneeOptions = () => {
+    if (!user) return [];
+    if (user.role === 'admin') {
+      return usersList;
+    } else {
+      return usersList.filter(u => u.role === 'admin' || u.id === user.id);
+    }
+  };
+
   useEffect(() => {
     fetchTasks();
     fetchPageName();
@@ -162,12 +175,12 @@ export default function PageTasksScreen() {
           if (user?.role !== 'admin' && updatedTask.assigned_to !== user?.id) {
             return prev.filter(t => t.id !== updatedTask.id);
           }
-          return prev.map(t => t.id === updatedTask.id ? updatedTask : t);
+          return prev.map(t => t.id === updatedTask.id ? { ...t, ...updatedTask } : t);
         });
 
         setSelectedTask(prev => {
           if (prev && prev.id === updatedTask.id) {
-            return updatedTask;
+            return { ...prev, ...updatedTask };
           }
           return prev;
         });
@@ -475,16 +488,14 @@ export default function PageTasksScreen() {
         {/* Right New button (Mới) */}
         <View style={styles.tabsRight}>
           <Ionicons name="search-outline" size={16} color={colors.tabIconDefault} style={{ marginRight: 12 }} />
-          {isAdmin && (
-            <TouchableOpacity
-              style={styles.notionNewBtn}
-              onPress={handleOpenCreateModal}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.notionNewBtnText}>Mới</Text>
-              <Ionicons name="chevron-down" size={12} color="#ffffff" style={{ marginLeft: 4 }} />
-            </TouchableOpacity>
-          )}
+          <TouchableOpacity
+            style={styles.notionNewBtn}
+            onPress={handleOpenCreateModal}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.notionNewBtnText}>Mới</Text>
+            <Ionicons name="chevron-down" size={12} color="#ffffff" style={{ marginLeft: 4 }} />
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -506,6 +517,10 @@ export default function PageTasksScreen() {
               <View style={[styles.colHeader, styles.colStatus, { borderRightColor: colors.border }]}>
                 <Ionicons name="ellipse-outline" size={12} color={colors.tabIconDefault} style={{ marginRight: 5 }} />
                 <Text style={[styles.colHeaderText, { color: colors.tabIconDefault }]}>Trạng thái</Text>
+              </View>
+              <View style={[styles.colHeader, styles.colUser, { borderRightColor: colors.border }]}>
+                <Ionicons name="person-outline" size={12} color={colors.tabIconDefault} style={{ marginRight: 5 }} />
+                <Text style={[styles.colHeaderText, { color: colors.tabIconDefault }]}>Người giao</Text>
               </View>
               <View style={[styles.colHeader, styles.colUser, { borderRightColor: colors.border }]}>
                 <Ionicons name="people-outline" size={12} color={colors.tabIconDefault} style={{ marginRight: 5 }} />
@@ -583,6 +598,24 @@ export default function PageTasksScreen() {
                     </TouchableOpacity>
                   </View>
 
+                  {/* Column 2.5: Người giao */}
+                  <View style={[styles.colCell, styles.colUser, { borderRightColor: colors.border }]}>
+                    <View style={styles.assigneeContainer}>
+                      {task.creator_avatar ? (
+                        <Image source={{ uri: task.creator_avatar }} style={styles.assigneeAvatar} />
+                      ) : (
+                        <View style={[styles.assigneeAvatar, { backgroundColor: colors.border, justifyContent: 'center', alignItems: 'center' }]}>
+                          <Text style={{ fontSize: 10, color: colors.text, fontWeight: '700' }}>
+                            {task.creator_name ? task.creator_name.charAt(0).toUpperCase() : '?'}
+                          </Text>
+                        </View>
+                      )}
+                      <Text style={[styles.assigneeNameText, { color: colors.text }]} numberOfLines={1}>
+                        {task.creator_name || 'Không xác định'}
+                      </Text>
+                    </View>
+                  </View>
+
                   {/* Column 3: Người được giao */}
                   <View style={[styles.colCell, styles.colUser, { borderRightColor: colors.border }]}>
                     {task.assigned_to ? (
@@ -592,7 +625,7 @@ export default function PageTasksScreen() {
                           style={styles.assigneeAvatar}
                         />
                         <Text style={[styles.assigneeNameText, { color: colors.text }]} numberOfLines={1}>
-                          {task.assignee_name}
+                          {task.assignee_name} {task.assigned_to === user?.id ? '(Tôi)' : ''}
                         </Text>
                       </View>
                     ) : (
@@ -631,25 +664,24 @@ export default function PageTasksScreen() {
             })}
 
             {/* Bottom Row: "+ nhiệm vụ mới" (Matches the first column button) */}
-            {isAdmin && (
-              <View style={[styles.tableRow, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
-                <TouchableOpacity
-                  style={[styles.colCell, styles.colTitle, { flexDirection: 'row', alignItems: 'center', paddingVertical: 10 }]}
-                  onPress={handleOpenCreateModal}
-                  activeOpacity={0.6}
-                >
-                  <Ionicons name="add" size={16} color={colors.tabIconDefault} style={{ marginRight: 6 }} />
-                  <Text style={{ color: colors.tabIconDefault, fontSize: 13.5, fontWeight: '500' }}>nhiệm vụ mới</Text>
-                </TouchableOpacity>
-                
-                {/* Empty placeholders to fill border grids */}
-                <View style={[styles.colCell, styles.colStatus, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
-                <View style={[styles.colCell, styles.colUser, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
-                <View style={[styles.colCell, styles.colDeadline, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
-                <View style={[styles.colCell, styles.colPriority, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
-                <View style={[styles.colCell, styles.colDesc, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
-              </View>
-            )}
+            <View style={[styles.tableRow, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+              <TouchableOpacity
+                style={[styles.colCell, styles.colTitle, { flexDirection: 'row', alignItems: 'center', paddingVertical: 10 }]}
+                onPress={handleOpenCreateModal}
+                activeOpacity={0.6}
+              >
+                <Ionicons name="add" size={16} color={colors.tabIconDefault} style={{ marginRight: 6 }} />
+                <Text style={{ color: colors.tabIconDefault, fontSize: 13.5, fontWeight: '500' }}>nhiệm vụ mới</Text>
+              </TouchableOpacity>
+              
+              {/* Empty placeholders to fill border grids */}
+              <View style={[styles.colCell, styles.colStatus, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
+              <View style={[styles.colCell, styles.colUser, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
+              <View style={[styles.colCell, styles.colUser, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
+              <View style={[styles.colCell, styles.colDeadline, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
+              <View style={[styles.colCell, styles.colPriority, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
+              <View style={[styles.colCell, styles.colDesc, { borderLeftWidth: 1, borderLeftColor: colors.border }]} />
+            </View>
           </ScrollView>
         </ScrollView>
       )}
@@ -718,11 +750,20 @@ export default function PageTasksScreen() {
               {/* Title */}
               <Text style={[styles.formLabel, { color: colors.text }]}>Tên nhiệm vụ *</Text>
               <TextInput
-                style={[styles.formInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.background }]}
+                style={[
+                  styles.formInput, 
+                  { 
+                    color: colors.text, 
+                    borderColor: colors.border, 
+                    backgroundColor: (!selectedTask || isAdmin) ? colors.background : colors.card,
+                    opacity: (!selectedTask || isAdmin) ? 1 : 0.6
+                  }
+                ]}
                 placeholder="Nhập tên nhiệm vụ..."
                 placeholderTextColor={colors.tabIconDefault}
                 value={formTitle}
                 onChangeText={setFormTitle}
+                editable={!selectedTask || isAdmin}
               />
 
               {/* Description */}
@@ -777,34 +818,40 @@ export default function PageTasksScreen() {
               </View>
 
               {/* Assignee Selection */}
-              <Text style={[styles.formLabel, { color: colors.text }]}>Người được giao</Text>
-              <View style={[styles.pickerContainer, { borderColor: colors.border, backgroundColor: colors.background, marginBottom: 12 }]}>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ paddingVertical: 4 }}>
-                  <TouchableOpacity
-                    style={[
-                      styles.assigneeOption,
-                      formAssignedTo === '' && { backgroundColor: colors.tint + '20', borderColor: colors.tint }
-                    ]}
-                    onPress={() => setFormAssignedTo('')}
-                  >
-                    <Text style={{ fontSize: 12, color: formAssignedTo === '' ? colors.tint : colors.text, fontWeight: '600' }}>Không gán</Text>
-                  </TouchableOpacity>
-                  
-                  {usersList.map(u => (
-                    <TouchableOpacity
-                      key={u.id}
-                      style={[
-                        styles.assigneeOption,
-                        formAssignedTo === String(u.id) && { backgroundColor: colors.tint + '20', borderColor: colors.tint }
-                      ]}
-                      onPress={() => setFormAssignedTo(String(u.id))}
-                    >
-                      <Image source={{ uri: u.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=50&h=50&q=80' }} style={styles.optionAvatar} />
-                      <Text style={{ fontSize: 12, color: formAssignedTo === String(u.id) ? colors.tint : colors.text, fontWeight: '600' }}>{u.name}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
+              {(!selectedTask || isAdmin) && (
+                <>
+                  <Text style={[styles.formLabel, { color: colors.text }]}>Người được giao</Text>
+                  <View style={[styles.pickerContainer, { borderColor: colors.border, backgroundColor: colors.background, marginBottom: 12 }]}>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ paddingVertical: 4 }}>
+                      {isAdmin && (
+                        <TouchableOpacity
+                          style={[
+                            styles.assigneeOption,
+                            formAssignedTo === '' && { backgroundColor: colors.tint + '20', borderColor: colors.tint }
+                          ]}
+                          onPress={() => setFormAssignedTo('')}
+                        >
+                          <Text style={{ fontSize: 12, color: formAssignedTo === '' ? colors.tint : colors.text, fontWeight: '600' }}>Không gán</Text>
+                        </TouchableOpacity>
+                      )}
+                      
+                      {getAssigneeOptions().map(u => (
+                        <TouchableOpacity
+                          key={u.id}
+                          style={[
+                            styles.assigneeOption,
+                            formAssignedTo === String(u.id) && { backgroundColor: colors.tint + '20', borderColor: colors.tint }
+                          ]}
+                          onPress={() => setFormAssignedTo(String(u.id))}
+                        >
+                          <Image source={{ uri: u.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=50&h=50&q=80' }} style={styles.optionAvatar} />
+                          <Text style={{ fontSize: 12, color: formAssignedTo === String(u.id) ? colors.tint : colors.text, fontWeight: '600' }}>{u.name} {u.id === user?.id ? '(Tôi)' : ''}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                </>
+              )}
 
               {/* Deadline */}
               <Text style={[styles.formLabel, { color: colors.text }]}>Hạn chót (YYYY-MM-DD)</Text>
@@ -900,22 +947,44 @@ export default function PageTasksScreen() {
 
                 <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
-                {/* Meta Row 1: Assignee */}
-                <View style={{ marginBottom: 14 }}>
-                  <Text style={[styles.detailLabel, { color: colors.tabIconDefault }]}>NGƯỜI ĐƯỢC GIAO</Text>
-                  {selectedTask.assigned_to ? (
-                    <View style={[styles.assigneeContainer, { marginTop: 4 }]}>
-                      <Image
-                        source={{ uri: selectedTask.assignee_avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=50&h=50&q=80' }}
-                        style={styles.assigneeAvatar}
-                      />
-                      <Text style={[styles.assigneeNameText, { color: colors.text }]}>
-                        {selectedTask.assignee_name}
+                {/* Meta Row 1: Assignor & Assignee */}
+                <View style={[styles.detailMetaRow, { marginBottom: 12 }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.detailLabel, { color: colors.tabIconDefault }]}>NGƯỜI GIAO VIỆC</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6 }}>
+                      {selectedTask.creator_avatar ? (
+                        <Image source={{ uri: selectedTask.creator_avatar }} style={{ width: 24, height: 24, borderRadius: 12, marginRight: 8 }} />
+                      ) : (
+                        <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: colors.border, justifyContent: 'center', alignItems: 'center', marginRight: 8 }}>
+                          <Text style={{ fontSize: 12, color: colors.text, fontWeight: '700' }}>
+                            {selectedTask.creator_name ? selectedTask.creator_name.charAt(0).toUpperCase() : '?'}
+                          </Text>
+                        </View>
+                      )}
+                      <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
+                        {selectedTask.creator_name || 'Không xác định'}
                       </Text>
                     </View>
-                  ) : (
-                    <Text style={{ color: colors.text, fontSize: 13, marginTop: 4 }}>Chưa có ai</Text>
-                  )}
+                  </View>
+
+                  <View style={{ flex: 1, paddingLeft: 8 }}>
+                    <Text style={[styles.detailLabel, { color: colors.tabIconDefault }]}>NGƯỜI NHẬN VIỆC</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6 }}>
+                      {selectedTask.assigned_to ? (
+                        <>
+                          <Image
+                            source={{ uri: selectedTask.assignee_avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=50&h=50&q=80' }}
+                            style={{ width: 24, height: 24, borderRadius: 12, marginRight: 8 }}
+                          />
+                          <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
+                            {selectedTask.assignee_name} {selectedTask.assigned_to === user?.id ? '(Tôi)' : ''}
+                          </Text>
+                        </>
+                      ) : (
+                        <Text style={{ color: colors.tabIconDefault, fontSize: 13, fontStyle: 'italic' }}>Chưa gán</Text>
+                      )}
+                    </View>
+                  </View>
                 </View>
 
                 {/* Meta Row 2: Timestamps */}

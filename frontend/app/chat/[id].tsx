@@ -46,7 +46,7 @@ export default function ChatRoomScreen() {
   const colors = Colors[colorScheme ?? 'light'];
   const insets = useSafeAreaInsets();
   const { user } = useUser();
-  const { socket } = useSocket();
+  const { socket, startCall } = useSocket();
 
   const currentUser = user || {
     id: 1,
@@ -1059,6 +1059,53 @@ export default function ChatRoomScreen() {
                   : (isOnline ? '🟢 Đang hoạt động' : '⚪ Ngoại tuyến')}
               </Text>
             </View>
+
+            {activeThread && activeThread.type === 'direct' && activeThread.otherUser && (
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <TouchableOpacity 
+                  style={{ padding: 8, marginRight: 4 }} 
+                  onPress={() => {
+                    if (!isOnline) {
+                      Alert.alert("Ngoại tuyến", "Người dùng này hiện không trực tuyến.");
+                      return;
+                    }
+                    if (startCall) {
+                      startCall(
+                        {
+                          id: Number(activeThread.otherUser!.user_id),
+                          name: activeThread.otherUser!.name,
+                          avatar: activeThread.otherUser!.avatar
+                        },
+                        'voice'
+                      );
+                    }
+                  }}
+                >
+                  <Ionicons name="call" size={20} color={colors.tint} />
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  style={{ padding: 8, marginRight: 8 }} 
+                  onPress={() => {
+                    if (!isOnline) {
+                      Alert.alert("Ngoại tuyến", "Người dùng này hiện không trực tuyến.");
+                      return;
+                    }
+                    if (startCall) {
+                      startCall(
+                        {
+                          id: Number(activeThread.otherUser!.user_id),
+                          name: activeThread.otherUser!.name,
+                          avatar: activeThread.otherUser!.avatar
+                        },
+                        'video'
+                      );
+                    }
+                  }}
+                >
+                  <Ionicons name="videocam" size={22} color={colors.tint} />
+                </TouchableOpacity>
+              </View>
+            )}
 
             {activeThread && (
               <TouchableOpacity 
