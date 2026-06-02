@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useCallStore } from '../store/useCallStore';
 import { CallVideoView } from './CallVideoView';
 import { CallControls } from './CallControls';
+import { CallAudioPlayer } from './CallAudioPlayer';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -63,41 +64,47 @@ export const CallScreen: React.FC<CallScreenProps> = ({
   const peerInfo = targetInfo || callerInfo;
   if (!peerInfo) return null;
 
+  const audioPlayer = callType === 'voice' && <CallAudioPlayer stream={remoteStream} />;
+
   // ──── CHẾ ĐỘ THU NHỎ (MINIMIZED PIP WINDOW) ────
   if (isMinimized) {
     return (
-      <TouchableOpacity
-        style={styles.minimizedContainer}
-        onPress={toggleMinimize}
-        activeOpacity={0.9}
-      >
-        {callType === 'video' && remoteStream ? (
-          <View style={styles.minimizedVideoWrapper}>
-            <CallVideoView stream={remoteStream} />
-            <View style={styles.minimizedOverlayIndicator}>
-              <Ionicons name="videocam" size={12} color="#fff" />
+      <>
+        {audioPlayer}
+        <TouchableOpacity
+          style={styles.minimizedContainer}
+          onPress={toggleMinimize}
+          activeOpacity={0.9}
+        >
+          {callType === 'video' && remoteStream ? (
+            <View style={styles.minimizedVideoWrapper}>
+              <CallVideoView stream={remoteStream} />
+              <View style={styles.minimizedOverlayIndicator}>
+                <Ionicons name="videocam" size={12} color="#fff" />
+              </View>
             </View>
-          </View>
-        ) : (
-          <View style={styles.minimizedAudioWrapper}>
-            <Image
-              source={{
-                uri: peerInfo.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150&q=80',
-              }}
-              style={styles.minimizedAvatar}
-            />
-            <View style={styles.minimizedAudioPulse}>
-              <ActivityIndicator size="small" color="#3b82f6" />
+          ) : (
+            <View style={styles.minimizedAudioWrapper}>
+              <Image
+                source={{
+                  uri: peerInfo.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150&q=80',
+                }}
+                style={styles.minimizedAvatar}
+              />
+              <View style={styles.minimizedAudioPulse}>
+                <ActivityIndicator size="small" color="#3b82f6" />
+              </View>
             </View>
-          </View>
-        )}
-      </TouchableOpacity>
+          )}
+        </TouchableOpacity>
+      </>
     );
   }
 
   // ──── CHẾ ĐỘ TOÀN MÀN HÌNH (FULLSCREEN MODE) ────
   return (
     <SafeAreaView style={styles.fullscreenContainer}>
+      {audioPlayer}
       {/* 1. Thanh công cụ đầu màn hình */}
       <View style={styles.topHeader}>
         <TouchableOpacity style={styles.headerBtn} onPress={toggleMinimize}>

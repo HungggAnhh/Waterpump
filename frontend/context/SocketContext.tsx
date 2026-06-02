@@ -170,16 +170,19 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     // ─── SIGNALING VOICE & VIDEO CALL LISTENERS ───
 
     socket.on('incoming_call', ({ callerInfo, callType, conversationId }) => {
-      console.log('📡 [SOCKET:INCOMING_CALL] Cuộc gọi đến từ:', callerInfo?.name);
+      console.log('📡 [SOCKET:INCOMING_CALL] Cuộc gọi đến từ:', callerInfo?.name, 'Kiểu:', callType, 'ConvID:', conversationId);
       useCallStore.getState().setIncoming(callerInfo, callType, conversationId);
       playRingtone();
     });
 
     socket.on('call_accepted', () => {
-      console.log('📡 [SOCKET:CALL_ACCEPTED] Đối phương đã đồng ý cuộc gọi. Tiến hành bắt đầu đàm phán WebRTC...');
+      console.log('📡 [SOCKET:CALL_ACCEPTED] Đối phương đã đồng ý cuộc gọi. Tiến hành khởi tạo Offer...');
       const targetId = useCallStore.getState().targetInfo?.id;
       if (targetId) {
+        console.log('📡 [SOCKET:CALL_ACCEPTED] Bắt đầu gọi initiateOffer gửi tới targetId:', targetId);
         webrtcRef.current.initiateOffer(targetId);
+      } else {
+        console.error('📡 [SOCKET:CALL_ACCEPTED] Không tìm thấy targetId trong store!');
       }
     });
 
@@ -190,14 +193,17 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
 
     socket.on('offer', ({ offer }) => {
+      console.log('📡 [SOCKET:OFFER] Nhận được SDP Offer từ đối phương. Tiến hành xử lý...');
       webrtcRef.current.handleOffer(offer);
     });
 
     socket.on('answer', ({ answer }) => {
+      console.log('📡 [SOCKET:ANSWER] Nhận được SDP Answer từ đối phương. Tiến hành xử lý...');
       webrtcRef.current.handleAnswer(answer);
     });
 
     socket.on('ice_candidate', ({ candidate }) => {
+      // console.log('📡 [SOCKET:ICE_CANDIDATE] Nhận được ICE Candidate từ đối phương.');
       webrtcRef.current.handleIceCandidate(candidate);
     });
 
