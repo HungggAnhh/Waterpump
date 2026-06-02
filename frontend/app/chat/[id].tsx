@@ -1065,10 +1065,6 @@ export default function ChatRoomScreen() {
                 <TouchableOpacity 
                   style={{ padding: 8, marginRight: 4 }} 
                   onPress={() => {
-                    if (!isOnline) {
-                      Alert.alert("Ngoại tuyến", "Người dùng này hiện không trực tuyến.");
-                      return;
-                    }
                     if (startCall) {
                       startCall(
                         {
@@ -1087,10 +1083,6 @@ export default function ChatRoomScreen() {
                 <TouchableOpacity 
                   style={{ padding: 8, marginRight: 8 }} 
                   onPress={() => {
-                    if (!isOnline) {
-                      Alert.alert("Ngoại tuyến", "Người dùng này hiện không trực tuyến.");
-                      return;
-                    }
                     if (startCall) {
                       startCall(
                         {
