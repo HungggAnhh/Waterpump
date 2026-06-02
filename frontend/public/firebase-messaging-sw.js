@@ -110,6 +110,11 @@ self.addEventListener('notificationclick', (event) => {
     }
   }
 
+  if (action === 'answer') {
+    console.log('[firebase-messaging-sw.js] Người dùng bấm Trả lời từ thông báo đẩy. Thêm cờ autoAnswer=true');
+    relativeUrl += (relativeUrl.includes('?') ? '&' : '?') + 'autoAnswer=true';
+  }
+
   // Ép trình duyệt mở trang chủ kèm tham số query ?redirect để tránh lỗi Vercel 404
   const redirectUrl = new URL('/?redirect=' + encodeURIComponent(relativeUrl), self.location.origin).href;
 

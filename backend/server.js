@@ -93,6 +93,28 @@ io.on('connection', (socket) => {
       console.log(`🟢 ${user.name} ONLINE → phòng user_${user.id}`);
 
       io.emit('update_online_users', Array.from(onlineUsers.values()));
+
+      // Kiểm tra nếu user này đang có một phiên cuộc gọi đang đổ chuông chờ (chưa kết nối)
+      const userIdStr = String(user.id);
+      const userIdNum = Number(user.id);
+      const session = activeCalls.get(userIdStr) || activeCalls.get(userIdNum);
+      
+      if (session && !session.startTime) {
+        console.log(`📡 [RESILIENCE] Phát hiện user ${user.id} vừa online và có cuộc gọi đang chờ từ ${session.peerId}. Gửi incoming_call hối thúc...`);
+        const caller = onlineUsers.get(session.peerId) || onlineUsers.get(Number(session.peerId)) || onlineUsers.get(String(session.peerId));
+        const callerInfo = {
+          id: session.peerId,
+          name: caller ? caller.name : 'Đồng nghiệp',
+          avatar: caller ? caller.avatar : null
+        };
+        
+        socket.emit('incoming_call', {
+          callerInfo,
+          callType: session.callType,
+          fromUserId: session.peerId,
+          conversationId: session.conversationId
+        });
+      }
     }
   });
 

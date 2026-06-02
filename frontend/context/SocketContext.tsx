@@ -173,6 +173,33 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       console.log('📡 [SOCKET:INCOMING_CALL] Cuộc gọi đến từ:', callerInfo?.name, 'Kiểu:', callType, 'ConvID:', conversationId);
       useCallStore.getState().setIncoming(callerInfo, callType, conversationId);
       playRingtone();
+
+      // Tự động đồng ý nhận cuộc gọi nếu có cờ autoAnswer=true trên URL
+      if (typeof window !== 'undefined' && window.location) {
+        const urlParams = new URLSearchParams(window.location.search);
+        const redirectParam = urlParams.get('redirect');
+        const hasAutoAnswer = urlParams.get('autoAnswer') === 'true' || 
+                              (redirectParam && redirectParam.includes('autoAnswer=true')) ||
+                              window.location.href.includes('autoAnswer=true');
+        
+        if (hasAutoAnswer) {
+          console.log('🔌 [SocketContext] Phát hiện yêu cầu tự động trả lời cuộc gọi (autoAnswer=true)! Chấp nhận ngay...');
+          setTimeout(() => {
+            if (webrtcRef.current) {
+              webrtcRef.current.acceptCall();
+              // Dọn sạch cờ autoAnswer trên URL để tránh tự động trả lời lặp lại
+              try {
+                const newUrl = window.location.href
+                  .replace(/([&?])autoAnswer=true&?/, '$1')
+                  .replace(/redirect=[^&]+/, (m) => m.replace(/%26autoAnswer%3Dtrue|%3FautoAnswer%3Dtrue|([&?])autoAnswer=true&?/, '$1'));
+                window.history.replaceState({}, '', newUrl);
+              } catch (e) {
+                console.error('Lỗi dọn dẹp URL autoAnswer:', e);
+              }
+            }
+          }, 800);
+        }
+      }
     });
 
     socket.on('call_accepted', () => {
