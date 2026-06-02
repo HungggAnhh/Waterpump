@@ -30,8 +30,8 @@ const getAuthUser = (req) => {
       console.warn("⚠️ JWT verification failed:", e.message);
     }
   }
-  const fallbackId = parseInt(req.query.user_id || req.body.user_id);
-  const fallbackRole = req.query.user_role || req.body.user_role || 'user';
+  const fallbackId = parseInt(req.query.user_id || (req.body && req.body.user_id));
+  const fallbackRole = req.query.user_role || (req.body && req.body.user_role) || 'user';
   if (fallbackId) {
     return { id: fallbackId, role: fallbackRole };
   }
@@ -154,9 +154,12 @@ router.get('/workspaces/:workspaceId/tasks', async (req, res) => {
 
   try {
     let result = await query(
-      `SELECT t.*, u.name AS assignee_name, u.avatar AS assignee_avatar 
+      `SELECT t.*, 
+              u.name AS assignee_name, u.avatar AS assignee_avatar,
+              c.name AS creator_name, c.avatar AS creator_avatar 
        FROM tasks t 
        LEFT JOIN users u ON t.assigned_to = u.id 
+       LEFT JOIN users c ON t.created_by = c.id
        WHERE t.workspace_id = $1 
        ORDER BY t.id ASC`,
       [workspaceId]
@@ -167,11 +170,11 @@ router.get('/workspaces/:workspaceId/tasks', async (req, res) => {
   }
 });
 
-// 4. POST /api/tasks/tasks — Tạo nhiệm vụ mới (chỉ Admin)
+// 4. POST /api/tasks/tasks — Tạo nhiệm vụ mới (Hỗ trợ phân quyền Giao việc Nhân viên -> Admin/Self)
 router.post('/tasks', async (req, res) => {
   const user = getAuthUser(req);
-  if (!user || user.role !== 'admin') {
-    return res.status(403).json({ status: 'error', message: 'Chỉ có Quản trị viên mới được tạo nhiệm vụ.' });
+  if (!user) {
+    return res.status(401).json({ status: 'error', message: 'Không thể xác thực người dùng.' });
   }
 
   const { workspace_id, title, description, status = 'todo', priority = 'medium', assigned_to, deadline } = req.body;
@@ -180,9 +183,32 @@ router.post('/tasks', async (req, res) => {
     return res.status(400).json({ status: 'error', message: 'Vui lòng cung cấp tiêu đề và mã trang.' });
   }
 
-  try {
-    let finalAssignedTo = assigned_to ? parseInt(assigned_to) : null;
+  let finalAssignedTo = assigned_to ? parseInt(assigned_to) : null;
 
+  // Ràng buộc phân quyền giao việc:
+  if (user.role !== 'admin') {
+    if (!finalAssignedTo) {
+      return res.status(400).json({ status: 'error', message: 'Nhân viên bắt buộc phải chọn người nhận việc.' });
+    }
+    try {
+      const targetUserRes = await query('SELECT role FROM users WHERE id = $1 LIMIT 1', [finalAssignedTo]);
+      if (targetUserRes.rows.length === 0) {
+        return res.status(404).json({ status: 'error', message: 'Không tìm thấy người nhận việc được chọn.' });
+      }
+      const targetRole = targetUserRes.rows[0].role;
+      // Chỉ cho phép nhân viên tự giao việc cho chính mình hoặc giao việc cho Admin
+      if (targetRole !== 'admin' && finalAssignedTo !== user.id) {
+        return res.status(403).json({
+          status: 'error',
+          message: 'Bạn chỉ được giao việc cho chính mình hoặc Admin'
+        });
+      }
+    } catch (dbErr) {
+      return res.status(500).json({ status: 'error', message: 'Lỗi truy vấn CSDL: ' + dbErr.message });
+    }
+  }
+
+  try {
     if (!finalAssignedTo && workspace_id) {
       // 1. Tự động tìm thành viên thường (non-admin) đầu tiên trong Trang để gán nhiệm vụ
       const memberRes = await query(
@@ -225,8 +251,8 @@ router.post('/tasks', async (req, res) => {
 
     const isCompleted = status === 'completed';
     const result = await query(
-      `INSERT INTO tasks (workspace_id, page_id, title, description, status, priority, assigned_to, created_by, deadline, completed, approval_status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      `INSERT INTO tasks (workspace_id, page_id, title, description, status, priority, assigned_to, created_by, deadline, completed, approval_status, creator_role)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING *`,
       [
         parseInt(workspace_id),
@@ -239,7 +265,8 @@ router.post('/tasks', async (req, res) => {
         user.id,
         deadline || null,
         isCompleted,
-        'pending'
+        'pending',
+        user.role // creator_role
       ]
     );
 
@@ -254,6 +281,15 @@ router.post('/tasks', async (req, res) => {
       }
     }
 
+    // Lấy thêm thông tin creator
+    if (newTask.created_by) {
+      const creatorRes = await query('SELECT name, avatar FROM users WHERE id = $1', [newTask.created_by]);
+      if (creatorRes.rows.length > 0) {
+        newTask.creator_name = creatorRes.rows[0].name;
+        newTask.creator_avatar = creatorRes.rows[0].avatar;
+      }
+    }
+
     // Ghi log hoạt động
     await logTaskActivity(newTask.id, user.id, 'created', null, newTask.title);
     if (newTask.assigned_to) {
@@ -265,6 +301,14 @@ router.post('/tasks', async (req, res) => {
     if (io) {
       io.emit('task_created', newTask);
       console.log('📡 Realtime: Phát sự kiện task_created cho:', newTask.title);
+
+      if (newTask.assigned_to) {
+        io.to(`user_${newTask.assigned_to}`).emit('task_assigned_notification', {
+          task: newTask,
+          message: `🔔 Bạn có một nhiệm vụ mới: "${newTask.title}" được giao bởi ${newTask.creator_name || 'Hệ thống'}`
+        });
+        console.log(`📡 Realtime: Phát sự kiện task_assigned_notification tới user_${newTask.assigned_to}`);
+      }
     }
 
     // Gửi Push Notification cho assignee (chạy bất đồng bộ)
@@ -379,6 +423,15 @@ router.put('/tasks/:taskId', async (req, res) => {
       if (userRes.rows.length > 0) {
         updatedTask.assignee_name = userRes.rows[0].name;
         updatedTask.assignee_avatar = userRes.rows[0].avatar;
+      }
+    }
+
+    // Lấy thêm thông tin creator
+    if (updatedTask.created_by) {
+      const creatorRes = await query('SELECT name, avatar FROM users WHERE id = $1', [updatedTask.created_by]);
+      if (creatorRes.rows.length > 0) {
+        updatedTask.creator_name = creatorRes.rows[0].name;
+        updatedTask.creator_avatar = creatorRes.rows[0].avatar;
       }
     }
 

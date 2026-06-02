@@ -77,6 +77,7 @@ app.set('io', io);
 
 // ─── Online Users Map ─────────────────────────────────────────────
 const onlineUsers = new Map(); // userId → userDetail
+const activeCalls = new Map(); // tracks active calling sessions: userId <-> peerId (bidirectional)
 
 // ─── Socket.IO Events ─────────────────────────────────────────────
 io.on('connection', (socket) => {
@@ -382,9 +383,230 @@ io.on('connection', (socket) => {
     }
   });
 
-  // 6. Ngắt kết nối
+  // ─── Signaling Voice & Video Call Helpers ───────────────────────
+  
+  // Helper lưu lịch sử cuộc gọi trực tiếp vào cơ sở dữ liệu Supabase
+  const saveCallLog = async (conversationId, senderId, messageText) => {
+    if (!conversationId) return;
+    try {
+      const insertRes = await query(
+        'INSERT INTO messages (conversation_id, sender_id, message, type) VALUES ($1,$2,$3,$4) RETURNING id, created_at',
+        [parseInt(conversationId), parseInt(senderId), messageText, 'call']
+      );
+      const messageId = insertRes.rows[0].id;
+      const createdAt = insertRes.rows[0].created_at;
+
+      // Lấy thông tin sender
+      const userRes = await query(
+        'SELECT name, avatar FROM users WHERE id = $1 LIMIT 1',
+        [parseInt(senderId)]
+      );
+      const sender = userRes.rows[0] || {};
+
+      const messageObject = {
+        id:              parseInt(messageId),
+        conversation_id: parseInt(conversationId),
+        sender_id:       parseInt(senderId),
+        sender_name:     sender.name,
+        sender_avatar:   sender.avatar,
+        message:         messageText,
+        type:            'call',
+        created_at:      createdAt,
+        raw_time:        createdAt,
+        reactions:       [],
+        sender_info: {
+          id:     parseInt(senderId),
+          name:   sender.name,
+          avatar: sender.avatar,
+        }
+      };
+
+      // Phát tới tất cả thành viên phòng chat qua phòng cá nhân của họ
+      const memberRes = await query(
+        'SELECT user_id FROM conversation_users WHERE conversation_id = $1',
+        [parseInt(conversationId)]
+      );
+
+      memberRes.rows.forEach(({ user_id }) => {
+        io.to(`user_${user_id}`).emit('receive_message', messageObject);
+      });
+      console.log(`📝 [SERVER:CALL_LOG] Lưu lịch sử cuộc gọi thành công: "${messageText}"`);
+    } catch (err) {
+      console.error('❌ [SERVER:CALL_LOG] Lỗi lưu cuộc gọi vào CSDL:', err.message);
+    }
+  };
+
+  const formatCallDuration = (secs) => {
+    const mins = Math.floor(secs / 60);
+    const remain = secs % 60;
+    if (mins > 0) {
+      return `${mins} phút ${remain} giây`;
+    }
+    return `${remain} giây`;
+  };
+
+  // ─── Signaling Voice & Video Call Events ───────────────────────
+  
+  // 1. Caller bắt đầu cuộc gọi tới Receiver
+  socket.on('call_user', ({ toUserId, callerInfo, callType, conversationId }) => {
+    console.log(`📞 [CALL_USER] ${socket.userId} (${callerInfo?.name}) đang gọi tới ${toUserId} (Kiểu: ${callType}, Room: ${conversationId})`);
+    
+    // Ghi nhận cuộc gọi vào map activeCalls với các thông tin phiên
+    activeCalls.set(socket.userId, {
+      peerId: toUserId,
+      conversationId: conversationId || null,
+      callType,
+      startTime: null
+    });
+    activeCalls.set(toUserId, {
+      peerId: socket.userId,
+      conversationId: conversationId || null,
+      callType,
+      startTime: null
+    });
+
+    // Luôn gửi cuộc gọi Push Notification FCM độ ưu tiên cao nhất để đánh thức thiết bị (kể cả khi tắt màn hình)
+    (async () => {
+      try {
+        const tokensRes = await query(
+          'SELECT fcm_token FROM user_push_tokens WHERE user_id = $1',
+          [parseInt(toUserId)]
+        );
+
+        if (tokensRes.rows.length > 0) {
+          const { sendPWAPushNotification } = require('./config/firebaseAdmin');
+          const title = `Cuộc gọi đến từ ${callerInfo?.name || 'Đồng nghiệp'}`;
+          const body = `Đang gọi ${callType === 'video' ? 'Video' : 'Thoại'} cho bạn...`;
+          const dataUrl = `/chat/${conversationId}`;
+
+          console.log(`📡 [CALL_PUSH] Phát gửi cuộc gọi push tới ${tokensRes.rows.length} thiết bị nhận.`);
+          for (const row of tokensRes.rows) {
+            await sendPWAPushNotification(row.fcm_token, title, body, dataUrl, 'call');
+          }
+        }
+      } catch (pushErr) {
+        console.error('⚠️ [socket] Lỗi gửi push cuộc gọi:', pushErr.message);
+      }
+    })();
+
+    // Kiểm tra xem receiver có online không (Robust check cho cả String và Number keys)
+    const targetUser = onlineUsers.get(toUserId) || onlineUsers.get(Number(toUserId)) || onlineUsers.get(String(toUserId));
+    if (!targetUser) {
+      console.log(`⚠️ [CALL_USER] User ${toUserId} ngoại tuyến. Đã gửi thông báo đẩy hối thúc.`);
+      socket.emit('call_ringing_offline', { toUserId });
+      return;
+    }
+
+    // Gửi thông báo cuộc gọi đến receiver trực tiếp qua socket nếu đang online
+    io.to(`user_${toUserId}`).emit('incoming_call', {
+      callerInfo,
+      callType,
+      fromUserId: socket.userId,
+      conversationId
+    });
+  });
+
+  // 2. Receiver chấp nhận cuộc gọi
+  socket.on('accept_call', ({ toUserId }) => {
+    console.log(`📞 [ACCEPT_CALL] User ${socket.userId} chấp nhận cuộc gọi từ ${toUserId}`);
+    
+    // Cập nhật thời điểm bắt đầu cuộc gọi để tính toán Duration khi kết thúc
+    const callerSession = activeCalls.get(toUserId);
+    const receiverSession = activeCalls.get(socket.userId);
+    const now = Date.now();
+    if (callerSession) callerSession.startTime = now;
+    if (receiverSession) receiverSession.startTime = now;
+
+    io.to(`user_${toUserId}`).emit('call_accepted');
+  });
+
+  // 3. Receiver từ chối cuộc gọi
+  socket.on('reject_call', ({ toUserId }) => {
+    console.log(`📞 [REJECT_CALL] User ${socket.userId} từ chối cuộc gọi từ ${toUserId}`);
+    
+    // Ghi nhận cuộc gọi nhỡ khi từ chối
+    const session = activeCalls.get(socket.userId);
+    if (session) {
+      const msgText = session.callType === 'video' ? '🎥 Cuộc gọi video nhỡ' : '📞 Cuộc gọi thoại nhỡ';
+      saveCallLog(session.conversationId, toUserId, msgText); // Người gọi (toUserId) là sender log nhỡ
+      
+      activeCalls.delete(socket.userId);
+      activeCalls.delete(toUserId);
+    }
+    
+    io.to(`user_${toUserId}`).emit('call_rejected');
+  });
+
+  // 4. Trao đổi WebRTC Offer
+  socket.on('offer', ({ toUserId, offer }) => {
+    io.to(`user_${toUserId}`).emit('offer', { offer });
+  });
+
+  // 5. Trao đổi WebRTC Answer
+  socket.on('answer', ({ toUserId, answer }) => {
+    io.to(`user_${toUserId}`).emit('answer', { answer });
+  });
+
+  // 6. Trao đổi WebRTC ICE Candidates
+  socket.on('ice_candidate', ({ toUserId, candidate }) => {
+    io.to(`user_${toUserId}`).emit('ice_candidate', { candidate });
+  });
+
+  // 7. Kết thúc cuộc gọi
+  socket.on('end_call', ({ toUserId }) => {
+    console.log(`📞 [END_CALL] User ${socket.userId} kết thúc cuộc gọi với ${toUserId}`);
+    
+    const session = activeCalls.get(socket.userId);
+    if (session) {
+      if (session.startTime) {
+        // Cuộc gọi thành công, tính toán thời lượng cuộc gọi
+        const durationSecs = Math.floor((Date.now() - session.startTime) / 1000);
+        const durText = formatCallDuration(durationSecs);
+        const msgText = session.callType === 'video' 
+          ? `🎥 Cuộc gọi video hoàn tất (${durText})` 
+          : `📞 Cuộc gọi thoại hoàn tất (${durText})`;
+        
+        saveCallLog(session.conversationId, socket.userId, msgText);
+      } else {
+        // Cuộc gọi nhỡ (người gọi chủ động tắt khi chưa liên lạc được)
+        const msgText = session.callType === 'video' ? '🎥 Cuộc gọi video nhỡ' : '📞 Cuộc gọi thoại nhỡ';
+        saveCallLog(session.conversationId, socket.userId, msgText);
+      }
+
+      activeCalls.delete(socket.userId);
+      if (toUserId) {
+        activeCalls.delete(toUserId);
+        io.to(`user_${toUserId}`).emit('call_ended');
+      }
+    }
+  });
+
+  // 8. Ngắt kết nối
   socket.on('disconnect', () => {
     if (socket.userId) {
+      // Resilience Handler: Nếu đang trong cuộc gọi, tự động lưu log và treo máy đầu bên kia
+      if (activeCalls.has(socket.userId)) {
+        const session = activeCalls.get(socket.userId);
+        const peerId = session.peerId;
+        console.log(`🚨 [RESILIENCE] User ${socket.userId} ngắt kết nối đột ngột khi đang gọi. Tự động kết thúc cuộc gọi với User ${peerId}`);
+        
+        if (session.startTime) {
+          const durationSecs = Math.floor((Date.now() - session.startTime) / 1000);
+          const durText = formatCallDuration(durationSecs);
+          const msgText = session.callType === 'video' 
+            ? `🎥 Cuộc gọi video hoàn tất (${durText})` 
+            : `📞 Cuộc gọi thoại hoàn tất (${durText})`;
+          saveCallLog(session.conversationId, socket.userId, msgText);
+        } else {
+          const msgText = session.callType === 'video' ? '🎥 Cuộc gọi video nhỡ' : '📞 Cuộc gọi thoại nhỡ';
+          saveCallLog(session.conversationId, socket.userId, msgText);
+        }
+
+        io.to(`user_${peerId}`).emit('call_ended');
+        activeCalls.delete(socket.userId);
+        activeCalls.delete(peerId);
+      }
+
       const user = onlineUsers.get(socket.userId);
       if (user) {
         console.log(`🔴 ${user.name} OFFLINE`);

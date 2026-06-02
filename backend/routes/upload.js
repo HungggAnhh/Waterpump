@@ -19,8 +19,11 @@ if (!supabaseKey) {
   console.warn('⚠️ [UPLOAD_API:INIT] SUPABASE_SERVICE_ROLE_KEY / SERVICE_KEY đang trống!');
 }
 
-const supabase = supabaseUrl && supabaseKey 
-  ? createClient(supabaseUrl, supabaseKey, {
+// Clean the URL by stripping /rest/v1/ if present, as storage client relies on the raw base URL
+const cleanSupabaseUrl = supabaseUrl ? supabaseUrl.replace(/\/rest\/v1\/?$/, '') : '';
+
+const supabase = cleanSupabaseUrl && supabaseKey 
+  ? createClient(cleanSupabaseUrl, supabaseKey, {
       auth: {
         persistSession: false
       },

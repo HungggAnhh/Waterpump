@@ -3,9 +3,64 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { query } = require('../config/supabase');
+const multer = require('multer');
+const { createClient } = require('@supabase/supabase-js');
+const WebSocket = require('ws');
+require('dotenv').config({ path: __dirname + '/../.env' });
+
 const router = express.Router();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'SecretCompanyKeySecret_9988';
+const supabaseUrl = process.env.SUPABASE_URL || '';
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY || '';
+const bucketName = process.env.SUPABASE_BUCKET || 'media';
+
+// Clean the URL by stripping /rest/v1/ if present, as storage client relies on the raw base URL
+const cleanSupabaseUrl = supabaseUrl ? supabaseUrl.replace(/\/rest\/v1\/?$/, '') : '';
+
+const supabase = cleanSupabaseUrl && supabaseKey 
+  ? createClient(cleanSupabaseUrl, supabaseKey, {
+      auth: { persistSession: false },
+      realtime: { transport: WebSocket }
+    })
+  : null;
+
+// Multer configurations: Validate types and size (Max 5MB)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Chỉ chấp nhận định dạng ảnh JPG, JPEG, PNG, WEBP.'));
+    }
+  }
+});
+
+// Helper: Clean up old avatar from Supabase Storage
+const deleteOldAvatar = async (avatarUrl) => {
+  if (!avatarUrl || !supabase) return;
+  
+  const marker = `/storage/v1/object/public/${bucketName}/`;
+  const markerIdx = avatarUrl.indexOf(marker);
+  
+  if (markerIdx !== -1) {
+    const filePath = avatarUrl.substring(markerIdx + marker.length);
+    console.log(`🧹 [AVATAR_CLEANUP] Cleaning up old avatar object: ${filePath}`);
+    try {
+      const { error } = await supabase.storage.from(bucketName).remove([filePath]);
+      if (error) {
+        console.error(`⚠️ [AVATAR_CLEANUP:ERROR] Cannot delete old avatar: ${error.message}`);
+      } else {
+        console.log(`✨ [AVATAR_CLEANUP:SUCCESS] Deleted old avatar: ${filePath}`);
+      }
+    } catch (err) {
+      console.error(`⚠️ [AVATAR_CLEANUP:CRITICAL] Exception deleting old avatar: ${err.message}`);
+    }
+  }
+};
 
 // Helper: Giải mã user từ token hoặc lấy fallback trong môi trường dev
 const getAuthUser = (req) => {
@@ -69,6 +124,13 @@ router.post('/', async (req, res) => {
 
   // Hành động 2: cập nhật avatar
   if (data.action === 'update_avatar') {
+    const requester = getAuthUser(req);
+    if (!requester) {
+      return res.status(401).json({ status: 'error', message: 'Yêu cầu xác thực token.' });
+    }
+    if (requester.role !== 'admin' && requester.id !== parseInt(data.id)) {
+      return res.status(403).json({ status: 'error', message: 'Bạn không có quyền cập nhật ảnh đại diện của người khác.' });
+    }
     if (!data.id || !data.avatar) {
       return res.status(400).json({ status: 'error', message: 'Thiếu id hoặc avatar.' });
     }
@@ -329,6 +391,131 @@ router.post('/register-push-token', async (req, res) => {
     return res.status(401).json({
       status: 'error',
       message: 'Mã xác thực không hợp lệ hoặc lỗi CSDL: ' + err.message
+    });
+  }
+});
+
+// POST /api/users/:userId/avatar
+router.post('/:userId/avatar', (req, res, next) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      console.error('❌ [AVATAR_UPLOAD:MULTER_ERROR]', err.message);
+      return res.status(400).json({
+        status: 'error',
+        message: 'Lỗi tải ảnh đại diện: ' + err.message
+      });
+    }
+    next();
+  });
+}, async (req, res) => {
+  try {
+    const requester = getAuthUser(req);
+    if (!requester) {
+      return res.status(401).json({ status: 'error', message: 'Yêu cầu xác thực token (Unauthorized).' });
+    }
+
+    const targetUserId = parseInt(req.params.userId);
+    if (!targetUserId) {
+      return res.status(400).json({ status: 'error', message: 'Thiếu ID người dùng cần cập nhật.' });
+    }
+
+    // Authorization check: Admin OR matching user ID
+    if (requester.role !== 'admin' && requester.id !== targetUserId) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Bạn không có quyền thay đổi ảnh đại diện của người khác.'
+      });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Không tìm thấy tệp ảnh nào được gửi lên. Vui lòng gửi bằng tên trường "file".'
+      });
+    }
+
+    if (!supabase) {
+      return res.status(500).json({
+        status: 'error',
+        message: 'Dịch vụ lưu trữ Supabase chưa được cấu hình ở backend.'
+      });
+    }
+
+    const file = req.file;
+    const ext = file.originalname.split('.').pop()?.toLowerCase() || 'jpg';
+    
+    // Validate filename extension and block dangerous extensions
+    const dangerousExts = ['exe', 'sh', 'js', 'php', 'py', 'pl', 'html', 'htm', 'xml'];
+    if (dangerousExts.includes(ext)) {
+      return res.status(400).json({ status: 'error', message: 'Tệp tải lên không hợp lệ.' });
+    }
+
+    const fileName = `avatars/${targetUserId}_${Date.now()}.${ext}`;
+
+    console.log(`[AVATAR_UPLOAD:START] Uploading new avatar for user ${targetUserId} to Supabase bucket "${bucketName}/${fileName}"`);
+
+    // 1. Fetch the user's current avatar to clean it up later
+    const userRes = await query('SELECT avatar FROM users WHERE id = $1 LIMIT 1', [targetUserId]);
+    if (userRes.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'Người dùng không tồn tại.' });
+    }
+    const oldAvatarUrl = userRes.rows[0].avatar;
+
+    // 2. Upload file buffer to Supabase Storage
+    const { error: uploadError } = await supabase.storage
+      .from(bucketName)
+      .upload(fileName, file.buffer, {
+        contentType: file.mimetype,
+        upsert: true
+      });
+
+    if (uploadError) {
+      console.error('❌ [AVATAR_UPLOAD:SUPABASE_ERROR]', uploadError.message);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Lỗi Supabase Storage: ' + uploadError.message
+      });
+    }
+
+    // 3. Get public URL of the uploaded image
+    const { data: publicData } = supabase.storage.from(bucketName).getPublicUrl(fileName);
+    const newAvatarUrl = publicData.publicUrl;
+
+    console.log(`✨ [AVATAR_UPLOAD:SUCCESS] Uploaded success! URL: ${newAvatarUrl}`);
+
+    // 4. Update avatar path in the Postgres Database
+    await query('UPDATE users SET avatar = $1 WHERE id = $2', [newAvatarUrl, targetUserId]);
+
+    // 5. Clean up the old avatar file from Supabase storage
+    if (oldAvatarUrl) {
+      await deleteOldAvatar(oldAvatarUrl);
+    }
+
+    // 6. Fetch updated user details to broadcast via Socket.io
+    const updatedUserRes = await query(
+      'SELECT id, name, email, role, status, avatar, created_at FROM users WHERE id = $1 LIMIT 1',
+      [targetUserId]
+    );
+    const updatedUser = updatedUserRes.rows[0];
+
+    // Emit Socket.io event for real-time propagation across screens
+    const io = req.app.get('io');
+    if (io && updatedUser) {
+      console.log(`📡 [AVATAR_UPLOAD:SOCKET] Emitting user_updated event for User ${targetUserId}`);
+      io.emit('user_updated', updatedUser);
+    }
+
+    return res.status(200).json({
+      status: 'success',
+      message: 'Cập nhật ảnh đại diện thành công.',
+      data: updatedUser
+    });
+
+  } catch (err) {
+    console.error('❌ [AVATAR_UPLOAD:CRITICAL_ERROR]', err);
+    return res.status(500).json({
+      status: 'error',
+      message: 'Lỗi hệ thống bất ngờ: ' + err.message
     });
   }
 });
