@@ -60,13 +60,22 @@ self.addEventListener('push', (event) => {
     icon: 'icon-192.png', // Sử dụng đường dẫn tương đối để tránh lỗi 404 trên các môi trường cục bộ/Electron
     badge: 'icon-192.png', // Sử dụng đường dẫn tương đối
     requireInteraction: true, // Giữ thông báo hiển thị cho đến khi tắt hoặc tương tác
-    vibrate: [200, 100, 200],
+    vibrate: notificationType === 'call'
+      ? [500, 200, 500, 200, 500, 200, 500, 200, 500, 200, 500]
+      : [200, 100, 200],
     data: {
       url: data.click_action || data.url || '/',
       ...data
     },
     tag: tag,
   };
+
+  if (notificationType === 'call') {
+    notificationOptions.actions = [
+      { action: 'answer', title: 'Trả lời 📞' },
+      { action: 'decline', title: 'Từ chối ❌' }
+    ];
+  }
 
   console.log(`💻 [firebase-messaging-sw.js] Đang hiển thị thông báo [${notificationType}] - Title: "${notificationTitle}"`);
 
@@ -80,6 +89,12 @@ self.addEventListener('notificationclick', (event) => {
   
   // Close the notification bubble
   event.notification.close();
+
+  const action = event.action;
+  if (action === 'decline') {
+    console.log('[firebase-messaging-sw.js] Người dùng bấm Từ chối cuộc gọi.');
+    return;
+  }
 
   // Get the target URL (relative path from backend, e.g. /chat/123 or /tasks)
   let targetUrl = event.notification.data?.url || '/';

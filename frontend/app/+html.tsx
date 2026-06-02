@@ -22,7 +22,7 @@ export default function Root({ children }: { children: ReactNode }) {
         {/* Using raw CSS styles as an escape-hatch to ensure the background color never flickers in dark-mode. */}
         <style dangerouslySetInnerHTML={{ __html: responsiveBackground }} />
         {/* Add any additional <head> elements that you want globally available on web... */}
-        <link rel="manifest" href="/manifest.json" />
+        <link rel="manifest" href="/manifest.json" crossOrigin="use-credentials" />
         <script dangerouslySetInnerHTML={{ __html: blockZoomScript }} />
       </head>
       <body>{children}</body>

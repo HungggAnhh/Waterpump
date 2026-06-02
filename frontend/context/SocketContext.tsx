@@ -212,6 +212,11 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       Alert.alert('Ngoại tuyến', 'Người dùng hiện không hoạt động.');
     });
 
+    socket.on('call_ringing_offline', () => {
+      console.log('📡 [SOCKET:CALL_RINGING_OFFLINE] Đối phương hiện đang ngoại tuyến. Đã gửi thông báo đẩy để đánh thức.');
+      // Giữ màn hình calling đổ chuông bình thường để đợi đối phương mở máy qua thông báo đẩy
+    });
+
     socket.on('disconnect', (reason) => {
       console.log(`🔴 [GLOBAL_SOCKET:DISCONNECT] Đã ngắt kết nối. Lý do: ${reason}. socket.id: ${socket.id}`);
       setIsConnected(false);
@@ -260,6 +265,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       socket.off('ice_candidate');
       socket.off('call_ended');
       socket.off('user_offline');
+      socket.off('call_ringing_offline');
 
       socket.disconnect();
       socketRef.current = null;
