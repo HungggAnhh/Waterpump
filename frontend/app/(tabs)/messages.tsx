@@ -357,7 +357,7 @@ export default function MessagesScreen() {
   ), [colors, currentUser, handleSelectThread, handleLongPressThread]);
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['bottom']}>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
       <View style={styles.inboxHeader}>
         <Text style={[styles.inboxTitle, { color: colors.text }]}>Hộp thư của bạn</Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>

@@ -1,6 +1,6 @@
 // frontend/app/(tabs)/_layout.tsx
 import { Link, Tabs } from 'expo-router';
-import { Pressable } from 'react-native';
+import { Pressable, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -12,23 +12,43 @@ export default function TabLayout() {
   const colors = Colors[colorScheme ?? 'light'];
   const insets = useSafeAreaInsets();
 
-  // Xác định chiều cao và padding dưới phù hợp với safe area của từng loại điện thoại
-  const hasBottomInset = insets.bottom > 0;
-  const tabBarHeight = hasBottomInset ? 60 + insets.bottom - 10 : 64; // Tối ưu chiều cao cho cả phím bấm mềm Android và tai thỏ iOS
-  const tabBarPaddingBottom = hasBottomInset ? insets.bottom - 4 : 10;
+  // Chiều cao và padding dọc tối ưu hóa theo các insets an toàn
+  const tabHeight = Platform.OS === 'ios' ? 60 + insets.bottom : 62 + insets.bottom;
+  const paddingBottom = insets.bottom > 0 ? insets.bottom - 2 : 10;
 
   return (
     <Tabs
       screenOptions={{
         tabBarActiveTintColor: colors.tint,
         tabBarInactiveTintColor: colors.tabIconDefault,
+        tabBarLabelPosition: 'below-icon',
+        tabBarLabelStyle: {
+          fontSize: 11,
+          fontWeight: '600',
+          marginTop: 2,
+          paddingBottom: 2,
+        },
+        tabBarIconStyle: {
+          marginTop: 4,
+        },
         tabBarStyle: {
           backgroundColor: colors.card,
           borderTopColor: colors.border,
           borderTopWidth: 1,
-          height: tabBarHeight,
-          paddingBottom: tabBarPaddingBottom,
-          paddingTop: 10,
+          height: tabHeight,
+          paddingBottom: paddingBottom,
+          paddingTop: 6,
+          ...Platform.select({
+            ios: {
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: -2 },
+              shadowOpacity: 0.04,
+              shadowRadius: 8,
+            },
+            android: {
+              elevation: 8,
+            },
+          }),
         },
         headerStyle: {
           backgroundColor: colors.card,
@@ -40,7 +60,7 @@ export default function TabLayout() {
         headerTitleStyle: {
           color: colors.text,
           fontWeight: '700',
-          fontSize: 20,
+          fontSize: 18,
         },
         headerShown: true,
       }}>
@@ -53,7 +73,7 @@ export default function TabLayout() {
             <Ionicons
               name={focused ? "home" : "home-outline"}
               color={color}
-              size={24}
+              size={22}
             />
           ),
           headerRight: () => (
@@ -62,7 +82,7 @@ export default function TabLayout() {
                 {({ pressed }) => (
                   <Ionicons
                     name="information-circle-outline"
-                    size={25}
+                    size={24}
                     color={colors.text}
                     style={{ opacity: pressed ? 0.5 : 1 }}
                   />
@@ -77,11 +97,12 @@ export default function TabLayout() {
         options={{
           title: 'Công việc',
           tabBarLabel: 'Công việc',
+          headerShown: false, // Ẩn header hệ thống để tránh trùng lặp với Custom Header tự dựng
           tabBarIcon: ({ color, focused }) => (
             <Ionicons
               name={focused ? "checkbox" : "checkbox-outline"}
               color={color}
-              size={24}
+              size={22}
             />
           ),
         }}
@@ -91,11 +112,12 @@ export default function TabLayout() {
         options={{
           title: 'Trò chuyện',
           tabBarLabel: 'Tin nhắn',
+          headerShown: false, // Ẩn header hệ thống để tránh trùng lặp với Inbox Header tự dựng
           tabBarIcon: ({ color, focused }) => (
             <Ionicons
               name={focused ? "chatbubble-ellipses" : "chatbubble-ellipses-outline"}
               color={color}
-              size={24}
+              size={22}
             />
           ),
         }}
@@ -104,12 +126,12 @@ export default function TabLayout() {
         name="two"
         options={{
           title: 'Cài đặt',
-          tabBarLabel: 'Settings',
+          tabBarLabel: 'Cài đặt',
           tabBarIcon: ({ color, focused }) => (
             <Ionicons
               name={focused ? "settings" : "settings-outline"}
               color={color}
-              size={24}
+              size={22}
             />
           ),
         }}

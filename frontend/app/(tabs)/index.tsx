@@ -139,7 +139,7 @@ export default function HomeScreen() {
   const lockedCount = onlineUsers.filter(u => u.status === 'inactive').length;
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['bottom']}>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
         
         {/* 1. HEADER WELCOME SECTION */}

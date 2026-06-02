@@ -36,11 +36,7 @@ export default function ChatInputBar({
   };
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0} // Accounts for header height
-      style={styles.keyboardContainer}
-    >
+    <View style={styles.keyboardContainer}>
       <View style={styles.inputOuterWrapper}>
         
         {/* Dynamic Image Attachment Overlay (Capped at 70% Max Width) */}
@@ -82,7 +78,7 @@ export default function ChatInputBar({
           </TouchableOpacity>
         </View>
       </View>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
