@@ -33,8 +33,10 @@ import { MessageItem, Message } from '../../components/MessageItem';
 import { EmojiPanel } from '../../components/EmojiPanel';
 import { ScreenshotPreviewModal } from '../../components/ScreenshotPreviewModal';
 import { useConversationStore, ChatThread } from '../../store/useConversationStore';
+import { useOnlineStore } from '../../store/useOnlineStore';
 import { GroupInfoModal } from '../../components/GroupInfoModal';
 import { useIsFocused } from '@react-navigation/native';
+import { useShallow } from 'zustand/shallow';
 
 export default function ChatRoomScreen() {
   const { id } = useLocalSearchParams();
@@ -53,10 +55,16 @@ export default function ChatRoomScreen() {
     role: 'admin'
   };
 
-  const conversations = useConversationStore(state => state.conversations);
+  const conversations = useConversationStore(useShallow(state => state.conversations));
   const activeThread = useMemo(() => {
     return conversations.find(c => String(c.id) === conversationId) || null;
   }, [conversations, conversationId]);
+
+  const isOnline = useOnlineStore(state => 
+    activeThread?.type === 'direct' && activeThread?.otherUser 
+      ? !!state.onlineUsers[activeThread.otherUser.user_id] 
+      : false
+  );
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [page, setPage] = useState(1);
@@ -377,11 +385,12 @@ export default function ChatRoomScreen() {
   }, [socket, conversationId, currentUser.id]);
 
   // Load Messages History
-  const fetchMessages = async (convId: string, pageNum: number, append = false) => {
+  const fetchMessages = async (convId: string, beforeId: number | null, append = false) => {
     if (loadingMessages) return;
     setLoadingMessages(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/messages?conversation_id=${convId}&user_id=${currentUser.id}&page=${pageNum}&limit=30`);
+      const beforeParam = beforeId ? `&before=${beforeId}` : '';
+      const response = await fetch(`${API_BASE_URL}/messages?conversation_id=${convId}&user_id=${currentUser.id}${beforeParam}&limit=30`);
       const result = await response.json();
       
       if (response.ok && result.status === 'success') {
@@ -391,7 +400,6 @@ export default function ChatRoomScreen() {
           setMessages(result.data);
         }
         setHasMoreMessages(result.has_more);
-        setPage(pageNum);
       }
     } catch (error) {
       console.error("Lỗi khi tải lịch sử tin nhắn:", error);
@@ -403,7 +411,6 @@ export default function ChatRoomScreen() {
   useEffect(() => {
     if (conversationId) {
       useConversationStore.getState().setActiveConversationId(conversationId);
-      setPage(1);
       setHasMoreMessages(true);
       setMessages([]);
       setOtherUserTyping(null);
@@ -412,7 +419,7 @@ export default function ChatRoomScreen() {
       setReplyingToMessage(null);
       setEditingMessage(null);
       lastSeenMessageIdRef.current = null;
-      fetchMessages(conversationId, 1);
+      fetchMessages(conversationId, null);
     }
     return () => {
       useConversationStore.getState().setActiveConversationId(null);
@@ -480,8 +487,9 @@ export default function ChatRoomScreen() {
   };
 
   const handleLoadMoreMessages = () => {
-    if (hasMoreMessages && !loadingMessages && conversationId) {
-      fetchMessages(conversationId, page + 1, true);
+    if (hasMoreMessages && !loadingMessages && conversationId && messages.length > 0) {
+      const oldestMessageId = messages[messages.length - 1].id;
+      fetchMessages(conversationId, oldestMessageId, true);
     }
   };
 
@@ -527,7 +535,7 @@ export default function ChatRoomScreen() {
   };
 
   // Double Tap Thả Tim nhanh
-  const handleDoubleTapMessage = async (message: Message) => {
+  const handleDoubleTapMessage = useCallback(async (message: Message) => {
     try {
       const response = await fetch(`${API_BASE_URL}/messages/${message.id}/reaction`, {
         method: 'POST',
@@ -545,7 +553,7 @@ export default function ChatRoomScreen() {
     } catch (error) {
       console.error("Lỗi thả tim nhanh:", error);
     }
-  };
+  }, [currentUser.id]);
 
   // Thả cảm xúc từ Action Menu
   const handleAddReaction = async (message: Message, reactionSymbol: string) => {
@@ -663,7 +671,7 @@ export default function ChatRoomScreen() {
   };
 
   // Thu hồi tin nhắn (Recall)
-  const handleRecallMessage = async (message: Message) => {
+  const handleRecallMessage = useCallback(async (message: Message) => {
     setActionMenuVisible(false);
     try {
       const response = await fetch(`${API_BASE_URL}/messages/${message.id}/recall`, {
@@ -682,7 +690,7 @@ export default function ChatRoomScreen() {
     } catch (error) {
       console.error("Lỗi thu hồi tin nhắn:", error);
     }
-  };
+  }, [currentUser.id, conversationId]);
 
   // Xóa với tất cả (Delete For Everyone)
   const handleDeleteForEveryone = async (message: Message) => {
@@ -734,7 +742,7 @@ export default function ChatRoomScreen() {
   };
 
   // Quote scroll to index & flash highlight
-  const handlePressQuote = (parentId: number) => {
+  const handlePressQuote = useCallback((parentId: number) => {
     const idx = messages.findIndex(m => m.id === parentId);
     if (idx !== -1) {
       flatListRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
@@ -743,7 +751,7 @@ export default function ChatRoomScreen() {
     } else {
       Alert.alert("Thông báo", "Tin nhắn gốc nằm quá xa hoặc đã quá cũ.");
     }
-  };
+  }, [messages]);
 
   // Chia sẻ / Chuyển tiếp (Forward)
   const handleTriggerForward = (message: Message) => {
@@ -796,10 +804,10 @@ export default function ChatRoomScreen() {
   };
 
   // Xem chi tiết Reactions list
-  const handlePressReactions = (message: Message) => {
+  const handlePressReactions = useCallback((message: Message) => {
     setSelectedReactionsMessage(message);
     setReactionsViewerVisible(true);
-  };
+  }, []);
 
   // --- HẾT PHẦN LOGIC NÂNG CAO ---
 
@@ -1018,14 +1026,14 @@ export default function ChatRoomScreen() {
     }
   }, [showEmojiPanel]);
 
-  const handleOpenActionMenu = (msg: Message, event?: any) => {
+  const handleOpenActionMenu = useCallback((msg: Message, event?: any) => {
     setSelectedMenuMessage(msg);
     setActionMenuVisible(true);
     if (Platform.OS === 'web' && event && event.currentTarget) {
       const rect = event.currentTarget.getBoundingClientRect();
       setMenuPosition({ x: rect.left, y: rect.bottom });
     }
-  };
+  }, []);
 
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.background }]} edges={['top', 'left', 'right']}>
@@ -1046,7 +1054,9 @@ export default function ChatRoomScreen() {
                 {activeThread ? activeThread.name : 'Nhóm chat'}
               </Text>
               <Text style={styles.headerStatus}>
-                {activeThread?.online ? '🟢 Đang hoạt động' : '⚪ Ngoại tuyến'}
+                {activeThread?.type === 'group'
+                  ? `${activeThread.members?.length || 0} thành viên`
+                  : (isOnline ? '🟢 Đang hoạt động' : '⚪ Ngoại tuyến')}
               </Text>
             </View>
 
@@ -1134,7 +1144,7 @@ export default function ChatRoomScreen() {
                 isMine={item.sender_id === currentUser.id}
                 colors={colors}
                 onPressImage={handlePressImage}
-                onLongPress={(msg, event) => handleOpenActionMenu(msg, event)}
+                onLongPress={handleOpenActionMenu}
                 onDoubleTap={handleDoubleTapMessage}
                 onPressQuote={handlePressQuote}
                 onPressReactions={handlePressReactions}

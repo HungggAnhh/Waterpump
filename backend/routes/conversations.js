@@ -16,7 +16,7 @@ router.get('/', async (req, res) => {
     // Auto-creation of empty direct conversations is removed to allow deleted conversations to remain deleted.
     // Empty conversations will only be created when a user explicitly starts a new chat thread or when a message is sent.
 
-    // Lấy danh sách conversations (cả direct và group) cùng unread count
+    // Lấy danh sách conversations (cả direct và group) cùng unread count và danh sách thành viên trong 1 query duy nhất (Tránh N+1)
     const convsResult = await client.query(
       `SELECT
          c.id, c.name, c.type, c.created_at, c.created_by,
@@ -35,7 +35,19 @@ router.get('/', async (req, res) => {
              AND msg.id NOT IN (
                SELECT message_id FROM deleted_messages WHERE user_id = $1
              )
-         ) AS unread_count
+         ) AS unread_count,
+         (
+           SELECT json_agg(json_build_object(
+             'user_id', u.id,
+             'name', u.name,
+             'avatar', u.avatar,
+             'role', u.role,
+             'email', u.email
+           ))
+           FROM conversation_users cu_inner
+           JOIN users u ON cu_inner.user_id = u.id
+           WHERE cu_inner.conversation_id = c.id
+         ) AS members
        FROM conversations c
        JOIN conversation_users cu ON c.id = cu.conversation_id
        LEFT JOIN messages m ON m.id = (
@@ -49,14 +61,7 @@ router.get('/', async (req, res) => {
     const resultData = [];
 
     for (const conv of convsResult.rows) {
-      const membersResult = await client.query(
-        `SELECT cu.user_id, u.name, u.avatar, u.role, u.email
-         FROM conversation_users cu
-         JOIN users u ON cu.user_id = u.id
-         WHERE cu.conversation_id = $1`,
-         [conv.id]
-      );
-      const members = membersResult.rows;
+      const members = conv.members || [];
       const otherMembers = members.filter(m => parseInt(m.user_id) !== userId);
 
       let convName   = conv.name;

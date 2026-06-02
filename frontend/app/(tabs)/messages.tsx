@@ -1,5 +1,5 @@
 // frontend/app/(tabs)/messages.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   StyleSheet,
   Text,
@@ -21,9 +21,10 @@ import { useColorScheme } from '@/components/useColorScheme';
 import { API_BASE_URL, endpoints } from '@/constants/Config';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useUser } from '../../context/UserContext';
-import { useSocket } from '../../context/SocketContext';
 import { useConversationStore, ChatThread } from '../../store/useConversationStore';
+import { useOnlineStore } from '../../store/useOnlineStore';
 import { RelativeTime } from '../../components/RelativeTime';
+import { useShallow } from 'zustand/shallow';
 
 interface User {
   id: number;
@@ -46,12 +47,92 @@ interface Message {
   created_at: string;
 }
 
+const ConversationItem = React.memo(({ 
+  item, 
+  colors, 
+  currentUser, 
+  onPress, 
+  onLongPress 
+}: { 
+  item: ChatThread; 
+  colors: any; 
+  currentUser: any; 
+  onPress: (item: ChatThread) => void; 
+  onLongPress: (item: ChatThread) => void; 
+}) => {
+  // Subscribe specifically to this user's online status
+  const isOnline = useOnlineStore(state => 
+    item.type === 'direct' && item.otherUser 
+      ? !!state.onlineUsers[item.otherUser.user_id] 
+      : false
+  );
+
+  return (
+    <TouchableOpacity
+      style={[styles.threadCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+      onPress={() => onPress(item)}
+      onLongPress={() => onLongPress(item)}
+      delayLongPress={500}
+    >
+      <View style={styles.avatarWrapper}>
+        <Image source={{ uri: item.avatar }} style={styles.threadAvatar} />
+        {isOnline && (
+          <View style={[styles.onlineIndicator, { borderColor: colors.card }]} />
+        )}
+      </View>
+
+      <View style={styles.threadInfo}>
+        <View style={styles.threadHeader}>
+          <Text style={[
+            styles.threadName, 
+            { 
+              color: colors.text,
+              fontWeight: (item.unreadCount || 0) > 0 ? '800' : '500'
+            }
+          ]} numberOfLines={1}>
+            {item.name}
+          </Text>
+          <RelativeTime
+            rawTime={item.rawTime}
+            style={[
+              styles.threadTime,
+              {
+                color: (item.unreadCount || 0) > 0 ? colors.tint : '#a0aec0',
+                fontWeight: (item.unreadCount || 0) > 0 ? '700' : '400'
+              }
+            ]}
+          />
+        </View>
+        <View style={styles.threadBody}>
+          <Text style={[
+            styles.lastMsg,
+            {
+              color: (item.unreadCount || 0) > 0 && item.lastMessageSenderId !== currentUser.id
+                ? colors.text
+                : colors.textSecondary,
+              fontWeight: (item.unreadCount || 0) > 0 && item.lastMessageSenderId !== currentUser.id
+                ? '800'
+                : '400',
+            }
+          ]} numberOfLines={1}>
+            {item.lastMessage || 'Chưa có tin nhắn nào.'}
+          </Text>
+          {(item.unreadCount || 0) > 0 && (
+            <View style={[styles.unreadBadge, { backgroundColor: colors.tint }]}>
+              <Text style={styles.unreadText}>{item.unreadCount}</Text>
+            </View>
+          )}
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+});
+
 export default function MessagesScreen() {
   const router = useRouter();
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
   const { user } = useUser();
-  const { socket } = useSocket();
 
   const currentUser = user || {
     id: 1,
@@ -60,7 +141,7 @@ export default function MessagesScreen() {
     role: 'admin'
   };
 
-  const threads = useConversationStore(state => state.conversations);
+  const threads = useConversationStore(useShallow(state => state.conversations));
   const [loadingThreads, setLoadingThreads] = useState(true);
   const [selectedThreadForMenu, setSelectedThreadForMenu] = useState<ChatThread | null>(null);
   const [threadMenuVisible, setThreadMenuVisible] = useState(false);
@@ -94,107 +175,10 @@ export default function MessagesScreen() {
     }
   };
 
-  // 2. Lắng nghe sự kiện từ Socket.IO toàn cục
+  // 2. Tải danh sách hội thoại ban đầu khi mount hoặc khi ID người dùng thay đổi
   useEffect(() => {
-    if (!socket) {
-      console.log('🔌 [INBOX:SOCKET] Không tìm thấy socket client (socket: null).');
-      return;
-    }
-
-    console.log(`🟢 [INBOX:MOUNT] Đăng ký Socket toàn cục cho hòm thư! socket.id: ${socket.id}`);
-
-    // Đăng ký trạng thái trực tuyến
-    socket.emit('join', currentUser);
-
-    const handleUpdateOnlineUsers = (onlineUsers: any[]) => {
-      const onlineUserIds = onlineUsers.map(ou => ou.id);
-      useConversationStore.getState().updateOnlineUsers(onlineUserIds);
-    };
-
-    const handleConversationSeen = (data: { conversation_id: number, message_id: number }) => {
-      console.log(`[CLIENT:CONVERSATION_SEEN] Syncing unread state: Conversation ${data.conversation_id} marked seen at msg ${data.message_id}`);
-      useConversationStore.getState().markAsSeen(String(data.conversation_id), data.message_id);
-    };
-
-    const handleReceiveMessage = (msg: Message) => {
-      console.log('📨 [INBOX:RECEIVE_SOCKET_EVENT] Nhận tin nhắn mới realtime qua socket:', msg);
-      console.log(`📨 [INBOX:RECEIVE_SOCKET_EVENT] socket.id hiện tại: ${socket.id}`);
-      
-      // 1. Kiểm tra xem hội thoại đã tồn tại cục bộ chưa, nếu chưa hãy tải lại danh sách âm thầm
-      const hasConv = useConversationStore.getState().conversations.some(c => String(c.id) === String(msg.conversation_id));
-      if (!hasConv) {
-        fetchConversations(true);
-      }
-
-      // 2. Cập nhật Zustand store bằng activeConversationId hiện tại
-      const activeConversationId = useConversationStore.getState().activeConversationId;
-      console.log(`📨 [INBOX:RECEIVE_SOCKET_EVENT] activeConversationId trong store: ${activeConversationId}`);
-      useConversationStore.getState().receiveMessage(msg, activeConversationId, currentUser.id);
-    };
-
-    const handleGroupAddedNotify = (data: { conversation_id: string | number }) => {
-      console.log('👥 [INBOX] Được thêm vào nhóm mới, tải lại danh sách:', data);
-      fetchConversations(true);
-    };
-
-    const handleConversationUpdatedName = (data: { conversation_id: string | number, name: string }) => {
-      console.log('👥 [INBOX] Cập nhật tên nhóm:', data);
-      useConversationStore.getState().updateGroupName(String(data.conversation_id), data.name);
-    };
-
-    const handleCreatorTransferred = (data: { conversation_id: string | number, created_by: string | number }) => {
-      console.log('👥 [INBOX] Chuyển nhượng trưởng nhóm:', data);
-      useConversationStore.getState().transferCreator(String(data.conversation_id), data.created_by);
-    };
-
-    const handleGroupDeleted = (data: { conversation_id: string | number }) => {
-      console.log('👥 [INBOX] Nhóm bị xóa:', data);
-      useConversationStore.getState().removeConversation(String(data.conversation_id));
-    };
-
-    const handleGroupKicked = (data: { conversation_id: string | number }) => {
-      console.log('👥 [INBOX] Bị xóa khỏi nhóm:', data);
-      useConversationStore.getState().removeConversation(String(data.conversation_id));
-    };
-
-    const handleConversationDeleted = (data: { conversation_id: string | number }) => {
-      console.log('[SOCKET:CONVERSATION_DELETED] Removing from store:', data);
-      useConversationStore.getState().deleteConversation(String(data.conversation_id));
-    };
-
-    const handleConversationRestored = (data: { conversation_id: string | number }) => {
-      console.log('[SOCKET:CONVERSATION_RESTORED] Fetching conversation info:', data);
-      fetchConversations(true);
-    };
-
-    socket.on('update_online_users', handleUpdateOnlineUsers);
-    socket.on('conversation_seen', handleConversationSeen);
-    socket.on('receive_message', handleReceiveMessage);
-    socket.on('group_added_notify', handleGroupAddedNotify);
-    socket.on('conversation_updated_name', handleConversationUpdatedName);
-    socket.on('creator_transferred', handleCreatorTransferred);
-    socket.on('group_deleted', handleGroupDeleted);
-    socket.on('group_kicked', handleGroupKicked);
-    socket.on('conversation_deleted', handleConversationDeleted);
-    socket.on('conversation_restored', handleConversationRestored);
-
-    // Tải danh sách hội thoại ban đầu
     fetchConversations();
-
-    return () => {
-      console.log(`🧹 [INBOX:UNMOUNT] Hủy đăng ký sự kiện socket cho hòm thư, socket.id: ${socket.id}`);
-      socket.off('update_online_users', handleUpdateOnlineUsers);
-      socket.off('conversation_seen', handleConversationSeen);
-      socket.off('receive_message', handleReceiveMessage);
-      socket.off('group_added_notify', handleGroupAddedNotify);
-      socket.off('conversation_updated_name', handleConversationUpdatedName);
-      socket.off('creator_transferred', handleCreatorTransferred);
-      socket.off('group_deleted', handleGroupDeleted);
-      socket.off('group_kicked', handleGroupKicked);
-      socket.off('conversation_deleted', handleConversationDeleted);
-      socket.off('conversation_restored', handleConversationRestored);
-    };
-  }, [socket, currentUser.id]);
+  }, [currentUser.id]);
 
   // Custom Actions for Thread long press menu
   const handlePinThread = (thread: ChatThread) => {
@@ -236,10 +220,16 @@ export default function MessagesScreen() {
     );
   };
 
-  // Click vào cuộc hội thoại -> Điều hướng ra chat chi tiết
-  const handleSelectThread = (thread: ChatThread) => {
+  // Click vào cuộc hội thoại -> Điều hướng ra chat chi tiết (Sử dụng useCallback)
+  const handleSelectThread = useCallback((thread: ChatThread) => {
     router.push(`/chat/${thread.id}` as any);
-  };
+  }, [router]);
+
+  // Nhấn giữ cuộc hội thoại -> Hiển thị menu hành động (Sử dụng useCallback)
+  const handleLongPressThread = useCallback((thread: ChatThread) => {
+    setSelectedThreadForMenu(thread);
+    setThreadMenuVisible(true);
+  }, []);
 
   // Mở danh sách User mới để Chat
   const handleOpenNewChat = async () => {
@@ -356,68 +346,15 @@ export default function MessagesScreen() {
     }
   };
 
-  const renderThreadItem = ({ item }: { item: ChatThread }) => (
-    <TouchableOpacity
-      style={[styles.threadCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-      onPress={() => handleSelectThread(item)}
-      onLongPress={() => {
-        setSelectedThreadForMenu(item);
-        setThreadMenuVisible(true);
-      }}
-      delayLongPress={500}
-    >
-      <View style={styles.avatarWrapper}>
-        <Image source={{ uri: item.avatar }} style={styles.threadAvatar} />
-        {item.online && (
-          <View style={[styles.onlineIndicator, { borderColor: colors.card }]} />
-        )}
-      </View>
-
-      <View style={styles.threadInfo}>
-        <View style={styles.threadHeader}>
-          <Text style={[
-            styles.threadName, 
-            { 
-              color: colors.text,
-              fontWeight: (item.unreadCount || 0) > 0 ? '800' : '500'
-            }
-          ]} numberOfLines={1}>
-            {item.name}
-          </Text>
-          <RelativeTime
-            rawTime={item.rawTime}
-            style={[
-              styles.threadTime,
-              {
-                color: (item.unreadCount || 0) > 0 ? colors.tint : '#a0aec0',
-                fontWeight: (item.unreadCount || 0) > 0 ? '700' : '400'
-              }
-            ]}
-          />
-        </View>
-        <View style={styles.threadBody}>
-          <Text style={[
-            styles.lastMsg,
-            {
-              color: (item.unreadCount || 0) > 0 && item.lastMessageSenderId !== currentUser.id
-                ? colors.text
-                : colors.textSecondary,
-              fontWeight: (item.unreadCount || 0) > 0 && item.lastMessageSenderId !== currentUser.id
-                ? '800'
-                : '400',
-            }
-          ]} numberOfLines={1}>
-            {item.lastMessage || 'Chưa có tin nhắn nào.'}
-          </Text>
-          {(item.unreadCount || 0) > 0 && (
-            <View style={[styles.unreadBadge, { backgroundColor: colors.tint }]}>
-              <Text style={styles.unreadText}>{item.unreadCount}</Text>
-            </View>
-          )}
-        </View>
-      </View>
-    </TouchableOpacity>
-  );
+  const renderThreadItem = useCallback(({ item }: { item: ChatThread }) => (
+    <ConversationItem
+      item={item}
+      colors={colors}
+      currentUser={currentUser}
+      onPress={handleSelectThread}
+      onLongPress={handleLongPressThread}
+    />
+  ), [colors, currentUser, handleSelectThread, handleLongPressThread]);
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['bottom']}>

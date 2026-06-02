@@ -19,10 +19,11 @@ const broadcastToConversation = async (io, conversationId, eventName, payload) =
   }
 };
 
-// GET /api/messages?conversation_id=X&user_id=Y&page=1&limit=30
+// GET /api/messages?conversation_id=X&user_id=Y&before=Z&limit=30
 router.get('/', async (req, res) => {
   const conversationId = parseInt(req.query.conversation_id);
   const userId = parseInt(req.query.user_id);
+  const before = parseInt(req.query.before);
   const page  = parseInt(req.query.page)  || 1;
   const limit = parseInt(req.query.limit) || 30;
 
@@ -33,9 +34,8 @@ router.get('/', async (req, res) => {
   const offset = (page - 1) * limit;
 
   try {
-    // Lấy tin nhắn (lọc tin nhắn bị ẩn 'deleted_messages' cho user hiện tại và tin nhắn bị xóa cứng cho mọi người)
-    const result = await query(
-      `SELECT
+    let queryStr = `
+      SELECT
          m.id, m.conversation_id, m.sender_id,
          u.name   AS sender_name,
          u.avatar AS sender_avatar,
@@ -47,10 +47,20 @@ router.get('/', async (req, res) => {
        JOIN users u ON m.sender_id = u.id
        WHERE m.conversation_id = $1
          AND ($2::integer IS NULL OR NOT EXISTS(SELECT 1 FROM deleted_messages WHERE message_id = m.id AND user_id = $2))
-       ORDER BY m.id DESC
-       LIMIT $3 OFFSET $4`,
-      [conversationId, userId || null, limit, offset]
-    );
+    `;
+    const params = [conversationId, userId || null];
+
+    if (before && before > 0) {
+      queryStr += ` AND m.id < $3`;
+      params.push(before);
+      queryStr += ` ORDER BY m.id DESC LIMIT $4`;
+      params.push(limit);
+    } else {
+      queryStr += ` ORDER BY m.id DESC LIMIT $3 OFFSET $4`;
+      params.push(limit, offset);
+    }
+
+    const result = await query(queryStr, params);
 
     const formatted = result.rows.map(msg => ({
       id:              parseInt(msg.id),

@@ -46,27 +46,29 @@ async function registerTokenOnBackend(token: string) {
 }
 
 // Biến cờ (flag) toàn cục trong phiên chạy để chống trùng lặp và lặp re-render vô hạn
-let isFCMRegisteringOrRegistered = false;
+let registeredUserId: number | null = null;
+let isFCMRegistering = false;
 
 /**
  * Xin quyền thông báo và lấy FCM Token
  */
-export async function requestAndRegisterFCM() {
+export async function requestAndRegisterFCM(userId: number) {
   // Chỉ thực hiện trên trình duyệt Web (PWA)
   if (Platform.OS !== 'web') {
     console.log('[fcmHelper] Bỏ qua đăng ký FCM do không phải môi trường Web.');
     return;
   }
 
-  if (isFCMRegisteringOrRegistered) {
-    console.log('[fcmHelper] Đăng ký FCM đã hoàn thành hoặc đang được xử lý. Bỏ qua để chống vòng lặp vô hạn.');
+  if (registeredUserId === userId || isFCMRegistering) {
+    console.log(`[fcmHelper] FCM đã đăng ký cho user ${userId} hoặc đang xử lý. Bỏ qua.`);
     return;
   }
-  isFCMRegisteringOrRegistered = true;
+  isFCMRegistering = true;
 
   // Kiểm tra hỗ trợ của Trình duyệt cho Service Worker và Notifications
   if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('Notification' in window)) {
     console.warn('[fcmHelper] Trình duyệt này không hỗ trợ Service Worker hoặc Push Notifications.');
+    isFCMRegistering = false;
     return;
   }
 
@@ -79,6 +81,7 @@ export async function requestAndRegisterFCM() {
 
     if (permission !== 'granted') {
       console.warn('[fcmHelper] Quyền nhận thông báo bị từ chối.');
+      isFCMRegistering = false;
       return;
     }
 
@@ -103,12 +106,13 @@ export async function requestAndRegisterFCM() {
       console.log('🎫 [fcmHelper] Lấy FCM token thành công:', fcmToken);
       // 5. Gửi lên backend để lưu trữ
       await registerTokenOnBackend(fcmToken);
+      registeredUserId = userId;
     } else {
       console.warn('[fcmHelper] Không thể lấy FCM Token. Kiểm tra quyền hoặc cấu hình.');
-      isFCMRegisteringOrRegistered = false; // Reset cờ khi thất bại để cho phép thử lại
     }
   } catch (error) {
     console.error('❌ [fcmHelper] Lỗi trong quá trình xin quyền & lấy FCM token:', error);
-    isFCMRegisteringOrRegistered = false; // Reset cờ khi gặp lỗi để cho phép thử lại
+  } finally {
+    isFCMRegistering = false;
   }
 }

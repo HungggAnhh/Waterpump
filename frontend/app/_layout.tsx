@@ -86,11 +86,14 @@ function RootLayoutContent() {
 function RootLayoutNav() {
   const colorScheme = useColorScheme();
   const router = useRouter();
+  const { user } = useUser();
 
   useEffect(() => {
-    // Tự động đăng ký Web Push Notifications cho PWA
-    requestAndRegisterFCM();
-  }, []);
+    if (user?.id) {
+      // Tự động đăng ký Web Push Notifications cho PWA khi có user
+      requestAndRegisterFCM(user.id);
+    }
+  }, [user?.id]);
 
   // Xử lý điều hướng gián tiếp qua trang chủ (?redirect=...) để tránh lỗi Vercel 404
   useEffect(() => {

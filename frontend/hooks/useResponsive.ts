@@ -8,6 +8,8 @@ export interface ResponsiveConfig {
   height: number;
   deviceType: DeviceType;
   orientation: Orientation;
+  isSmallPhone: boolean;
+  isLargePhone: boolean;
   isPhone: boolean;
   isTablet: boolean;
   isDesktop: boolean;
@@ -38,6 +40,8 @@ export const useResponsive = (): ResponsiveConfig => {
     height,
     deviceType,
     orientation,
+    isSmallPhone: deviceType === 'smallPhone',
+    isLargePhone: deviceType === 'largePhone',
     isPhone: deviceType === 'smallPhone' || deviceType === 'largePhone',
     isTablet: deviceType === 'tablet',
     isDesktop: deviceType === 'desktop',

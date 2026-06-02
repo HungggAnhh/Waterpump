@@ -624,6 +624,7 @@ const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
     justifyContent: 'flex-end',
+    zIndex: 999,
   },
   modalContainer: {
     borderTopLeftRadius: 24,

@@ -58,9 +58,6 @@ interface ConversationStore {
   
   // Real-time conversation seen logic
   markAsSeen: (conversationId: string, messageId: number) => void;
-  
-  // Update online status in real-time
-  updateOnlineUsers: (onlineUserIds: number[]) => void;
 
   // New Group actions
   updateGroupName: (conversationId: string, newName: string) => void;
@@ -171,21 +168,6 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
           unreadCount: 0,
           lastSeenMessageId: messageId,
         };
-      });
-      return { conversations: newConvs };
-    });
-  },
-
-  updateOnlineUsers: (onlineUserIds) => {
-    set((state) => {
-      const newConvs = state.conversations.map((c) => {
-        if (c.type === 'direct' && c.otherUser) {
-          const shouldBeOnline = onlineUserIds.includes(c.otherUser.user_id);
-          if (c.online !== shouldBeOnline) {
-            return { ...c, online: shouldBeOnline };
-          }
-        }
-        return c;
       });
       return { conversations: newConvs };
     });

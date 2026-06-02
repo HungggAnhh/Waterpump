@@ -190,6 +190,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
+    zIndex: 999,
   },
   keyboardView: {
     width: '100%',

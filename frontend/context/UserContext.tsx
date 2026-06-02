@@ -68,7 +68,7 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
-  // 1. Kiểm tra phiên đăng nhập persistent khi khởi động App
+  // 1. Kiểm tra phiên đăng nhập persistent khi khởi động App (Xác thực ở Background)
   useEffect(() => {
     const checkPersistentLogin = async () => {
       try {
@@ -76,30 +76,46 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const storedUserJson = await safeStorage.getItem('user_data');
 
         if (storedToken && storedUserJson) {
-          // Gửi API kiểm tra token xem còn hợp lệ không (verify-token)
-          const response = await fetch(`${API_BASE_URL}/auth/verify-token`, {
+          // Gán dữ liệu tạm từ cache để app hiển thị giao diện ngay lập tức
+          const parsedUser = JSON.parse(storedUserJson);
+          setUser(parsedUser);
+          setToken(storedToken);
+          setLoading(false); // Kết thúc loading ngay lập tức!
+
+          // Gọi API xác thực ở background để kiểm tra xem token còn hiệu lực không
+          fetch(`${API_BASE_URL}/auth/verify-token`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
               'Authorization': `Bearer ${storedToken}`
             }
-          });
-
-          const result = await response.json();
-
-          if (response.ok && result.status === 'success') {
-            // Token hợp lệ, cập nhật trạng thái vào State
-            setUser(result.data);
-            setToken(storedToken);
-          } else {
-            // Token đã hết hạn hoặc không hợp lệ -> xóa sạch phiên
-            await safeStorage.removeItem('user_token');
-            await safeStorage.removeItem('user_data');
-          }
+          })
+            .then(async (response) => {
+              const result = await response.json();
+              if (response.ok && result.status === 'success') {
+                // Nếu dữ liệu user mới nhất từ server khác với cache, cập nhật lại
+                if (JSON.stringify(result.data) !== JSON.stringify(parsedUser)) {
+                  setUser(result.data);
+                  await safeStorage.setItem('user_data', JSON.stringify(result.data));
+                }
+              } else {
+                // Token không còn hợp lệ -> xóa sạch phiên
+                console.warn('⚠️ [UserContext] Phiên đăng nhập hết hạn ở background');
+                await safeStorage.removeItem('user_token');
+                await safeStorage.removeItem('user_data');
+                setUser(null);
+                setToken(null);
+              }
+            })
+            .catch((error) => {
+              console.error("⚠️ [UserContext] Lỗi xác thực token ở background:", error);
+              // Giữ phiên đăng nhập offline nếu lỗi kết nối mạng (tránh block offline mode)
+            });
+        } else {
+          setLoading(false);
         }
       } catch (error) {
         console.error("Lỗi tự động đăng nhập:", error);
-      } finally {
         setLoading(false);
       }
     };
