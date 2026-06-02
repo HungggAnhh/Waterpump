@@ -15,7 +15,7 @@ import { playRingtone, stopRingtone } from '../utils/webrtcShim';
 interface SocketContextType {
   socket: Socket | null;
   isConnected: boolean;
-  startCall?: (target: { id: number; name: string; avatar?: string }, type: 'voice' | 'video') => void;
+  startCall?: (target: { id: number; name: string; avatar?: string }, type: 'voice' | 'video', conversationId?: string) => void;
 }
 
 const SocketContext = createContext<SocketContextType>({
@@ -30,7 +30,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   // Khởi tạo WebRTC hook toàn cục
   const webrtc = useWebRTC(
-    socketRef.current,
+    socketRef,
     user ? { id: Number(user.id), name: user.name, avatar: user.avatar || undefined } : { id: 0, name: 'Guest' }
   );
 
@@ -169,9 +169,9 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     // ─── SIGNALING VOICE & VIDEO CALL LISTENERS ───
 
-    socket.on('incoming_call', ({ callerInfo, callType }) => {
+    socket.on('incoming_call', ({ callerInfo, callType, conversationId }) => {
       console.log('📡 [SOCKET:INCOMING_CALL] Cuộc gọi đến từ:', callerInfo?.name);
-      useCallStore.getState().setIncoming(callerInfo, callType);
+      useCallStore.getState().setIncoming(callerInfo, callType, conversationId);
       playRingtone();
     });
 

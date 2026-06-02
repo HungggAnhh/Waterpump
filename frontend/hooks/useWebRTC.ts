@@ -13,7 +13,7 @@ const configuration = {
   ]
 };
 
-export const useWebRTC = (socket: any, currentUser: CallUserInfo) => {
+export const useWebRTC = (socketRef: React.RefObject<any>, currentUser: CallUserInfo) => {
   const {
     callState,
     callType,
@@ -53,9 +53,9 @@ export const useWebRTC = (socket: any, currentUser: CallUserInfo) => {
 
     // Bắt đầu lắng nghe ICE Candidates tạo ra
     pc.onicecandidate = (event: any) => {
-      if (event.candidate && socket) {
+      if (event.candidate && socketRef.current) {
         // console.log('📡 [useWebRTC:ICE] Gửi ICE candidate tới:', peerId);
-        socket.emit('ice_candidate', {
+        socketRef.current.emit('ice_candidate', {
           toUserId: peerId,
           candidate: event.candidate,
         });
@@ -91,7 +91,7 @@ export const useWebRTC = (socket: any, currentUser: CallUserInfo) => {
     };
 
     return pc;
-  }, [socket, storeSetConnected]);
+  }, [socketRef, storeSetConnected]);
 
   // 2. Thu thập luồng camera & mic nội bộ
   const acquireMedia = useCallback(async (type: CallType) => {
@@ -119,12 +119,12 @@ export const useWebRTC = (socket: any, currentUser: CallUserInfo) => {
   }, []);
 
   // 3. Khởi tạo cuộc gọi (Caller)
-  const startCall = useCallback(async (targetUser: CallUserInfo, type: CallType) => {
+  const startCall = useCallback(async (targetUser: CallUserInfo, type: CallType, conversationId?: string) => {
     console.log(`🔌 [useWebRTC:START_CALL] Gọi điện tới user ${targetUser.id} (${targetUser.name})`);
     peerUserIdRef.current = targetUser.id;
     
     // Đặt trạng thái store sang calling
-    storeStartCall(targetUser, type);
+    storeStartCall(targetUser, type, conversationId);
     playRingtone(); // Đổ chuông gọi đi
 
     try {
@@ -132,17 +132,18 @@ export const useWebRTC = (socket: any, currentUser: CallUserInfo) => {
       await acquireMedia(type);
 
       // 2. Gửi tín hiệu gọi điện qua socket
-      if (socket) {
-        socket.emit('call_user', {
+      if (socketRef.current) {
+        socketRef.current.emit('call_user', {
           toUserId: targetUser.id,
           callerInfo: currentUser,
           callType: type,
+          conversationId,
         });
       }
     } catch (e) {
       handleHangUp(true);
     }
-  }, [currentUser, socket, storeStartCall, acquireMedia]);
+  }, [currentUser, socketRef, storeStartCall, acquireMedia]);
 
   // 4. Chấp nhận cuộc gọi (Receiver)
   const acceptCall = useCallback(async () => {
@@ -159,8 +160,8 @@ export const useWebRTC = (socket: any, currentUser: CallUserInfo) => {
       const stream = await acquireMedia(type);
 
       // Gửi tín hiệu chấp nhận cuộc gọi
-      if (socket) {
-        socket.emit('accept_call', { toUserId: caller.id });
+      if (socketRef.current) {
+        socketRef.current.emit('accept_call', { toUserId: caller.id });
       }
 
       // Tạo peer connection và add tracks
@@ -173,7 +174,7 @@ export const useWebRTC = (socket: any, currentUser: CallUserInfo) => {
     } catch (e) {
       handleHangUp(true);
     }
-  }, [callerInfo, callType, acquireMedia, socket, createPeerConnection, storeSetConnected]);
+  }, [callerInfo, callType, acquireMedia, socketRef, createPeerConnection, storeSetConnected]);
 
   // 5. Từ chối cuộc gọi (Receiver)
   const rejectCall = useCallback(() => {
@@ -182,11 +183,11 @@ export const useWebRTC = (socket: any, currentUser: CallUserInfo) => {
 
     console.log(`🔌 [useWebRTC:REJECT_CALL] Từ chối cuộc gọi từ ${caller.id}`);
     stopRingtone();
-    if (socket) {
-      socket.emit('reject_call', { toUserId: caller.id });
+    if (socketRef.current) {
+      socketRef.current.emit('reject_call', { toUserId: caller.id });
     }
     storeResetCall();
-  }, [callerInfo, socket, storeResetCall]);
+  }, [callerInfo, socketRef, storeResetCall]);
 
   // 6. Gửi WebRTC Offer (Caller thực hiện sau khi Receiver bấm đồng ý)
   const initiateOffer = useCallback(async (peerId: number) => {
@@ -207,8 +208,8 @@ export const useWebRTC = (socket: any, currentUser: CallUserInfo) => {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      if (socket) {
-        socket.emit('offer', {
+      if (socketRef.current) {
+        socketRef.current.emit('offer', {
           toUserId: peerId,
           offer,
         });
@@ -217,7 +218,7 @@ export const useWebRTC = (socket: any, currentUser: CallUserInfo) => {
       console.error('❌ [useWebRTC:OFFER] Lỗi khởi tạo offer:', e);
       handleHangUp(true);
     }
-  }, [createPeerConnection, socket]);
+  }, [createPeerConnection, socketRef]);
 
   // 7. Nhận Offer (Receiver nhận và tạo SDP Answer)
   const handleOffer = useCallback(async (offer: any) => {
@@ -232,8 +233,8 @@ export const useWebRTC = (socket: any, currentUser: CallUserInfo) => {
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
-      if (socket) {
-        socket.emit('answer', {
+      if (socketRef.current) {
+        socketRef.current.emit('answer', {
           toUserId: peerId,
           answer,
         });
@@ -242,7 +243,7 @@ export const useWebRTC = (socket: any, currentUser: CallUserInfo) => {
       console.error('❌ [useWebRTC:ANSWER] Lỗi tạo Answer:', e);
       handleHangUp(true);
     }
-  }, [socket]);
+  }, [socketRef]);
 
   // 8. Nhận Answer (Caller nhận và hoàn tất handshake)
   const handleAnswer = useCallback(async (answer: any) => {
@@ -274,8 +275,8 @@ export const useWebRTC = (socket: any, currentUser: CallUserInfo) => {
     stopRingtone();
 
     // 1. Thông báo cho đối phương
-    if (notifyPeer && peerId && socket) {
-      socket.emit('end_call', { toUserId: peerId });
+    if (notifyPeer && peerId && socketRef.current) {
+      socketRef.current.emit('end_call', { toUserId: peerId });
     }
 
     // 2. Dừng tất cả stream cục bộ
@@ -304,7 +305,7 @@ export const useWebRTC = (socket: any, currentUser: CallUserInfo) => {
 
     peerUserIdRef.current = null;
     storeResetCall();
-  }, [socket, storeResetCall]);
+  }, [socketRef, storeResetCall]);
 
   // 11. Các chức năng bổ trợ bật tắt mic/cam
   const toggleMute = useCallback(() => {

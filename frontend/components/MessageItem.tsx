@@ -10,7 +10,7 @@ export interface Message {
   sender_name: string;
   sender_avatar: string | null;
   message: string;
-  type: 'text' | 'image' | 'file';
+  type: 'text' | 'image' | 'file' | 'call';
   file_url: string | null;
   created_at: string;
   raw_time?: string;
@@ -19,7 +19,7 @@ export interface Message {
     id: number;
     sender_name: string;
     message: string;
-    type: 'text' | 'image' | 'file';
+    type: 'text' | 'image' | 'file' | 'call';
     file_url: string | null;
     recalled?: boolean;
   } | null;
@@ -295,7 +295,24 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                     : { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1 }
             ]}
           >
-            {item.type === 'file' && item.file_url ? (
+            {item.type === 'call' ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', minWidth: 160, paddingVertical: 2 }}>
+                <Ionicons
+                  name={item.message.includes('video') ? 'videocam' : 'call'}
+                  size={20}
+                  color={isMine ? '#fff' : colors.tint}
+                  style={{ marginRight: 10 }}
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: isMine ? '#fff' : colors.text }}>
+                    {item.message}
+                  </Text>
+                  <Text style={{ fontSize: 10, color: isMine ? 'rgba(255, 255, 255, 0.75)' : colors.textSecondary, marginTop: 2 }}>
+                    Lịch sử cuộc gọi
+                  </Text>
+                </View>
+              </View>
+            ) : item.type === 'file' && item.file_url ? (
               <View style={styles.videoAttachmentCard}>
                 <Ionicons name="play-circle-outline" size={32} color={(isMine && !isHighlighted) ? '#fff' : colors.tint} />
                 <View style={{ marginLeft: 8 }}>

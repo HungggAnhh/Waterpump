@@ -18,10 +18,11 @@ interface CallStore {
   isMuted: boolean;
   isVideoOff: boolean;
   isMinimized: boolean;
+  conversationId: string | null;
   
   // Actions
-  startCall: (target: CallUserInfo, type: CallType) => void;
-  setIncoming: (caller: CallUserInfo, type: CallType) => void;
+  startCall: (target: CallUserInfo, type: CallType, conversationId?: string) => void;
+  setIncoming: (caller: CallUserInfo, type: CallType, conversationId?: string) => void;
   setConnected: () => void;
   toggleMute: () => void;
   toggleVideo: () => void;
@@ -40,18 +41,20 @@ export const useCallStore = create<CallStore>((set) => ({
   isMuted: false,
   isVideoOff: false,
   isMinimized: false,
+  conversationId: null,
 
-  startCall: (target, type) => set({
+  startCall: (target, type, conversationId) => set({
     callState: 'calling',
     callType: type,
-    callerInfo: null, // Self is caller, will set callerInfo when receiving if needed, or leave null
+    callerInfo: null, // Self is caller
     targetInfo: target,
     isMuted: false,
     isVideoOff: false,
     isMinimized: false,
+    conversationId: conversationId || null,
   }),
 
-  setIncoming: (caller, type) => set({
+  setIncoming: (caller, type, conversationId) => set({
     callState: 'incoming',
     callType: type,
     callerInfo: caller,
@@ -59,6 +62,7 @@ export const useCallStore = create<CallStore>((set) => ({
     isMuted: false,
     isVideoOff: false,
     isMinimized: false,
+    conversationId: conversationId || null,
   }),
 
   setConnected: () => set({
@@ -80,5 +84,6 @@ export const useCallStore = create<CallStore>((set) => ({
     isMuted: false,
     isVideoOff: false,
     isMinimized: false,
+    conversationId: null,
   }),
 }));

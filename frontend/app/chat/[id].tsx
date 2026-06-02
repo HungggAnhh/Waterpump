@@ -1076,7 +1076,8 @@ export default function ChatRoomScreen() {
                           name: activeThread.otherUser!.name,
                           avatar: activeThread.otherUser!.avatar
                         },
-                        'voice'
+                        'voice',
+                        conversationId
                       );
                     }
                   }}
@@ -1097,7 +1098,8 @@ export default function ChatRoomScreen() {
                           name: activeThread.otherUser!.name,
                           avatar: activeThread.otherUser!.avatar
                         },
-                        'video'
+                        'video',
+                        conversationId
                       );
                     }
                   }}
