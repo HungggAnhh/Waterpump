@@ -423,6 +423,9 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    width: '100%',
+    maxWidth: 768,
+    alignSelf: 'center',
   },
   content: {
     padding: 20,
