@@ -68,6 +68,7 @@ self.addEventListener('push', (event) => {
       ...data
     },
     tag: tag,
+    renotify: true,
   };
 
   if (notificationType === 'call') {

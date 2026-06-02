@@ -79,6 +79,12 @@ app.set('io', io);
 const onlineUsers = new Map(); // userId → userDetail
 const activeCalls = new Map(); // tracks active calling sessions: userId <-> peerId (bidirectional)
 
+// Helper functions to prevent String vs Number mismatch in activeCalls Map
+const getCallSession = (userId) => userId ? activeCalls.get(String(userId)) : null;
+const setCallSession = (userId, session) => userId && activeCalls.set(String(userId), session);
+const hasCallSession = (userId) => userId ? activeCalls.has(String(userId)) : false;
+const deleteCallSession = (userId) => userId && activeCalls.delete(String(userId));
+
 // ─── Socket.IO Events ─────────────────────────────────────────────
 io.on('connection', (socket) => {
   console.log(`🔌 Kết nối mới: ${socket.id}`);
@@ -95,9 +101,7 @@ io.on('connection', (socket) => {
       io.emit('update_online_users', Array.from(onlineUsers.values()));
 
       // Kiểm tra nếu user này đang có một phiên cuộc gọi đang đổ chuông chờ (chưa kết nối)
-      const userIdStr = String(user.id);
-      const userIdNum = Number(user.id);
-      const session = activeCalls.get(userIdStr) || activeCalls.get(userIdNum);
+      const session = getCallSession(user.id);
       
       if (session && !session.startTime) {
         console.log(`📡 [RESILIENCE] Phát hiện user ${user.id} vừa online và có cuộc gọi đang chờ từ ${session.peerId}. Gửi incoming_call hối thúc...`);
@@ -474,13 +478,13 @@ io.on('connection', (socket) => {
     console.log(`📞 [CALL_USER] ${socket.userId} (${callerInfo?.name}) đang gọi tới ${toUserId} (Kiểu: ${callType}, Room: ${conversationId})`);
     
     // Ghi nhận cuộc gọi vào map activeCalls với các thông tin phiên
-    activeCalls.set(socket.userId, {
+    setCallSession(socket.userId, {
       peerId: toUserId,
       conversationId: conversationId || null,
       callType,
       startTime: null
     });
-    activeCalls.set(toUserId, {
+    setCallSession(toUserId, {
       peerId: socket.userId,
       conversationId: conversationId || null,
       callType,
@@ -533,8 +537,8 @@ io.on('connection', (socket) => {
     console.log(`📞 [ACCEPT_CALL] User ${socket.userId} chấp nhận cuộc gọi từ ${toUserId}`);
     
     // Cập nhật thời điểm bắt đầu cuộc gọi để tính toán Duration khi kết thúc
-    const callerSession = activeCalls.get(toUserId);
-    const receiverSession = activeCalls.get(socket.userId);
+    const callerSession = getCallSession(toUserId);
+    const receiverSession = getCallSession(socket.userId);
     const now = Date.now();
     if (callerSession) callerSession.startTime = now;
     if (receiverSession) receiverSession.startTime = now;
@@ -547,13 +551,13 @@ io.on('connection', (socket) => {
     console.log(`📞 [REJECT_CALL] User ${socket.userId} từ chối cuộc gọi từ ${toUserId}`);
     
     // Ghi nhận cuộc gọi nhỡ khi từ chối
-    const session = activeCalls.get(socket.userId);
+    const session = getCallSession(socket.userId);
     if (session) {
       const msgText = session.callType === 'video' ? '🎥 Cuộc gọi video nhỡ' : '📞 Cuộc gọi thoại nhỡ';
       saveCallLog(session.conversationId, toUserId, msgText); // Người gọi (toUserId) là sender log nhỡ
       
-      activeCalls.delete(socket.userId);
-      activeCalls.delete(toUserId);
+      deleteCallSession(socket.userId);
+      deleteCallSession(toUserId);
     }
     
     io.to(`user_${toUserId}`).emit('call_rejected');
@@ -578,7 +582,7 @@ io.on('connection', (socket) => {
   socket.on('end_call', ({ toUserId }) => {
     console.log(`📞 [END_CALL] User ${socket.userId} kết thúc cuộc gọi với ${toUserId}`);
     
-    const session = activeCalls.get(socket.userId);
+    const session = getCallSession(socket.userId);
     if (session) {
       if (session.startTime) {
         // Cuộc gọi thành công, tính toán thời lượng cuộc gọi
@@ -595,9 +599,15 @@ io.on('connection', (socket) => {
         saveCallLog(session.conversationId, socket.userId, msgText);
       }
 
-      activeCalls.delete(socket.userId);
+      deleteCallSession(socket.userId);
       if (toUserId) {
-        activeCalls.delete(toUserId);
+        deleteCallSession(toUserId);
+        io.to(`user_${toUserId}`).emit('call_ended');
+      }
+    } else {
+      console.warn(`⚠️ [END_CALL] Không tìm thấy phiên hoạt động cho User ${socket.userId} trong activeCalls. Kích hoạt cúp máy dự phòng cho đối phương.`);
+      // Ngay cả khi không tìm thấy phiên trong map, vẫn gửi call_ended dự phòng cho đối phương để giao diện cúp máy đồng bộ
+      if (toUserId) {
         io.to(`user_${toUserId}`).emit('call_ended');
       }
     }
@@ -607,8 +617,8 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     if (socket.userId) {
       // Resilience Handler: Nếu đang trong cuộc gọi, tự động lưu log và treo máy đầu bên kia
-      if (activeCalls.has(socket.userId)) {
-        const session = activeCalls.get(socket.userId);
+      if (hasCallSession(socket.userId)) {
+        const session = getCallSession(socket.userId);
         const peerId = session.peerId;
         console.log(`🚨 [RESILIENCE] User ${socket.userId} ngắt kết nối đột ngột khi đang gọi. Tự động kết thúc cuộc gọi với User ${peerId}`);
         
@@ -625,8 +635,8 @@ io.on('connection', (socket) => {
         }
 
         io.to(`user_${peerId}`).emit('call_ended');
-        activeCalls.delete(socket.userId);
-        activeCalls.delete(peerId);
+        deleteCallSession(socket.userId);
+        deleteCallSession(peerId);
       }
 
       const user = onlineUsers.get(socket.userId);
