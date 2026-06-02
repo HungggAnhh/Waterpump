@@ -7,10 +7,37 @@ import { playRingtone, stopRingtone } from '../utils/webrtcShim';
 
 const configuration = {
   iceServers: [
+    // 1. Giữ lại STUN mặc định của Google để kết nối nội bộ
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' }
-  ]
+    { urls: 'stun:stun2.l.google.com:19302' },
+
+    // 2. Điền thông tin TURN Server từ tài khoản Metered.ca của bạn
+    {
+      urls: 'stun:stun.relay.metered.ca:80',
+    },
+    {
+      urls: 'turn:global.relay.metered.ca:80',
+      username: 'b2655b37a3829e429930e412',
+      credential: '2IBwInjeXje3G1Xo',
+    },
+    {
+      urls: 'turn:global.relay.metered.ca:80?transport=tcp',
+      username: 'b2655b37a3829e429930e412',
+      credential: '2IBwInjeXje3G1Xo',
+    },
+    {
+      urls: 'turn:global.relay.metered.ca:443',
+      username: 'b2655b37a3829e429930e412',
+      credential: '2IBwInjeXje3G1Xo',
+    },
+    {
+      urls: 'turns:global.relay.metered.ca:443?transport=tcp',
+      username: 'b2655b37a3829e429930e412',
+      credential: '2IBwInjeXje3G1Xo',
+    },
+  ],
+  iceCandidatePoolSize: 10
 };
 
 export const useWebRTC = (socketRef: React.RefObject<any>, currentUser: CallUserInfo) => {
