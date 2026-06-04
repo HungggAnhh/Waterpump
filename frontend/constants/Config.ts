@@ -21,7 +21,7 @@ const getBaseUrl = () => {
       : `http://${COMPUTER_IP}:3000/api`;
   }
   // Khi build production sẽ gọi thẳng về production Render
-  return `https://waterpump-2.onrender.com/api`;
+  return `https://waterpump-fvl3.onrender.com/api`;
 };
 
 export const API_BASE_URL = getBaseUrl();
