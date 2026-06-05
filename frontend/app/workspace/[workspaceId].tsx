@@ -75,7 +75,6 @@ export default function PageTasksScreen() {
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
 
   // Share Menu Popover State
-  const [isShareMenuOpen, setIsShareMenuOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [isUrgeModalOpen, setIsUrgeModalOpen] = useState(false);
   const [submittingUrge, setSubmittingUrge] = useState(false);
@@ -337,7 +336,6 @@ export default function PageTasksScreen() {
   const handleCopyShareLink = () => {
     const shareUrl = getShareUrl();
     Clipboard.setString(shareUrl);
-    setIsShareMenuOpen(false);
     if (Platform.OS === 'web') {
       alert('Đã sao chép liên kết chia sẻ vào khay nhớ tạm!');
     } else {
@@ -345,25 +343,16 @@ export default function PageTasksScreen() {
     }
   };
 
-  const handleShareZalo = async () => {
-    const shareUrl = getShareUrl();
-    const zaloUrl = `https://sp.zalo.me/share_to_zalo?url=${encodeURIComponent(shareUrl)}`;
-    setIsShareMenuOpen(false);
+  const handleShare = async () => {
     try {
-      await Linking.openURL(zaloUrl);
-    } catch (err) {
-      console.error('Không thể mở liên kết Zalo:', err);
-    }
-  };
-
-  const handleShareFacebook = async () => {
-    const shareUrl = getShareUrl();
-    const fbUrl = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}`;
-    setIsShareMenuOpen(false);
-    try {
-      await Linking.openURL(fbUrl);
-    } catch (err) {
-      console.error('Không thể mở liên kết Facebook:', err);
+      const shareUrl = getShareUrl();
+      const shareTitle = `Chia sẻ không gian làm việc "${workspaceName}"`;
+      await Share.share({
+        title: shareTitle,
+        message: `${shareTitle}\n\n${shareUrl}`
+      });
+    } catch (error: any) {
+      console.error('Lỗi chia sẻ:', error.message);
     }
   };
 
@@ -748,12 +737,21 @@ export default function PageTasksScreen() {
         <View style={styles.headerRightMenu}>
           <Text style={[styles.lastEditedText, { color: colors.tabIconDefault }]}>Đã chỉnh sửa 3 phút trước</Text>
           <TouchableOpacity 
-            style={[styles.shareBtn, { borderColor: colors.border }]}
-            onPress={() => setIsShareMenuOpen(true)}
+            style={[styles.shareBtn, { borderColor: colors.border, marginRight: 8 }]}
+            onPress={handleCopyShareLink}
             activeOpacity={0.7}
           >
+            <Ionicons name="copy-outline" size={14} color={colors.text} style={{ marginRight: 4 }} />
+            <Text style={[styles.shareBtnText, { color: colors.text }]}>Sao chép</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            style={[styles.shareBtn, { borderColor: colors.border }]}
+            onPress={handleShare}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="share-social-outline" size={14} color={colors.text} style={{ marginRight: 4 }} />
             <Text style={[styles.shareBtnText, { color: colors.text }]}>Chia sẻ</Text>
-            <Ionicons name="chevron-down" size={12} color={colors.text} style={{ marginLeft: 4 }} />
           </TouchableOpacity>
           <Ionicons name="ellipsis-horizontal" size={18} color={colors.tabIconDefault} style={{ marginLeft: 10 }} />
         </View>
@@ -1940,38 +1938,7 @@ export default function PageTasksScreen() {
         </View>
       </Modal>
 
-      {/* 8. Popover: Share Menu */}
-      <Modal
-        visible={isShareMenuOpen}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => setIsShareMenuOpen(false)}
-      >
-        <TouchableOpacity 
-          style={styles.popoverBackdrop} 
-          activeOpacity={1} 
-          onPress={() => setIsShareMenuOpen(false)}
-        >
-          <View style={[styles.sharePopoverCard, { backgroundColor: colors.card, borderColor: colors.border }]} onStartShouldSetResponder={() => true}>
-            <Text style={[styles.popoverTitle, { color: colors.text }]}>Chia sẻ trang</Text>
-            
-            <TouchableOpacity style={styles.popoverOption} onPress={handleCopyShareLink}>
-              <Ionicons name="link-outline" size={18} color={colors.text} style={{ marginRight: 10 }} />
-              <Text style={[styles.popoverOptionText, { color: colors.text }]}>Sao chép liên kết</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.popoverOption} onPress={handleShareZalo}>
-              <Ionicons name="chatbubble-ellipses-outline" size={18} color="#0068ff" style={{ marginRight: 10 }} />
-              <Text style={[styles.popoverOptionText, { color: colors.text }]}>Chia sẻ qua Zalo</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.popoverOption} onPress={handleShareFacebook}>
-              <Ionicons name="logo-facebook" size={18} color="#1877f2" style={{ marginRight: 10 }} />
-              <Text style={[styles.popoverOptionText, { color: colors.text }]}>Chia sẻ qua Facebook</Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </Modal>
+      {/* 8. Popover: Share Menu removed */}
     </SafeAreaView>
   );
 }
