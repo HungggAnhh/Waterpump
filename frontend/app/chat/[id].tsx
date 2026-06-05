@@ -351,6 +351,12 @@ export default function ChatRoomScreen() {
       useConversationStore.getState().updateGroupName(conversationId, data.name);
     };
 
+    const handleMessageReadReceipt = (data: { conversation_id: number, user_id: number, message_id: number }) => {
+      if (String(data.conversation_id) !== conversationId) return;
+      console.log(`[CLIENT:SOCKET_READ_RECEIPT] User ${data.user_id} read message ${data.message_id} in conversation ${data.conversation_id}`);
+      useConversationStore.getState().updateMemberLastSeen(conversationId, data.user_id, data.message_id);
+    };
+
     socket.on('receive_message', handleReceiveMessage);
     socket.on('reaction_added', handleReactionUpdated);
     socket.on('reaction_removed', handleReactionUpdated);
@@ -364,6 +370,7 @@ export default function ChatRoomScreen() {
     socket.on('member_added', handleMemberAdded);
     socket.on('member_removed', handleMemberRemoved);
     socket.on('group_updated', handleGroupUpdated);
+    socket.on('message_read_receipt', handleMessageReadReceipt);
 
     return () => {
       socket.emit('leave_room', joinRoomPayload);
@@ -381,6 +388,7 @@ export default function ChatRoomScreen() {
       socket.off('member_added', handleMemberAdded);
       socket.off('member_removed', handleMemberRemoved);
       socket.off('group_updated', handleGroupUpdated);
+      socket.off('message_read_receipt', handleMessageReadReceipt);
     };
   }, [socket, conversationId, currentUser.id]);
 
@@ -430,6 +438,20 @@ export default function ChatRoomScreen() {
     return messages[0]?.id || activeThread?.lastMessageId || null;
   }, [messages[0]?.id, activeThread?.lastMessageId]);
 
+  const lastMyMessageId = useMemo(() => {
+    const lastMyMsg = messages.find(m => m.sender_id === currentUser.id && !m.recalled && !m.deleted && !m.deleted_for_me);
+    return lastMyMsg ? lastMyMsg.id : null;
+  }, [messages, currentUser.id]);
+
+  const readByMembers = useMemo(() => {
+    if (!lastMyMessageId || !activeThread?.members) return [];
+    return activeThread.members.filter(m => {
+      const memberId = m.user_id || m.id;
+      if (memberId === currentUser.id) return false;
+      return m.last_seen_message_id && m.last_seen_message_id >= lastMyMessageId;
+    });
+  }, [lastMyMessageId, activeThread?.members, currentUser.id]);
+
   // Automatic mark as seen
   useEffect(() => {
     if (!isFocused || appState !== 'active' || !conversationId || !newestMessageId) return;
@@ -437,19 +459,32 @@ export default function ChatRoomScreen() {
     const targetMsgId = messages[0]?.id || activeThread?.lastMessageId;
     const targetSenderId = messages[0]?.sender_id || activeThread?.lastMessageSenderId;
 
+    console.log(
+      "[SEEN_MESSAGE]",
+      {
+        targetMsgId,
+        socketConnected: socket?.connected,
+        conversationId
+      }
+    );
+
     if (!targetMsgId || targetSenderId === currentUser.id) return;
     if (lastSeenMessageIdRef.current === targetMsgId) return;
 
-    if (socket) {
-      socket.emit('seen_message', {
-        conversation_id: parseInt(conversationId),
-        message_id: targetMsgId,
-        user_id: currentUser.id,
-      });
-      useConversationStore.getState().markAsSeen(conversationId, targetMsgId);
+    if (!socket?.connected) {
+      console.log('[SEEN_MESSAGE:BLOCKED] Socket not connected', { targetMsgId });
+      return;
     }
+
+    console.log("[SEEN_EMITTED]", targetMsgId);
+    socket.emit('seen_message', {
+      conversation_id: parseInt(conversationId),
+      message_id: targetMsgId,
+      user_id: currentUser.id,
+    });
+    useConversationStore.getState().markAsSeen(conversationId, targetMsgId);
     lastSeenMessageIdRef.current = targetMsgId;
-  }, [newestMessageId, isFocused, appState, socket, currentUser.id, conversationId, activeThread?.lastMessageSenderId]);
+  }, [newestMessageId, isFocused, appState, socket, currentUser.id, conversationId, activeThread?.lastMessageSenderId, messages]);
 
   const handleBack = () => {
     router.back();
@@ -1160,7 +1195,7 @@ export default function ChatRoomScreen() {
           <FlatList
             ref={flatListRef}
             data={messages}
-            extraData={[messages, highlightedMessageId]}
+            extraData={[messages, highlightedMessageId, readByMembers]}
             keyExtractor={(item) => item.id.toString()}
             style={{ flex: 1 }}
             contentContainerStyle={styles.messageStream}
@@ -1179,21 +1214,25 @@ export default function ChatRoomScreen() {
                 </View>
               ) : null
             }
-            renderItem={({ item }) => (
-              <MessageItem
-                item={item}
-                isMine={item.sender_id === currentUser.id}
-                colors={colors}
-                onPressImage={handlePressImage}
-                onLongPress={handleOpenActionMenu}
-                onDoubleTap={handleDoubleTapMessage}
-                onPressQuote={handlePressQuote}
-                onPressReactions={handlePressReactions}
-                currentUserName={currentUser.name}
-                isHighlighted={item.id === highlightedMessageId}
-                onRecallPress={handleRecallMessage}
-              />
-            )}
+            renderItem={({ item }) => {
+              const isLastMyMsg = item.id === lastMyMessageId;
+              return (
+                <MessageItem
+                  item={item}
+                  isMine={item.sender_id === currentUser.id}
+                  colors={colors}
+                  onPressImage={handlePressImage}
+                  onLongPress={handleOpenActionMenu}
+                  onDoubleTap={handleDoubleTapMessage}
+                  onPressQuote={handlePressQuote}
+                  onPressReactions={handlePressReactions}
+                  currentUserName={currentUser.name}
+                  isHighlighted={item.id === highlightedMessageId}
+                  onRecallPress={handleRecallMessage}
+                  readBy={isLastMyMsg ? readByMembers : undefined}
+                />
+              );
+            }}
           />
 
           {/* Typing indicator */}

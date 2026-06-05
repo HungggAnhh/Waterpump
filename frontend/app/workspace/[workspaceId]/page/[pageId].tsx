@@ -11,6 +11,10 @@ import {
   ActivityIndicator,
   Platform,
   Image,
+  Alert,
+  Clipboard,
+  Linking,
+  Share
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Colors from '@/constants/Colors';
@@ -69,6 +73,9 @@ export default function PageTasksScreen() {
   // Modals
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+
+  // Share Menu Popover State
+  const [isShareMenuOpen, setIsShareMenuOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
 
   // Form Fields (For create and edit)
@@ -207,6 +214,46 @@ export default function PageTasksScreen() {
       socket.off('task_deleted', handleTaskDeleted);
     };
   }, [socket, pageId, user, selectedTask]);
+
+  const getShareUrl = () => {
+    if (Platform.OS === 'web') {
+      return `${window.location.origin}/workspace/${workspaceId}/page/${pageId}`;
+    }
+    return `https://waterpump.vercel.app/workspace/${workspaceId}/page/${pageId}`;
+  };
+
+  const handleCopyShareLink = () => {
+    const shareUrl = getShareUrl();
+    Clipboard.setString(shareUrl);
+    setIsShareMenuOpen(false);
+    if (Platform.OS === 'web') {
+      alert('Đã sao chép liên kết chia sẻ vào khay nhớ tạm!');
+    } else {
+      Alert.alert('Sao chép thành công', 'Đã sao chép liên kết chia sẻ vào khay nhớ tạm!');
+    }
+  };
+
+  const handleShareZalo = async () => {
+    const shareUrl = getShareUrl();
+    const zaloUrl = `https://sp.zalo.me/share_to_zalo?url=${encodeURIComponent(shareUrl)}`;
+    setIsShareMenuOpen(false);
+    try {
+      await Linking.openURL(zaloUrl);
+    } catch (err) {
+      console.error('Không thể mở liên kết Zalo:', err);
+    }
+  };
+
+  const handleShareFacebook = async () => {
+    const shareUrl = getShareUrl();
+    const fbUrl = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}`;
+    setIsShareMenuOpen(false);
+    try {
+      await Linking.openURL(fbUrl);
+    } catch (err) {
+      console.error('Không thể mở liên kết Facebook:', err);
+    }
+  };
 
   const handleOpenCreateModal = () => {
     setFormTitle('');
@@ -422,7 +469,11 @@ export default function PageTasksScreen() {
         {/* Small indicators */}
         <View style={styles.headerRightMenu}>
           <Text style={[styles.lastEditedText, { color: colors.tabIconDefault }]}>Đã chỉnh sửa 3 phút trước</Text>
-          <TouchableOpacity style={[styles.shareBtn, { borderColor: colors.border }]}>
+          <TouchableOpacity 
+            style={[styles.shareBtn, { borderColor: colors.border }]}
+            onPress={() => setIsShareMenuOpen(true)}
+            activeOpacity={0.7}
+          >
             <Text style={[styles.shareBtnText, { color: colors.text }]}>Chia sẻ</Text>
             <Ionicons name="chevron-down" size={12} color={colors.text} style={{ marginLeft: 4 }} />
           </TouchableOpacity>
@@ -764,6 +815,7 @@ export default function PageTasksScreen() {
                 value={formTitle}
                 onChangeText={setFormTitle}
                 editable={!selectedTask || isAdmin}
+                onSubmitEditing={selectedTask ? handleUpdateTask : handleCreateTask}
               />
 
               {/* Description */}
@@ -861,6 +913,7 @@ export default function PageTasksScreen() {
                 placeholderTextColor={colors.tabIconDefault}
                 value={formDeadline}
                 onChangeText={setFormDeadline}
+                onSubmitEditing={selectedTask ? handleUpdateTask : handleCreateTask}
               />
 
               {/* Form Buttons */}
@@ -1028,6 +1081,39 @@ export default function PageTasksScreen() {
             )}
           </View>
         </View>
+      </Modal>
+
+      {/* 8. Popover: Share Menu */}
+      <Modal
+        visible={isShareMenuOpen}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setIsShareMenuOpen(false)}
+      >
+        <TouchableOpacity 
+          style={styles.popoverBackdrop} 
+          activeOpacity={1} 
+          onPress={() => setIsShareMenuOpen(false)}
+        >
+          <View style={[styles.sharePopoverCard, { backgroundColor: colors.card, borderColor: colors.border }]} onStartShouldSetResponder={() => true}>
+            <Text style={[styles.popoverTitle, { color: colors.text }]}>Chia sẻ trang</Text>
+            
+            <TouchableOpacity style={styles.popoverOption} onPress={handleCopyShareLink}>
+              <Ionicons name="link-outline" size={18} color={colors.text} style={{ marginRight: 10 }} />
+              <Text style={[styles.popoverOptionText, { color: colors.text }]}>Sao chép liên kết</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.popoverOption} onPress={handleShareZalo}>
+              <Ionicons name="chatbubble-ellipses-outline" size={18} color="#0068ff" style={{ marginRight: 10 }} />
+              <Text style={[styles.popoverOptionText, { color: colors.text }]}>Chia sẻ qua Zalo</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.popoverOption} onPress={handleShareFacebook}>
+              <Ionicons name="logo-facebook" size={18} color="#1877f2" style={{ marginRight: 10 }} />
+              <Text style={[styles.popoverOptionText, { color: colors.text }]}>Chia sẻ qua Facebook</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
       </Modal>
     </SafeAreaView>
   );
@@ -1530,5 +1616,52 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
+  },
+  popoverBackdrop: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  sharePopoverCard: {
+    position: 'absolute',
+    top: 60,
+    right: 20,
+    width: 220,
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 8,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 4,
+      },
+      web: {
+        boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+      } as any
+    })
+  },
+  popoverTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#a0aec0',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  popoverOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  popoverOptionText: {
+    fontSize: 13.5,
+    fontWeight: '600',
   },
 });

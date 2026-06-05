@@ -51,6 +51,12 @@ export default function WorkspaceScreen() {
   const [selectedMembers, setSelectedMembers] = useState<number[]>([]);
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
 
+  // Modal states for editing Workspace
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editingWorkspace, setEditingWorkspace] = useState<Workspace | null>(null);
+  const [editWorkspaceName, setEditWorkspaceName] = useState('');
+  const [updatingWorkspace, setUpdatingWorkspace] = useState(false);
+
   // Fetch workspaces list
   const fetchWorkspaces = async () => {
     try {
@@ -105,8 +111,14 @@ export default function WorkspaceScreen() {
       setWorkspaces(prev => prev.filter(w => w.id !== deletedWs.id));
     };
 
+    const handleWorkspaceUpdated = (updatedWs: Workspace) => {
+      console.log('📡 [SOCKET] workspace_updated:', updatedWs);
+      setWorkspaces(prev => prev.map(w => w.id === updatedWs.id ? updatedWs : w));
+    };
+
     socket.on('workspace_created', handleWorkspaceCreated);
     socket.on('workspace_deleted', handleWorkspaceDeleted);
+    socket.on('workspace_updated', handleWorkspaceUpdated);
 
     const refreshTrigger = () => {
       // Re-fetch workspaces for non-admins when visibility updates
@@ -121,6 +133,7 @@ export default function WorkspaceScreen() {
     return () => {
       socket.off('workspace_created', handleWorkspaceCreated);
       socket.off('workspace_deleted', handleWorkspaceDeleted);
+      socket.off('workspace_updated', handleWorkspaceUpdated);
       socket.off('task_created', refreshTrigger);
       socket.off('task_updated', refreshTrigger);
       socket.off('task_deleted', refreshTrigger);
@@ -166,6 +179,39 @@ export default function WorkspaceScreen() {
       alert('Có lỗi mạng xảy ra.');
     } finally {
       setCreatingWorkspace(false);
+    }
+  };
+
+  const handleOpenEditWorkspaceModal = (ws: Workspace) => {
+    setEditingWorkspace(ws);
+    setEditWorkspaceName(ws.name);
+    setIsEditModalOpen(true);
+  };
+
+  const handleUpdateWorkspace = async () => {
+    if (!editingWorkspace || !editWorkspaceName.trim()) return;
+    try {
+      setUpdatingWorkspace(true);
+      const res = await fetch(`${API_BASE_URL}/tasks/workspaces/${editingWorkspace.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: editWorkspaceName,
+        }),
+      });
+      const result = await res.json();
+      if (result.status === 'success') {
+        setIsEditModalOpen(false);
+        setEditingWorkspace(null);
+        setEditWorkspaceName('');
+      } else {
+        alert(result.message || 'Không thể sửa tên trang.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Có lỗi mạng xảy ra.');
+    } finally {
+      setUpdatingWorkspace(false);
     }
   };
 
@@ -264,15 +310,26 @@ export default function WorkspaceScreen() {
                   </View>
                   <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                     {isAdmin && (
-                      <TouchableOpacity 
-                        style={{ padding: 8, marginRight: 8 }}
-                        onPress={(e) => {
-                          e.stopPropagation(); // Prevents navigating to the workspace
-                          handleDeleteWorkspace(ws.id, ws.name);
-                        }}
-                      >
-                        <Ionicons name="trash-outline" size={18} color={colors.danger || '#ef4444'} />
-                      </TouchableOpacity>
+                      <>
+                        <TouchableOpacity 
+                          style={{ padding: 8, marginRight: 4 }}
+                          onPress={(e) => {
+                            e.stopPropagation(); // Prevents navigating to the workspace
+                            handleOpenEditWorkspaceModal(ws);
+                          }}
+                        >
+                          <Ionicons name="create-outline" size={18} color={colors.tint} />
+                        </TouchableOpacity>
+                        <TouchableOpacity 
+                          style={{ padding: 8, marginRight: 8 }}
+                          onPress={(e) => {
+                            e.stopPropagation(); // Prevents navigating to the workspace
+                            handleDeleteWorkspace(ws.id, ws.name);
+                          }}
+                        >
+                          <Ionicons name="trash-outline" size={18} color={colors.danger || '#ef4444'} />
+                        </TouchableOpacity>
+                      </>
                     )}
                     <Ionicons name="chevron-forward" size={16} color={colors.tabIconDefault} />
                   </View>
@@ -306,6 +363,7 @@ export default function WorkspaceScreen() {
               placeholderTextColor={colors.tabIconDefault}
               value={newWorkspaceName}
               onChangeText={setNewWorkspaceName}
+              onSubmitEditing={handleCreateWorkspace}
               autoFocus
             />
 
@@ -314,7 +372,7 @@ export default function WorkspaceScreen() {
             {usersList.length === 0 ? (
               <Text style={[styles.emptyUsersText, { color: colors.tabIconDefault }]}>Không tìm thấy thành viên khác.</Text>
             ) : (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.membersHorizontalScroll}>
+              <ScrollView style={styles.membersGridScroll} contentContainerStyle={styles.membersGridContainer} showsVerticalScrollIndicator={true}>
                 {usersList.map(u => {
                   const isSelected = selectedMembers.includes(u.id);
                   return (
@@ -369,6 +427,62 @@ export default function WorkspaceScreen() {
                   <ActivityIndicator size="small" color="#ffffff" />
                 ) : (
                   <Text style={styles.btnSubmitText}>Tạo</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal: Sửa tên trang */}
+      <Modal
+        visible={isEditModalOpen}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => {
+          setIsEditModalOpen(false);
+          setEditingWorkspace(null);
+          setEditWorkspaceName('');
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalCard, { backgroundColor: colors.card }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>Sửa tên trang</Text>
+            
+            {/* Page Name Input */}
+            <Text style={[styles.inputLabel, { color: colors.text }]}>Tên trang *</Text>
+            <TextInput
+              style={[styles.textInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.background }]}
+              placeholder="Ví dụ: PHÚC, PCB, BANNER..."
+              placeholderTextColor={colors.tabIconDefault}
+              value={editWorkspaceName}
+              onChangeText={setEditWorkspaceName}
+              onSubmitEditing={handleUpdateWorkspace}
+              autoFocus
+            />
+
+            {/* Buttons */}
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.btnCancel, { borderColor: colors.border }]}
+                onPress={() => {
+                  setIsEditModalOpen(false);
+                  setEditingWorkspace(null);
+                  setEditWorkspaceName('');
+                }}
+              >
+                <Text style={[styles.btnCancelText, { color: colors.text }]}>Hủy</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.btnSubmit, { backgroundColor: colors.tint }]}
+                onPress={handleUpdateWorkspace}
+                disabled={updatingWorkspace || !editWorkspaceName.trim()}
+              >
+                {updatingWorkspace ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <Text style={styles.btnSubmitText}>Lưu</Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -555,10 +669,14 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     marginBottom: 16,
   },
-  membersHorizontalScroll: {
-    flexDirection: 'row',
+  membersGridScroll: {
+    maxHeight: 200,
     marginBottom: 20,
-    paddingVertical: 4,
+  },
+  membersGridContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-start',
   },
   emptyUsersText: {
     fontSize: 12,
@@ -568,12 +686,13 @@ const styles = StyleSheet.create({
   memberGridItem: {
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
     borderWidth: 1.5,
     borderColor: 'transparent',
     borderRadius: 14,
-    width: 74,
-    marginRight: 8,
+    width: '25%',
+    marginBottom: 8,
   },
   avatarWrapper: {
     position: 'relative',

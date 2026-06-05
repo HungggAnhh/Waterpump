@@ -604,6 +604,7 @@ export default function SettingsScreen() {
                     placeholderTextColor="#a0aec0"
                     value={provName}
                     onChangeText={setProvName}
+                    onSubmitEditing={handleProvisionAccount}
                   />
                 </>
               ) : (
@@ -623,6 +624,7 @@ export default function SettingsScreen() {
                 autoCapitalize="none"
                 value={provEmail}
                 onChangeText={setProvEmail}
+                onSubmitEditing={handleProvisionAccount}
               />
 
               <Text style={styles.label}>Mật khẩu truy cập *</Text>
@@ -634,6 +636,7 @@ export default function SettingsScreen() {
                 autoCapitalize="none"
                 value={provPassword}
                 onChangeText={setProvPassword}
+                onSubmitEditing={handleProvisionAccount}
               />
 
               <Text style={styles.label}>Vai trò trên hệ thống</Text>
@@ -874,6 +877,7 @@ export default function SettingsScreen() {
                 style={[styles.input, { borderColor: colors.border, color: colors.text }]}
                 value={editName}
                 onChangeText={setEditName}
+                onSubmitEditing={handleUpdateUserInfo}
               />
 
               <Text style={styles.label}>Địa chỉ Email *</Text>
@@ -882,6 +886,7 @@ export default function SettingsScreen() {
                 autoCapitalize="none"
                 value={editEmail}
                 onChangeText={setEditEmail}
+                onSubmitEditing={handleUpdateUserInfo}
                 editable={editingUser?.id !== 1} // Không cho đổi email Super Admin
                 style={[
                   styles.input, 

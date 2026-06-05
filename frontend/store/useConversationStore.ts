@@ -8,6 +8,7 @@ export interface GroupMember {
   avatar?: string;
   role?: string;
   email?: string;
+  last_seen_message_id?: number | null;
 }
 
 export interface ChatThread {
@@ -58,6 +59,9 @@ interface ConversationStore {
   
   // Real-time conversation seen logic
   markAsSeen: (conversationId: string, messageId: number) => void;
+
+  // Real-time member read receipt logic
+  updateMemberLastSeen: (conversationId: string, userId: number, messageId: number) => void;
 
   // New Group actions
   updateGroupName: (conversationId: string, newName: string) => void;
@@ -131,6 +135,13 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
         lastSeenMessageId: isActive ? msg.id : existingConversation.lastSeenMessageId,
         lastMessageId: msg.id,
         lastMessageSenderId: msg.sender_id,
+        members: existingConversation.members?.map((m) => {
+          const mId = m.user_id || m.id;
+          if (mId === msg.sender_id || (isActive && mId === currentUserId)) {
+            return { ...m, last_seen_message_id: msg.id };
+          }
+          return m;
+        }) || [],
       };
 
       // STEP 2: REMOVE OLD CONVERSATION FROM ARRAY
@@ -171,6 +182,34 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       });
       return { conversations: newConvs };
     });
+  },
+
+  updateMemberLastSeen: (conversationId, userId, messageId) => {
+    const convId = String(conversationId);
+    console.log(`[CLIENT:STORE_UPDATE_MEMBER_SEEN] Updating member ${userId} last seen to ${messageId} in conv ${convId}`);
+    set((state) => ({
+      conversations: state.conversations.map((c) => {
+        if (String(c.id) !== convId) return c;
+        const currentMembers = c.members || [];
+        
+        // Cập nhật last_seen_message_id cho member tương ứng
+        const updatedMembers = currentMembers.map((m) => {
+          const mId = m.user_id || m.id;
+          if (mId === userId) {
+            return { ...m, last_seen_message_id: messageId };
+          }
+          return m;
+        });
+
+        // Nếu là direct chat và người kia đọc, ta có thể cập nhật lastSeenMessageId của thread nếu người kia là otherUser
+        let updatedThread = { ...c, members: updatedMembers };
+        if (c.type === 'direct' && c.otherUser && c.otherUser.user_id === userId) {
+          updatedThread.lastSeenMessageId = messageId;
+        }
+
+        return updatedThread;
+      }),
+    }));
   },
 
   updateGroupName: (conversationId, newName) => {

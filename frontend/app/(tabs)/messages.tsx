@@ -480,6 +480,7 @@ export default function MessagesScreen() {
                 placeholderTextColor={colors.textSecondary}
                 value={newGroupName}
                 onChangeText={setNewGroupName}
+                onSubmitEditing={handleCreateGroupSubmit}
               />
             </View>
 

@@ -95,7 +95,6 @@ npm run start -- --clear --port 8082
 
 ### 3. Khởi chạy Ứng dụng Desktop (Electron client)
 Để sử dụng tính năng **Chụp màn hình nhanh bằng phím tắt**, bắt buộc bạn phải khởi chạy dự án dưới dạng ứng dụng Desktop bọc Electron:
-
 Mở một Terminal mới, di chuyển vào thư mục `desktop/` và chạy:
 ```bash
 cd desktop

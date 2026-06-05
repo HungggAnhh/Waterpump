@@ -143,6 +143,43 @@ router.delete('/workspaces/:workspaceId', async (req, res) => {
   }
 });
 
+// PUT /api/tasks/workspaces/:workspaceId — Cập nhật tên trang lớn (chỉ Admin)
+router.put('/workspaces/:workspaceId', async (req, res) => {
+  const user = getAuthUser(req);
+  if (!user || user.role !== 'admin') {
+    return res.status(403).json({ status: 'error', message: 'Không có quyền thực hiện. Chỉ admin mới được sửa tên trang.' });
+  }
+
+  const workspaceId = parseInt(req.params.workspaceId);
+  const { name } = req.body;
+
+  if (!name || !name.trim()) {
+    return res.status(400).json({ status: 'error', message: 'Vui lòng cung cấp tên trang mới.' });
+  }
+
+  try {
+    const result = await query(
+      'UPDATE workspaces SET name = $1 WHERE id = $2 RETURNING *',
+      [name.trim(), workspaceId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'Không tìm thấy trang để sửa.' });
+    }
+
+    const updatedWorkspace = result.rows[0];
+
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('workspace_updated', updatedWorkspace);
+    }
+
+    return res.status(200).json({ status: 'success', message: 'Đã cập nhật tên trang thành công.', data: updatedWorkspace });
+  } catch (err) {
+    return res.status(500).json({ status: 'error', message: 'Lỗi khi sửa tên trang: ' + err.message });
+  }
+});
+
 // 3. GET /api/tasks/workspaces/:workspaceId/tasks — Lấy danh sách nhiệm vụ của trang lớn
 router.get('/workspaces/:workspaceId/tasks', async (req, res) => {
   const user = getAuthUser(req);

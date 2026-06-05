@@ -158,6 +158,14 @@ io.on('connection', (socket) => {
       const messageId = insertRes.rows[0].id;
       const createdAt = insertRes.rows[0].created_at;
 
+      // Cập nhật database: set last_seen_message_id cho chính người gửi
+      await query(
+        `UPDATE conversation_users
+         SET last_seen_message_id = $1, last_seen_at = NOW()
+         WHERE conversation_id = $2 AND user_id = $3`,
+        [parseInt(messageId), parseInt(conversation_id), parseInt(sender_id)]
+      );
+
       // Lấy thông tin sender
       const userRes = await query(
         'SELECT name, avatar FROM users WHERE id = $1 LIMIT 1',
@@ -384,6 +392,14 @@ io.on('connection', (socket) => {
       console.log(`[SERVER:MULTI_DEVICE_SYNC] Broadcasting conversation_seen to user_${user_id}`);
       io.to(`user_${user_id}`).emit('conversation_seen', {
         conversation_id: parseInt(conversation_id),
+        message_id: parseInt(message_id)
+      });
+
+      // Phát sự kiện cập nhật receipt cho cả phòng room_${conversation_id} để cập nhật giao diện đã xem của các thành viên khác
+      console.log(`[SERVER:GROUP_CHAT_RECEIPT_BROADCAST] Broadcasting message_read_receipt to room_${conversation_id}`);
+      io.to(`room_${conversation_id}`).emit('message_read_receipt', {
+        conversation_id: parseInt(conversation_id),
+        user_id: parseInt(user_id),
         message_id: parseInt(message_id)
       });
 

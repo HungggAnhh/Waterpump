@@ -37,13 +37,14 @@ router.get('/', async (req, res) => {
              )
          ) AS unread_count,
          (
-           SELECT json_agg(json_build_object(
-             'user_id', u.id,
-             'name', u.name,
-             'avatar', u.avatar,
-             'role', u.role,
-             'email', u.email
-           ))
+            SELECT json_agg(json_build_object(
+              'user_id', u.id,
+              'name', u.name,
+              'avatar', u.avatar,
+              'role', u.role,
+              'email', u.email,
+              'last_seen_message_id', cu_inner.last_seen_message_id
+            ))
            FROM conversation_users cu_inner
            JOIN users u ON cu_inner.user_id = u.id
            WHERE cu_inner.conversation_id = c.id
@@ -100,7 +101,8 @@ router.get('/', async (req, res) => {
           name: m.name,
           avatar: m.avatar,
           role: m.role,
-          email: m.email
+          email: m.email,
+          last_seen_message_id: m.last_seen_message_id ? parseInt(m.last_seen_message_id) : null
         })),
         otherUser:       otherUser ? {
           user_id: parseInt(otherUser.user_id),

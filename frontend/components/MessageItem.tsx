@@ -1,6 +1,6 @@
 // frontend/components/MessageItem.tsx
 import React from 'react';
-import { StyleSheet, Text, View, Image, TouchableOpacity, Platform } from 'react-native';
+import { StyleSheet, Text, View, Image, TouchableOpacity, Platform, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 export interface Message {
@@ -50,6 +50,11 @@ interface MessageItemProps {
   currentUserName: string;
   isHighlighted?: boolean;
   onRecallPress?: (message: Message) => void;
+  readBy?: Array<{
+    user_id: number;
+    name: string;
+    avatar?: string | null;
+  }>;
 }
 
 const renderMessageText = (text: string, isMine: boolean, colors: any, isMentioned: boolean, isHighlighted: boolean) => {
@@ -100,7 +105,8 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   onPressReactions, 
   currentUserName,
   isHighlighted = false,
-  onRecallPress
+  onRecallPress,
+  readBy
 }) => {
   const isMentioned = !!(!isMine && item.message && item.message.includes(`@${currentUserName}`));
   const [isHovered, setIsHovered] = React.useState(false);
@@ -363,6 +369,40 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
             <Ionicons name="checkmark-done" size={14} color={colors.tint} style={{ marginLeft: 4 }} />
           )}
         </View>
+
+        {/* Danh sách người đã đọc (Read receipts) */}
+        {readBy && readBy.length > 0 && (
+          <View style={[styles.readReceiptsContainer, isMine ? styles.myReadReceipts : styles.otherReadReceipts]}>
+            <Ionicons name="checkmark-done" size={11} color={colors.textSecondary || '#727785'} style={{ marginRight: 4 }} />
+            {readBy.length === 1 ? (
+              <Text style={[styles.readReceiptText, { color: colors.textSecondary || '#727785' }]}>
+                {readBy[0].name} đã xem
+              </Text>
+            ) : readBy.length === 2 ? (
+              <Text style={[styles.readReceiptText, { color: colors.textSecondary || '#727785' }]}>
+                {readBy[0].name}, {readBy[1].name} đã xem
+              </Text>
+            ) : readBy.length === 3 ? (
+              <Text style={[styles.readReceiptText, { color: colors.textSecondary || '#727785' }]}>
+                {readBy[0].name}, {readBy[1].name}, {readBy[2].name} đã xem
+              </Text>
+            ) : (
+              <Text style={[styles.readReceiptText, { color: colors.textSecondary || '#727785' }]}>
+                {readBy[0].name}, {readBy[1].name}, {readBy[2].name} và{' '}
+                <Text
+                  style={{ color: colors.tint, fontWeight: '700', textDecorationLine: 'underline' }}
+                  onPress={() => {
+                    const names = readBy.map(m => m.name);
+                    Alert.alert('Danh sách người đã xem', names.join('\n'), [{ text: 'Đóng', style: 'cancel' }]);
+                  }}
+                >
+                  +{readBy.length - 3} người khác
+                </Text>{' '}
+                đã xem
+              </Text>
+            )}
+          </View>
+        )}
       </View>
 
       {/* 3-dots ellipsis button for hover state on Web/PC Desktop (right side of bubble for other's messages) */}
@@ -404,11 +444,28 @@ export const MessageItem = React.memo(MessageItemComponent, (prevProps, nextProp
     JSON.stringify(prevProps.item.reactions) === JSON.stringify(nextProps.item.reactions) &&
     prevProps.isMine === nextProps.isMine &&
     prevProps.colors.tint === nextProps.colors.tint &&
-    prevProps.currentUserName === nextProps.currentUserName
+    prevProps.currentUserName === nextProps.currentUserName &&
+    JSON.stringify(prevProps.readBy) === JSON.stringify(nextProps.readBy)
   );
 });
 
 const styles = StyleSheet.create({
+  readReceiptsContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  myReadReceipts: {
+    justifyContent: 'flex-end',
+  },
+  otherReadReceipts: {
+    justifyContent: 'flex-start',
+    marginLeft: 4,
+  },
+  readReceiptText: {
+    fontSize: 11,
+    fontWeight: '500',
+  },
   messageRow: {
     flexDirection: 'row',
     maxWidth: '85%',
