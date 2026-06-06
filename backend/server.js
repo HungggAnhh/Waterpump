@@ -140,7 +140,7 @@ io.on('connection', (socket) => {
 
   // 4. Gửi & lưu tin nhắn vào Supabase
   socket.on('send_message', async (data) => {
-    const { conversation_id, sender_id, message, type = 'text', file_url = null, reply_to = null, forwarded = false } = data;
+    const { conversation_id, sender_id, message, type = 'text', file_url = null, reply_to = null, forwarded = false, attachment_url = null, attachment_duration = null, attachment_mime_type = null, client_message_id = null } = data;
 
     if (!conversation_id || !sender_id || !message) {
       console.error('⚠️ send_message: thiếu tham số');
@@ -152,11 +152,29 @@ io.on('connection', (socket) => {
     try {
       // Lưu vào Supabase PostgreSQL
       const insertRes = await query(
-        'INSERT INTO messages (conversation_id, sender_id, message, type, file_url, reply_to, forwarded) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, created_at',
-        [parseInt(conversation_id), parseInt(sender_id), message, type, file_url, reply_to ? parseInt(reply_to) : null, !!forwarded]
+        `INSERT INTO messages (conversation_id, sender_id, message, type, file_url, reply_to, forwarded, attachment_url, attachment_duration, attachment_mime_type, client_message_id) 
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) 
+         ON CONFLICT (client_message_id) 
+         DO NOTHING 
+         RETURNING id, created_at`,
+        [parseInt(conversation_id), parseInt(sender_id), message, type, file_url, reply_to ? parseInt(reply_to) : null, !!forwarded, attachment_url, attachment_duration ? parseInt(attachment_duration) : null, attachment_mime_type, client_message_id]
       );
-      const messageId = insertRes.rows[0].id;
-      const createdAt = insertRes.rows[0].created_at;
+      
+      let messageId;
+      let createdAt;
+      if (insertRes.rows.length > 0) {
+        messageId = insertRes.rows[0].id;
+        createdAt = insertRes.rows[0].created_at;
+      } else {
+        const existingRes = await query('SELECT id, created_at FROM messages WHERE client_message_id = $1 LIMIT 1', [client_message_id]);
+        if (existingRes.rows.length > 0) {
+          messageId = existingRes.rows[0].id;
+          createdAt = existingRes.rows[0].created_at;
+        } else {
+          messageId = Date.now();
+          createdAt = new Date().toISOString();
+        }
+      }
 
       // Cập nhật database: set last_seen_message_id cho chính người gửi
       await query(
@@ -205,6 +223,10 @@ io.on('connection', (socket) => {
         message,
         type,
         file_url,
+        attachment_url,
+        attachment_duration: attachment_duration ? parseInt(attachment_duration) : null,
+        attachment_mime_type,
+        client_message_id,
         created_at:      createdAt, // Server database timestamp (ISO Timestamptz)
         raw_time:        createdAt,
         reply_to:        reply_to ? parseInt(reply_to) : null,
@@ -323,13 +345,19 @@ io.on('connection', (socket) => {
 
             if (tokensRes.rows.length > 0) {
               const { sendPWAPushNotification } = require('./config/firebaseAdmin');
+              let formattedDuration = '';
+              if (type === 'voice' && attachment_duration) {
+                const m = Math.floor(parseInt(attachment_duration) / 60);
+                const s = parseInt(attachment_duration) % 60;
+                formattedDuration = ` (${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')})`;
+              }
               
-              const title = `💬 Tin nhắn mới từ ${senderName}`;
-              let body = message;
+              const title = type === 'voice' ? '🎤 Tin nhắn thoại mới' : `💬 Tin nhắn mới từ ${senderName}`;
+              let body = type === 'voice' ? `${senderName} đã gửi tin nhắn thoại${formattedDuration}` : message;
               if (type === 'image') body = '📷 [Hình ảnh]';
               else if (type === 'file') body = '📁 [Tệp tin]';
               
-              if (body.length > 100) {
+              if (type !== 'voice' && body.length > 100) {
                 body = body.substring(0, 100) + '...';
               }
 

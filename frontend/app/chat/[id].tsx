@@ -37,9 +37,12 @@ import { useOnlineStore } from '../../store/useOnlineStore';
 import { GroupInfoModal } from '../../components/GroupInfoModal';
 import { useIsFocused } from '@react-navigation/native';
 import { useShallow } from 'zustand/shallow';
+import VoiceMicButton from '../../components/VoiceMicButton';
+import VoiceRecorder from '../../components/VoiceRecorder';
+import voiceUploadWorker from '../../services/audio/voiceUploadWorker';
 
 export default function ChatRoomScreen() {
-  const { id } = useLocalSearchParams();
+  const { id, messageId } = useLocalSearchParams();
   const conversationId = typeof id === 'string' ? id : Array.isArray(id) ? id[0] : '';
   const router = useRouter();
   const colorScheme = useColorScheme();
@@ -73,10 +76,119 @@ export default function ChatRoomScreen() {
 
   // Input & Typing
   const [inputMessage, setInputMessage] = useState('');
+  const [isMicListening, setIsMicListening] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const [otherUserTyping, setOtherUserTyping] = useState<string | null>(null);
   const [uploadingMedia, setUploadingMedia] = useState(false);
+  const [voiceUploading, setVoiceUploading] = useState(false);
+  const [voiceUploadProgress, setVoiceUploadProgress] = useState(0);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
+
+  // Sync voiceUploadWorker with socket instance
+  useEffect(() => {
+    voiceUploadWorker.setSocket(socket);
+  }, [socket]);
+
+  // Listen to offline voice queue uploads and merge into local messages list
+  useEffect(() => {
+    const unsubscribe = voiceUploadWorker.addListener((queue) => {
+      const currentRoomId = parseInt(conversationId);
+      if (isNaN(currentRoomId)) return;
+      
+      const roomQueue = queue.filter(q => q.roomId === currentRoomId);
+      
+      setMessages(prev => {
+        let updated = [...prev];
+        roomQueue.forEach(q => {
+          const existingIdx = updated.findIndex(m => m.client_message_id === q.client_message_id || m.id === q.localId);
+          if (existingIdx !== -1) {
+            updated[existingIdx] = {
+              ...updated[existingIdx],
+              status: q.status,
+              uploadProgress: q.uploadProgress,
+              attachment_url: q.status === 'sent' ? updated[existingIdx].attachment_url : q.localUri
+            };
+          } else if (q.status !== 'sent') {
+            const optimisticMsg: Message = {
+              id: q.localId,
+              conversation_id: q.roomId,
+              sender_id: q.userId,
+              sender_name: currentUser.name,
+              sender_avatar: currentUser.avatar,
+              message: '[Tin nhắn thoại]',
+              type: 'voice',
+              file_url: null,
+              attachment_url: q.localUri,
+              attachment_duration: q.duration,
+              attachment_mime_type: 'audio/m4a',
+              created_at: new Date(q.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              status: q.status,
+              uploadProgress: q.uploadProgress,
+              client_message_id: q.client_message_id
+            };
+            updated = [optimisticMsg, ...updated];
+          }
+        });
+        return updated;
+      });
+    });
+    return () => unsubscribe();
+  }, [conversationId, currentUser]);
+
+  // Notification Deep Link Highlight Scrolling
+  useEffect(() => {
+    const targetMsgIdStr = typeof messageId === 'string' ? messageId : Array.isArray(messageId) ? messageId[0] : null;
+    if (!targetMsgIdStr || messages.length === 0) return;
+
+    const targetMsgId = parseInt(targetMsgIdStr);
+    if (isNaN(targetMsgId)) return;
+
+    const index = messages.findIndex(m => m.id === targetMsgId);
+    if (index === -1) return;
+
+    setHighlightedMessageId(targetMsgId);
+
+    // Scroll to message
+    setTimeout(() => {
+      try {
+        flatListRef.current?.scrollToIndex({
+          index,
+          animated: true,
+          viewPosition: 0.5,
+        });
+      } catch (err) {
+        console.warn('Scroll to index failed, trying fallback:', err);
+        flatListRef.current?.scrollToOffset({ offset: index * 90, animated: true });
+      }
+    }, 600);
+
+    // Flash highlight for 3 seconds
+    const timer = setTimeout(() => {
+      setHighlightedMessageId(null);
+    }, 3600);
+
+    return () => clearTimeout(timer);
+  }, [messageId, messages.length]);
+
+  const handleResendVoiceMessage = useCallback(async (clientMessageId: string) => {
+    const item = voiceUploadWorker.getQueue().find(q => q.client_message_id === clientMessageId);
+    if (item) {
+      await voiceUploadWorker.addToQueue({
+        localId: item.localId,
+        roomId: item.roomId,
+        localUri: item.localUri,
+        duration: item.duration,
+        createdAt: item.createdAt,
+        client_message_id: item.client_message_id,
+        userId: item.userId
+      });
+    }
+  }, []);
+
+  const handleDeleteVoiceMessage = useCallback(async (clientMessageId: string) => {
+    await voiceUploadWorker.removeItem(clientMessageId);
+    setMessages(prev => prev.filter(m => m.client_message_id !== clientMessageId));
+  }, []);
 
   // Image viewer
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
@@ -105,6 +217,15 @@ export default function ChatRoomScreen() {
   // Replying/Edit
   const [replyingToMessage, setReplyingToMessage] = useState<Message | null>(null);
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
+
+  // Task Creation States
+  const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
+  const [taskTitle, setTaskTitle] = useState('');
+  const [taskDesc, setTaskDesc] = useState('');
+  const [taskPriority, setTaskPriority] = useState<'low' | 'medium' | 'high'>('medium');
+  const [taskDeadline, setTaskDeadline] = useState('');
+  const [taskSelectedUsers, setTaskSelectedUsers] = useState<number[]>([]);
+  const [submittingTask, setSubmittingTask] = useState(false);
 
   // Long press bottom sheet action menu
   const [actionMenuVisible, setActionMenuVisible] = useState(false);
@@ -357,6 +478,47 @@ export default function ChatRoomScreen() {
       useConversationStore.getState().updateMemberLastSeen(conversationId, data.user_id, data.message_id);
     };
 
+    const handleAssignmentStatusUpdated = (data: { 
+      task_id?: number; 
+      taskId?: number; 
+      user_id?: number; 
+      status?: string; 
+      completed_at?: string | null; 
+      assignees?: any[];
+    }) => {
+      console.log('📡 [SOCKET] assignment_status_updated:', data);
+      const targetTaskId = data.taskId || data.task_id;
+      if (!targetTaskId) return;
+
+      setMessages(prev => prev.map(m => {
+        if (m.task_id === targetTaskId && m.task) {
+          if (data.assignees) {
+            return {
+              ...m,
+              task: {
+                ...m.task,
+                assignees: data.assignees
+              }
+            };
+          }
+          const updatedAssignees = m.task.assignees?.map(a => {
+            if (a.user_id === data.user_id) {
+              return { ...a, status: data.status!, completed_at: data.completed_at };
+            }
+            return a;
+          }) || [];
+          return {
+            ...m,
+            task: {
+              ...m.task,
+              assignees: updatedAssignees
+            }
+          };
+        }
+        return m;
+      }));
+    };
+
     socket.on('receive_message', handleReceiveMessage);
     socket.on('reaction_added', handleReactionUpdated);
     socket.on('reaction_removed', handleReactionUpdated);
@@ -371,6 +533,7 @@ export default function ChatRoomScreen() {
     socket.on('member_removed', handleMemberRemoved);
     socket.on('group_updated', handleGroupUpdated);
     socket.on('message_read_receipt', handleMessageReadReceipt);
+    socket.on('assignment_status_updated', handleAssignmentStatusUpdated);
 
     return () => {
       socket.emit('leave_room', joinRoomPayload);
@@ -389,6 +552,7 @@ export default function ChatRoomScreen() {
       socket.off('member_removed', handleMemberRemoved);
       socket.off('group_updated', handleGroupUpdated);
       socket.off('message_read_receipt', handleMessageReadReceipt);
+      socket.off('assignment_status_updated', handleAssignmentStatusUpdated);
     };
   }, [socket, conversationId, currentUser.id]);
 
@@ -448,7 +612,8 @@ export default function ChatRoomScreen() {
     return activeThread.members.filter(m => {
       const memberId = m.user_id || m.id;
       if (memberId === currentUser.id) return false;
-      return m.last_seen_message_id && m.last_seen_message_id >= lastMyMessageId;
+      if (typeof lastMyMessageId !== 'number') return false;
+      return m.last_seen_message_id && typeof m.last_seen_message_id === 'number' && m.last_seen_message_id >= lastMyMessageId;
     });
   }, [lastMyMessageId, activeThread?.members, currentUser.id]);
 
@@ -469,6 +634,7 @@ export default function ChatRoomScreen() {
     );
 
     if (!targetMsgId || targetSenderId === currentUser.id) return;
+    if (typeof targetMsgId !== 'number') return;
     if (lastSeenMessageIdRef.current === targetMsgId) return;
 
     if (!socket?.connected) {
@@ -524,7 +690,84 @@ export default function ChatRoomScreen() {
   const handleLoadMoreMessages = () => {
     if (hasMoreMessages && !loadingMessages && conversationId && messages.length > 0) {
       const oldestMessageId = messages[messages.length - 1].id;
-      fetchMessages(conversationId, oldestMessageId, true);
+      if (typeof oldestMessageId === 'number') {
+        fetchMessages(conversationId, oldestMessageId, true);
+      }
+    }
+  };
+
+  // --- TASK MANAGEMENT FUNCTIONS (PHASE 1) ---
+  const getChatMembers = useCallback(() => {
+    if (activeThread?.members && activeThread.members.length > 0) {
+      return activeThread.members;
+    }
+    // Fallback cho direct chat (Tôi & Người kia)
+    const list = [{ user_id: currentUser.id, name: currentUser.name + ' (Tôi)', avatar: currentUser.avatar }];
+    if (activeThread?.otherUser) {
+      list.push({
+        user_id: activeThread.otherUser.user_id,
+        name: activeThread.otherUser.name,
+        avatar: activeThread.otherUser.avatar
+      });
+    }
+    return list;
+  }, [activeThread, currentUser]);
+
+  const handleOpenCreateTaskModal = () => {
+    setTaskTitle('');
+    setTaskDesc('');
+    setTaskPriority('medium');
+    setTaskDeadline('');
+    setTaskSelectedUsers([]); // Không chọn ai mặc định
+    setIsTaskModalOpen(true);
+  };
+
+  const handleCreateTask = async () => {
+    if (!taskTitle.trim() || !conversationId) return;
+    setSubmittingTask(true);
+    try {
+      const payload = {
+        title: taskTitle.trim(),
+        description: taskDesc.trim() || null,
+        priority: taskPriority,
+        deadline: taskDeadline.trim() || null,
+        conversation_id: parseInt(conversationId),
+        assigned_to: taskSelectedUsers.length > 0 ? taskSelectedUsers : []
+      };
+
+      const res = await fetch(`${API_BASE_URL}/tasks/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const result = await res.json();
+      if (result.status === 'success') {
+        setIsTaskModalOpen(false);
+      } else {
+        Alert.alert("Lỗi", result.message || "Không thể tạo nhiệm vụ.");
+      }
+    } catch (err) {
+      console.error(err);
+      Alert.alert("Lỗi kết nối", "Không thể kết nối đến máy chủ.");
+    } finally {
+      setSubmittingTask(false);
+    }
+  };
+
+  const handleUpdateTaskStatus = async (taskId: number, status: string) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/tasks/tasks/${taskId}/assignment/status`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status })
+      });
+      const result = await res.json();
+      if (result.status !== 'success') {
+        Alert.alert("Lỗi", result.message || "Không thể cập nhật tiến độ.");
+      }
+    } catch (err) {
+      console.error(err);
+      Alert.alert("Lỗi kết nối", "Không thể kết nối đến máy chủ.");
     }
   };
 
@@ -547,7 +790,7 @@ export default function ChatRoomScreen() {
         type: 'text'
       };
 
-      if (replyingToMessage) {
+      if (replyingToMessage && typeof replyingToMessage.id === 'number') {
         payload.reply_to = replyingToMessage.id;
       }
 
@@ -719,7 +962,9 @@ export default function ChatRoomScreen() {
         setMessages(prev => 
           prev.map(m => m.id === message.id ? { ...m, message: "Tin nhắn đã được thu hồi", recalled: true } : m)
         );
-        useConversationStore.getState().recallLastMessage(conversationId, message.id);
+        if (typeof message.id === 'number') {
+          useConversationStore.getState().recallLastMessage(conversationId, message.id);
+        }
         fetchPinnedMessages();
       }
     } catch (error) {
@@ -741,7 +986,9 @@ export default function ChatRoomScreen() {
       });
       const result = await response.json();
       if (response.ok && result.status === 'success') {
-        useConversationStore.getState().deleteLastMessage(conversationId, message.id);
+        if (typeof message.id === 'number') {
+          useConversationStore.getState().deleteLastMessage(conversationId, message.id);
+        }
         fetchPinnedMessages();
       } else {
         // Rollback on fail
@@ -993,6 +1240,23 @@ export default function ChatRoomScreen() {
     }
   };
 
+  const handleVoiceRecordingComplete = async (uri: string, duration: number) => {
+    const clientMessageId = `voice_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const localId = `local_${Date.now()}`;
+    
+    console.log(`[Analytics] voice_record_sent: ${clientMessageId}, duration: ${duration}s`);
+    
+    await voiceUploadWorker.addToQueue({
+      localId,
+      roomId: parseInt(conversationId),
+      localUri: uri,
+      duration,
+      createdAt: new Date().toISOString(),
+      client_message_id: clientMessageId,
+      userId: currentUser.id
+    });
+  };
+
   const handleSelectMemberTag = (memberName: string) => {
     setInputMessage(prev => {
       const words = prev.split(/\s/);
@@ -1207,6 +1471,13 @@ export default function ChatRoomScreen() {
             removeClippedSubviews={Platform.OS === 'android'}
             onEndReached={handleLoadMoreMessages}
             onEndReachedThreshold={0.2}
+            onScrollToIndexFailed={(info) => {
+              console.warn('onScrollToIndexFailed:', info);
+              flatListRef.current?.scrollToOffset({
+                offset: info.index * 90,
+                animated: true
+              });
+            }}
             ListFooterComponent={() =>
               loadingMessages ? (
                 <View style={{ paddingVertical: 12 }}>
@@ -1230,6 +1501,10 @@ export default function ChatRoomScreen() {
                   isHighlighted={item.id === highlightedMessageId}
                   onRecallPress={handleRecallMessage}
                   readBy={isLastMyMsg ? readByMembers : undefined}
+                  currentUserId={currentUser.id}
+                  onUpdateTaskStatus={handleUpdateTaskStatus}
+                  onResendVoice={handleResendVoiceMessage}
+                  onDeleteVoice={handleDeleteVoiceMessage}
                 />
               );
             }}
@@ -1269,6 +1544,19 @@ export default function ChatRoomScreen() {
                   <Ionicons name="videocam" size={18} color="#ef4444" />
                 </View>
                 <Text style={[styles.attachMenuText, { color: colors.text }]}>Tải video lên</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={styles.attachMenuItem} 
+                onPress={() => {
+                  setShowAttachMenu(false);
+                  handleOpenCreateTaskModal();
+                }}
+              >
+                <View style={[styles.attachMenuIcon, { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}>
+                  <Ionicons name="checkbox-outline" size={18} color="#10b981" />
+                </View>
+                <Text style={[styles.attachMenuText, { color: colors.text }]}>Tạo nhiệm vụ</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -1395,27 +1683,60 @@ export default function ChatRoomScreen() {
               </TouchableOpacity>
             )}
 
-            <TextInput
-              ref={inputRef}
-              style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
-              placeholder={editingMessage ? "Chỉnh sửa tin nhắn..." : "Nhập tin nhắn..."}
-              placeholderTextColor="#a0aec0"
-              value={inputMessage}
-              onChangeText={handleTextChange}
-              onSubmitEditing={handleSendMessage}
-              returnKeyType={editingMessage ? "done" : "send"}
-              blurOnSubmit={false}
-              onFocus={() => {
-                if (showEmojiPanel) {
-                  LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-                  setShowEmojiPanel(false);
-                }
-              }}
-            />
+            {voiceUploading ? (
+              <View style={[styles.input, { backgroundColor: colors.background, borderColor: colors.border, justifyContent: 'center', paddingHorizontal: 16 }]}>
+                <Text style={{ color: colors.text, fontWeight: '600' }}>
+                  🎤 Đang tải lên... {voiceUploadProgress}%
+                </Text>
+              </View>
+            ) : (
+              <TextInput
+                ref={inputRef}
+                style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+                placeholder={isMicListening ? "🎤 Đang nghe..." : (editingMessage ? "Chỉnh sửa tin nhắn..." : "Nhập tin nhắn...")}
+                placeholderTextColor="#a0aec0"
+                value={inputMessage}
+                onChangeText={handleTextChange}
+                onSubmitEditing={handleSendMessage}
+                returnKeyType={editingMessage ? "done" : "send"}
+                blurOnSubmit={false}
+                onFocus={() => {
+                  if (showEmojiPanel) {
+                    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                    setShowEmojiPanel(false);
+                  }
+                }}
+              />
+            )}
 
-            <TouchableOpacity style={[styles.sendBtn, { backgroundColor: editingMessage ? '#f59e0b' : colors.tint }]} onPress={handleSendMessage}>
-              <Ionicons name={editingMessage ? "checkmark" : "send"} size={18} color="#fff" />
-            </TouchableOpacity>
+            {!voiceUploading && (
+              <VoiceMicButton
+                currentValue={inputMessage}
+                onSpeechRecognized={setInputMessage}
+                onStateChange={setIsMicListening}
+                compact={true}
+                containerStyle={{ marginRight: 6 }}
+              />
+            )}
+
+            {!voiceUploading && (
+              <VoiceRecorder
+                onRecordingComplete={handleVoiceRecordingComplete}
+                colors={{
+                  tint: colors.tint,
+                  card: colors.card,
+                  text: colors.text,
+                  border: colors.border,
+                  textSecondary: colors.textSecondary,
+                }}
+              />
+            )}
+
+            {!voiceUploading && (
+              <TouchableOpacity style={[styles.sendBtn, { backgroundColor: editingMessage ? '#f59e0b' : colors.tint, marginLeft: 4 }]} onPress={handleSendMessage}>
+                <Ionicons name={editingMessage ? "checkmark" : "send"} size={18} color="#fff" />
+              </TouchableOpacity>
+            )}
           </View>
 
           {/* Emoji Panel */}
@@ -1462,6 +1783,173 @@ export default function ChatRoomScreen() {
               resizeMode="contain" 
             />
           )}
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Modal: Giao việc & Tạo nhiệm vụ nhóm */}
+      <Modal
+        visible={isTaskModalOpen}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setIsTaskModalOpen(false)}
+      >
+        <TouchableOpacity 
+          style={styles.modalOverlay} 
+          activeOpacity={1} 
+          onPress={() => setIsTaskModalOpen(false)}
+        >
+          <View style={styles.modalContentWrapper}>
+            <TouchableOpacity 
+              activeOpacity={1} 
+              style={[styles.taskFormCard, { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1 }]}
+            >
+              <Text style={[styles.taskFormTitle, { color: colors.text }]}>Tạo nhiệm vụ nhóm</Text>
+
+              {/* Title Input */}
+              <Text style={[styles.taskFormLabel, { color: colors.text }]}>Tên nhiệm vụ *</Text>
+              <TextInput
+                style={[styles.taskFormInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.background }]}
+                placeholder="Nhập tên nhiệm vụ..."
+                placeholderTextColor={colors.tabIconDefault}
+                value={taskTitle}
+                onChangeText={setTaskTitle}
+                onSubmitEditing={handleCreateTask}
+              />
+
+              {/* Description Input */}
+              <Text style={[styles.taskFormLabel, { color: colors.text }]}>Mô tả</Text>
+              <TextInput
+                style={[styles.taskFormInput, styles.taskFormTextArea, { color: colors.text, borderColor: colors.border, backgroundColor: colors.background }]}
+                placeholder="Nhập mô tả chi tiết..."
+                placeholderTextColor={colors.tabIconDefault}
+                value={taskDesc}
+                onChangeText={setTaskDesc}
+                multiline
+                numberOfLines={3}
+              />
+
+              {/* Priority & Deadline Row */}
+              <View style={styles.taskFormRow}>
+                <View style={{ flex: 1, marginRight: 8 }}>
+                  <Text style={[styles.taskFormLabel, { color: colors.text }]}>Mức độ</Text>
+                  <View style={[styles.taskPickerContainer, { borderColor: colors.border, backgroundColor: colors.background }]}>
+                    <TouchableOpacity
+                      style={styles.taskPickerTrigger}
+                      onPress={() => {
+                        const next: Record<string, 'low' | 'medium' | 'high'> = { low: 'medium', medium: 'high', high: 'low' };
+                        setTaskPriority(next[taskPriority]);
+                      }}
+                    >
+                      <Text style={{ color: colors.text, fontSize: 13, fontWeight: '700' }}>
+                        {taskPriority === 'high' ? '🔴 Cao' : taskPriority === 'medium' ? '🟡 Trung bình' : '🟢 Thấp'}
+                      </Text>
+                      <Ionicons name="swap-vertical" size={14} color={colors.tabIconDefault} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                <View style={{ flex: 1, marginLeft: 8 }}>
+                  <Text style={[styles.taskFormLabel, { color: colors.text }]}>Hạn chót</Text>
+                  <TextInput
+                    style={[styles.taskFormInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.background, paddingVertical: 8, height: 38 }]}
+                    placeholder="YYYY-MM-DD"
+                    placeholderTextColor={colors.tabIconDefault}
+                    value={taskDeadline}
+                    onChangeText={setTaskDeadline}
+                  />
+                </View>
+              </View>
+
+              {/* Assignees Selector */}
+              <Text style={[styles.taskFormLabel, { color: colors.text }]}>Người nhận việc</Text>
+              <View style={[styles.assigneesListContainer, { borderColor: colors.border, backgroundColor: colors.background }]}>
+                <ScrollView nestedScrollEnabled style={{ maxHeight: 150 }}>
+                  {/* Select All Row */}
+                  <TouchableOpacity
+                    style={[styles.assigneeSelectRow, { borderBottomColor: colors.border, borderBottomWidth: 1 }]}
+                    onPress={() => {
+                      const members = getChatMembers();
+                      const allIds = members.map(m => m.user_id).filter(Boolean) as number[];
+                      if (taskSelectedUsers.length === allIds.length) {
+                        setTaskSelectedUsers([]);
+                      } else {
+                        setTaskSelectedUsers(allIds);
+                      }
+                    }}
+                  >
+                    <Ionicons 
+                      name={taskSelectedUsers.length === getChatMembers().length ? "checkbox" : "square-outline"} 
+                      size={20} 
+                      color={colors.tint} 
+                    />
+                    <Text style={[styles.assigneeSelectName, { color: colors.text, fontWeight: '700' }]}>
+                      Tất cả thành viên
+                    </Text>
+                  </TouchableOpacity>
+
+                  {/* Individual Members */}
+                  {getChatMembers().map((m) => {
+                    const userId = m.user_id;
+                    if (!userId) return null;
+                    const isSelected = taskSelectedUsers.includes(userId);
+                    return (
+                      <TouchableOpacity
+                        key={userId}
+                        style={styles.assigneeSelectRow}
+                        onPress={() => {
+                          if (isSelected) {
+                            setTaskSelectedUsers(prev => prev.filter(id => id !== userId));
+                          } else {
+                            setTaskSelectedUsers(prev => [...prev, userId]);
+                          }
+                        }}
+                      >
+                        <Ionicons 
+                          name={isSelected ? "checkbox" : "square-outline"} 
+                          size={20} 
+                          color={colors.tint} 
+                        />
+                        {m.avatar ? (
+                          <Image source={{ uri: m.avatar }} style={{ width: 20, height: 20, borderRadius: 10 }} />
+                        ) : (
+                          <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: colors.border, justifyContent: 'center', alignItems: 'center' }}>
+                            <Text style={{ fontSize: 9, color: colors.text, fontWeight: '700' }}>
+                              {m.name ? m.name.charAt(0).toUpperCase() : '?'}
+                            </Text>
+                          </View>
+                        )}
+                        <Text style={[styles.assigneeSelectName, { color: colors.text }]}>
+                          {m.name} {userId === currentUser.id ? '(Tôi)' : ''}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+
+              {/* Action Buttons */}
+              <View style={styles.taskFormButtons}>
+                <TouchableOpacity
+                  style={[styles.taskBtnCancel, { borderColor: colors.border }]}
+                  onPress={() => setIsTaskModalOpen(false)}
+                >
+                  <Text style={[styles.taskBtnCancelText, { color: colors.text }]}>Hủy</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.taskBtnSubmit, { backgroundColor: colors.tint }]}
+                  onPress={handleCreateTask}
+                  disabled={submittingTask || !taskTitle.trim()}
+                >
+                  {submittingTask ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={styles.taskBtnSubmitText}>Tạo</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </TouchableOpacity>
+          </View>
         </TouchableOpacity>
       </Modal>
 
@@ -2207,5 +2695,115 @@ const styles = StyleSheet.create({
     height: 0.5,
     width: '100%',
     marginVertical: 4,
-  }
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContentWrapper: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  taskFormCard: {
+    width: '100%',
+    maxWidth: 360,
+    borderRadius: 16,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  taskFormTitle: {
+    fontSize: 16.5,
+    fontWeight: '800',
+    marginBottom: 14,
+    textAlign: 'center',
+  },
+  taskFormLabel: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  taskFormInput: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: Platform.OS === 'ios' ? 8 : 6,
+    fontSize: 13.5,
+    marginBottom: 12,
+  },
+  taskFormTextArea: {
+    height: 70,
+    textAlignVertical: 'top',
+  },
+  taskFormRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  taskPickerContainer: {
+    borderWidth: 1,
+    borderRadius: 10,
+    height: 38,
+    justifyContent: 'center',
+  },
+  taskPickerTrigger: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+  },
+  assigneesListContainer: {
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 8,
+    marginBottom: 16,
+  },
+  assigneeSelectRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+  },
+  assigneeSelectName: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  taskFormButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 10,
+  },
+  taskBtnCancel: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  taskBtnCancelText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  taskBtnSubmit: {
+    borderRadius: 10,
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    minWidth: 70,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  taskBtnSubmitText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
+  },
 });

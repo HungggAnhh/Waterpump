@@ -55,6 +55,7 @@ export default function WorkspaceScreen() {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingWorkspace, setEditingWorkspace] = useState<Workspace | null>(null);
   const [editWorkspaceName, setEditWorkspaceName] = useState('');
+  const [editSelectedMembers, setEditSelectedMembers] = useState<number[]>([]);
   const [updatingWorkspace, setUpdatingWorkspace] = useState(false);
 
   // Fetch workspaces list
@@ -182,10 +183,32 @@ export default function WorkspaceScreen() {
     }
   };
 
-  const handleOpenEditWorkspaceModal = (ws: Workspace) => {
+  const handleToggleEditMember = (userId: number) => {
+    setEditSelectedMembers(prev => {
+      if (prev.includes(userId)) {
+        return prev.filter(id => id !== userId);
+      } else {
+        return [...prev, userId];
+      }
+    });
+  };
+
+  const handleOpenEditWorkspaceModal = async (ws: Workspace) => {
     setEditingWorkspace(ws);
     setEditWorkspaceName(ws.name);
+    setEditSelectedMembers([]);
     setIsEditModalOpen(true);
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/tasks/workspaces/${ws.id}/members`);
+      const result = await res.json();
+      if (result.status === 'success') {
+        const memberIds = (result.data || []).map((m: any) => m.id).filter((id: number) => id !== user?.id);
+        setEditSelectedMembers(memberIds);
+      }
+    } catch (err) {
+      console.error('Lỗi tải thành viên trang:', err);
+    }
   };
 
   const handleUpdateWorkspace = async () => {
@@ -197,6 +220,7 @@ export default function WorkspaceScreen() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: editWorkspaceName,
+          members: editSelectedMembers,
         }),
       });
       const result = await res.json();
@@ -204,8 +228,9 @@ export default function WorkspaceScreen() {
         setIsEditModalOpen(false);
         setEditingWorkspace(null);
         setEditWorkspaceName('');
+        setEditSelectedMembers([]);
       } else {
-        alert(result.message || 'Không thể sửa tên trang.');
+        alert(result.message || 'Không thể sửa thông tin trang.');
       }
     } catch (err) {
       console.error(err);
@@ -426,7 +451,9 @@ export default function WorkspaceScreen() {
                 {creatingWorkspace ? (
                   <ActivityIndicator size="small" color="#ffffff" />
                 ) : (
-                  <Text style={styles.btnSubmitText}>Tạo</Text>
+                  <Text style={styles.btnSubmitText}>
+                    {selectedMembers.length >= 2 ? 'Tạo nhóm' : 'Tạo'}
+                  </Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -443,11 +470,12 @@ export default function WorkspaceScreen() {
           setIsEditModalOpen(false);
           setEditingWorkspace(null);
           setEditWorkspaceName('');
+          setEditSelectedMembers([]);
         }}
       >
         <View style={styles.modalOverlay}>
           <View style={[styles.modalCard, { backgroundColor: colors.card }]}>
-            <Text style={[styles.modalTitle, { color: colors.text }]}>Sửa tên trang</Text>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>Chỉnh sửa trang</Text>
             
             {/* Page Name Input */}
             <Text style={[styles.inputLabel, { color: colors.text }]}>Tên trang *</Text>
@@ -461,6 +489,44 @@ export default function WorkspaceScreen() {
               autoFocus
             />
 
+            {/* Internal Members Picker */}
+            <Text style={[styles.inputLabel, { color: colors.text, marginTop: 14, marginBottom: 8 }]}>Chọn thành viên tham gia nội bộ</Text>
+            {usersList.length === 0 ? (
+              <Text style={[styles.emptyUsersText, { color: colors.tabIconDefault }]}>Không tìm thấy thành viên khác.</Text>
+            ) : (
+              <ScrollView style={styles.membersGridScroll} contentContainerStyle={styles.membersGridContainer} showsVerticalScrollIndicator={true}>
+                {usersList.map(u => {
+                  const isSelected = editSelectedMembers.includes(u.id);
+                  return (
+                    <TouchableOpacity
+                      key={u.id}
+                      style={[
+                        styles.memberGridItem,
+                        isSelected && { borderColor: colors.tint, backgroundColor: colors.tint + '10' }
+                      ]}
+                      onPress={() => handleToggleEditMember(u.id)}
+                      activeOpacity={0.6}
+                    >
+                      <View style={styles.avatarWrapper}>
+                        <Image
+                          source={{ uri: u.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=50&h=50&q=80' }}
+                          style={styles.memberAvatar}
+                        />
+                        {isSelected && (
+                          <View style={[styles.checkmarkCircle, { backgroundColor: colors.tint }]}>
+                            <Ionicons name="checkmark" size={10} color="#ffffff" />
+                          </View>
+                        )}
+                      </View>
+                      <Text style={[styles.memberNameText, { color: colors.text }]} numberOfLines={1}>
+                        {u.name}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            )}
+
             {/* Buttons */}
             <View style={styles.modalButtons}>
               <TouchableOpacity
@@ -469,6 +535,7 @@ export default function WorkspaceScreen() {
                   setIsEditModalOpen(false);
                   setEditingWorkspace(null);
                   setEditWorkspaceName('');
+                  setEditSelectedMembers([]);
                 }}
               >
                 <Text style={[styles.btnCancelText, { color: colors.text }]}>Hủy</Text>

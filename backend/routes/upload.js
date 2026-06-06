@@ -42,7 +42,7 @@ if (supabase) {
 // Multer: chỉ dùng memoryStorage (lưu trực tiếp tệp nhị phân vào buffer để đẩy lên Supabase)
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 }, // Tăng giới hạn tải lên tối đa lên 10MB cho cả video và ảnh lớn
+  limits: { fileSize: 20 * 1024 * 1024 }, // Tăng giới hạn tải lên tối đa lên 20MB
   fileFilter: (req, file, cb) => {
     const allowedTypes = [
       'image/jpeg', 
@@ -51,12 +51,23 @@ const upload = multer({
       'image/webp',
       'video/mp4', 
       'video/quicktime',
-      'video/mpeg'
+      'video/mpeg',
+      'audio/m4a',
+      'audio/x-m4a',
+      'audio/mp4',
+      'audio/aac',
+      'audio/x-aac',
+      'audio/mpeg',
+      'audio/ogg',
+      'audio/wav',
+      'audio/webm',
+      'audio/3gpp',
+      'application/octet-stream'
     ];
     if (allowedTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error(`Định dạng tệp không hỗ trợ (${file.mimetype}). Chỉ chấp nhận JPEG, PNG, GIF, WEBP và MP4/MOV.`));
+      cb(new Error(`Định dạng tệp không hỗ trợ (${file.mimetype}).`));
     }
   }
 });
@@ -98,7 +109,18 @@ router.post('/', (req, res, next) => {
 
     const bucketName = process.env.SUPABASE_BUCKET || 'media';
     const ext = file.originalname.split('.').pop()?.toLowerCase() || 'jpg';
-    const fileName = `uploads/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+    
+    // Kiểm tra định dạng âm thanh để phân chia thư mục uploads vs chat-voice
+    const isAudio = file.mimetype.startsWith('audio/') || ['m4a', 'aac', 'mp3', 'wav', 'webm', 'ogg'].includes(ext);
+    let fileName;
+    if (isAudio) {
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      fileName = `chat-voice/${year}/${month}/voice_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+    } else {
+      fileName = `uploads/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+    }
 
     console.log(`[UPLOAD_API:START] Khởi động upload tệp "${file.originalname}" (${file.size} bytes) lên bucket "${bucketName}/${fileName}"`);
 
@@ -137,6 +159,125 @@ router.post('/', (req, res, next) => {
       status: 'error',
       message: 'Lỗi hệ thống bất ngờ: ' + globalError.message
     });
+  }
+});
+
+const voiceUploadLimits = {}; // Key: userId (number/string), Value: Array of timestamps
+
+// POST /api/upload/sign-upload — lấy URL tải lên an toàn (Private Bucket)
+router.post('/sign-upload', async (req, res) => {
+  try {
+    const { fileName, contentType, user_id } = req.body;
+    if (!fileName) {
+      return res.status(400).json({ status: 'error', message: 'Thiếu tham số fileName.' });
+    }
+    
+    // Rate limiter: 20 uploads / 5 minutes / user
+    if (user_id) {
+      const now = Date.now();
+      const fiveMinsAgo = now - 5 * 60 * 1000;
+      if (!voiceUploadLimits[user_id]) {
+        voiceUploadLimits[user_id] = [];
+      }
+      voiceUploadLimits[user_id] = voiceUploadLimits[user_id].filter(ts => ts > fiveMinsAgo);
+      if (voiceUploadLimits[user_id].length >= 20) {
+        return res.status(429).json({
+          status: 'error',
+          message: 'Bạn đã tải lên quá giới hạn (tối đa 20 tin nhắn thoại trong 5 phút). Vui lòng thử lại sau.'
+        });
+      }
+      voiceUploadLimits[user_id].push(now);
+    }
+
+    if (!supabase) {
+      return res.status(500).json({ status: 'error', message: 'Supabase client chưa được khởi tạo.' });
+    }
+
+    const bucketName = process.env.SUPABASE_BUCKET || 'media';
+    
+    // Generate signed upload URL (ephemeral, valid for 15 minutes / 900 seconds)
+    const { data, error } = await supabase.storage
+      .from(bucketName)
+      .createSignedUploadUrl(fileName);
+
+    if (error) {
+      console.error('❌ [UPLOAD_API:SIGN_UPLOAD_ERROR]', error.message);
+      return res.status(500).json({ status: 'error', message: 'Lỗi Supabase Storage: ' + error.message });
+    }
+
+    return res.status(200).json({
+      status: 'success',
+      signedUrl: data.signedUrl,
+      token: data.token,
+      path: data.path
+    });
+  } catch (err) {
+    console.error('❌ [UPLOAD_API:SIGN_UPLOAD_CRITICAL]', err);
+    return res.status(500).json({ status: 'error', message: 'Lỗi hệ thống: ' + err.message });
+  }
+});
+
+// POST /api/upload/sign-read — lấy URL đọc an toàn thời hạn 15 phút
+router.post('/sign-read', async (req, res) => {
+  try {
+    const { attachment_url, user_id } = req.body;
+    if (!attachment_url || !user_id) {
+      return res.status(400).json({ status: 'error', message: 'Thiếu tham số: attachment_url hoặc user_id.' });
+    }
+    if (!supabase) {
+      return res.status(500).json({ status: 'error', message: 'Supabase client chưa được khởi tạo.' });
+    }
+
+    // 1. Xác thực quyền tham gia cuộc hội thoại chứa tin nhắn này
+    const { query } = require('../config/supabase');
+    const msgCheck = await query(
+      `SELECT conversation_id FROM messages 
+       WHERE attachment_url = $1 OR file_url = $1 LIMIT 1`,
+      [attachment_url]
+    );
+
+    if (msgCheck.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'Không tìm thấy tin nhắn chứa tệp tin này.' });
+    }
+
+    const conversationId = msgCheck.rows[0].conversation_id;
+    
+    const memberCheck = await query(
+      `SELECT 1 FROM conversation_users 
+       WHERE conversation_id = $1 AND user_id = $2 LIMIT 1`,
+      [conversationId, parseInt(user_id)]
+    );
+
+    if (memberCheck.rows.length === 0) {
+      return res.status(403).json({ status: 'error', message: 'Bạn không có quyền truy cập cuộc hội thoại này.' });
+    }
+
+    // 2. Tách đường dẫn và sinh Signed URL (thời hạn 15 phút = 900 giây)
+    const bucketName = process.env.SUPABASE_BUCKET || 'media';
+    
+    const marker = `/${bucketName}/`;
+    const index = attachment_url.indexOf(marker);
+    let path = attachment_url;
+    if (index !== -1) {
+      path = decodeURIComponent(attachment_url.substring(index + marker.length));
+    }
+
+    const { data, error } = await supabase.storage
+      .from(bucketName)
+      .createSignedUrl(path, 900); // 15 phút
+
+    if (error) {
+      console.error('❌ [UPLOAD_API:SIGN_READ_ERROR]', error.message);
+      return res.status(500).json({ status: 'error', message: 'Lỗi Supabase Storage: ' + error.message });
+    }
+
+    return res.status(200).json({
+      status: 'success',
+      signedUrl: data.signedUrl
+    });
+  } catch (err) {
+    console.error('❌ [UPLOAD_API:SIGN_READ_CRITICAL]', err);
+    return res.status(500).json({ status: 'error', message: 'Lỗi hệ thống: ' + err.message });
   }
 });
 

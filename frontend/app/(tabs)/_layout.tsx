@@ -92,6 +92,22 @@ export default function TabLayout() {
           ),
         }}
       />
+            <Tabs.Screen
+        name="messages"
+        options={{
+          title: 'Trò chuyện',
+          tabBarLabel: 'Tin nhắn',
+          headerShown: false, // Ẩn header hệ thống để tránh trùng lặp với Inbox Header tự dựng
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons
+              name={focused ? "chatbubble-ellipses" : "chatbubble-ellipses-outline"}
+              color={color}
+              size={22}
+            />
+          ),
+        }}
+        
+      />
       <Tabs.Screen
         name="tasks"
         options={{
@@ -107,21 +123,7 @@ export default function TabLayout() {
           ),
         }}
       />
-      <Tabs.Screen
-        name="messages"
-        options={{
-          title: 'Trò chuyện',
-          tabBarLabel: 'Tin nhắn',
-          headerShown: false, // Ẩn header hệ thống để tránh trùng lặp với Inbox Header tự dựng
-          tabBarIcon: ({ color, focused }) => (
-            <Ionicons
-              name={focused ? "chatbubble-ellipses" : "chatbubble-ellipses-outline"}
-              color={color}
-              size={22}
-            />
-          ),
-        }}
-      />
+
       <Tabs.Screen
         name="two"
         options={{

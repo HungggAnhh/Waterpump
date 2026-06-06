@@ -8,11 +8,17 @@
     "scheme": "frontend",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Cho phép sử dụng micro để ghi âm tin nhắn thoại."
+      }
     },
     "android": {
       "package": "com.hunganh.waterpump",
       "softwareKeyboardLayoutMode": "resize",
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -43,6 +49,13 @@
           "image": "./assets/images/splash-icon.png",
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Cho phép ứng dụng sử dụng micro để ghi âm giọng nói chuyển thành văn bản.",
+          "speechRecognitionPermission": "Cho phép ứng dụng nhận diện giọng nói để chuyển thành văn bản."
         }
       ]
     ],

@@ -10,6 +10,7 @@ import {
   StyleSheet,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import VoiceMicButton from './VoiceMicButton';
 
 interface ChatInputBarProps {
   onSendMessage: (text: string) => void;
@@ -25,6 +26,7 @@ export default function ChatInputBar({
   onClearScreenshot
 }: ChatInputBarProps) {
   const [text, setText] = useState('');
+  const [isMicListening, setIsMicListening] = useState(false);
   const [inputHeight, setInputHeight] = useState(40);
   const textInputRef = useRef<TextInput>(null);
 
@@ -60,13 +62,20 @@ export default function ChatInputBar({
           <TextInput
             ref={textInputRef}
             style={[styles.textInput, { height: Math.min(100, Math.max(40, inputHeight)) }]}
-            placeholder="Viết tin nhắn..."
+            placeholder={isMicListening ? "🎤 Đang nghe..." : "Viết tin nhắn..."}
             placeholderTextColor="#94a3b8"
             value={text}
             onChangeText={setText}
             multiline
             onContentSizeChange={(e) => setInputHeight(e.nativeEvent.contentSize.height)}
             blurOnSubmit={false}
+          />
+
+          <VoiceMicButton
+            currentValue={text}
+            onSpeechRecognized={setText}
+            onStateChange={setIsMicListening}
+            compact={true}
           />
 
           <TouchableOpacity 

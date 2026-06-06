@@ -1,5 +1,5 @@
 // frontend/app/workspace/[workspaceId].tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -14,7 +14,8 @@ import {
   Alert,
   Clipboard,
   Linking,
-  Share
+  Share,
+  useWindowDimensions
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Colors from '@/constants/Colors';
@@ -24,6 +25,7 @@ import { useLocalSearchParams, router } from 'expo-router';
 import { useUser } from '@/context/UserContext';
 import { useSocket } from '@/context/SocketContext';
 import { API_BASE_URL } from '@/constants/Config';
+import VoiceMicButton from '../../components/VoiceMicButton';
 
 interface Task {
   id: number;
@@ -35,6 +37,14 @@ interface Task {
   assigned_to: number | null;
   assignee_name?: string;
   assignee_avatar?: string;
+  assignees?: Array<{
+    user_id: number;
+    status: string;
+    started_at: string | null;
+    completed_at: string | null;
+    name: string;
+    avatar: string | null;
+  }>;
   created_by: number | null;
   creator_name?: string;
   creator_avatar?: string;
@@ -56,6 +66,7 @@ interface Task {
 
 
 export default function PageTasksScreen() {
+  const { width: windowWidth } = useWindowDimensions();
   const { workspaceId } = useLocalSearchParams();
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
@@ -90,10 +101,41 @@ export default function PageTasksScreen() {
   // Form Fields (For create and edit)
   const [formTitle, setFormTitle] = useState('');
   const [formDesc, setFormDesc] = useState('');
+  const [isDescMicListening, setIsDescMicListening] = useState(false);
   const [formStatus, setFormStatus] = useState<'todo' | 'in_progress' | 'completed'>('todo');
   const [formPriority, setFormPriority] = useState<'low' | 'medium' | 'high'>('medium');
-  const [formAssignedTo, setFormAssignedTo] = useState<string>('');
+  const [formSelectedUsers, setFormSelectedUsers] = useState<number[]>([]);
   const [submittingTask, setSubmittingTask] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [assigneeSearchInput, setAssigneeSearchInput] = useState('');
+  const [assigneeSearchQuery, setAssigneeSearchQuery] = useState('');
+  const [formError, setFormError] = useState<string | null>(null);
+  const verticalScrollViewRef = useRef<ScrollView>(null);
+
+  // Debounce search query 300ms
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setAssigneeSearchQuery(assigneeSearchInput);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [assigneeSearchInput]);
+
+  // Keyboard shortcut Ctrl + Enter to submit task modal
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !isTaskModalOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.key === 'Enter') {
+        e.preventDefault();
+        if (selectedTask) {
+          handleUpdateTask();
+        } else {
+          handleCreateTask();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isTaskModalOpen, selectedTask, formTitle, formDesc, formPriority, formSelectedUsers, formStatus]);
 
   // Users List for Assignment
   const [usersList, setUsersList] = useState<any[]>([]);
@@ -101,6 +143,9 @@ export default function PageTasksScreen() {
   // Quick Status Edit Dropdown State
   const [quickStatusTask, setQuickStatusTask] = useState<Task | null>(null);
   const [quickPriorityTask, setQuickPriorityTask] = useState<Task | null>(null);
+  const [quickAssigneeTask, setQuickAssigneeTask] = useState<Task | null>(null);
+  const [quickSelectedUsers, setQuickSelectedUsers] = useState<number[]>([]);
+  const [workspaceMembers, setWorkspaceMembers] = useState<any[]>([]);
 
   // Inline Add Task State
   const [isInlineAdding, setIsInlineAdding] = useState(false);
@@ -150,13 +195,20 @@ export default function PageTasksScreen() {
     }
   };
 
-  const getAssigneeOptions = () => {
-    if (!user) return [];
-    if (user.role === 'admin') {
-      return usersList;
-    } else {
-      return usersList.filter(u => u.role === 'admin' || u.id === user.id);
+  const fetchWorkspaceMembers = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/tasks/workspaces/${workspaceId}/members`);
+      const result = await res.json();
+      if (result.status === 'success') {
+        setWorkspaceMembers(result.data || []);
+      }
+    } catch (err) {
+      console.error('Lỗi tải danh sách thành viên trang:', err);
     }
+  };
+
+  const getAssigneeOptions = () => {
+    return workspaceMembers;
   };
 
   const fetchActivities = async (taskId: number) => {
@@ -270,6 +322,7 @@ export default function PageTasksScreen() {
     fetchTasks();
     fetchWorkspaceDetails();
     fetchUsers();
+    fetchWorkspaceMembers();
   }, [workspaceId, user]);
 
   // Realtime Socket Sync
@@ -286,25 +339,109 @@ export default function PageTasksScreen() {
     };
 
     const handleTaskUpdated = (updatedTask: Task) => {
-      if (updatedTask.workspace_id === parseInt(workspaceId as string)) {
-        setTasks(prev => {
+      setTasks(prev => {
+        const existingTask = prev.find(t => t.id === updatedTask.id);
+        const wsId = updatedTask.workspace_id || (existingTask ? existingTask.workspace_id : null);
+
+        if (wsId === parseInt(workspaceId as string)) {
           const exists = prev.some(t => t.id === updatedTask.id);
           if (!exists) {
+            if (!updatedTask.workspace_id) return prev;
             return [...prev, updatedTask];
           }
-          return prev.map(t => t.id === updatedTask.id ? { ...t, ...updatedTask } : t);
-        });
-
-        setSelectedTask(prev => {
-          if (prev && prev.id === updatedTask.id) {
-            fetchActivities(updatedTask.id);
-            return { ...prev, ...updatedTask };
+          return prev.map(t => {
+            if (t.id === updatedTask.id) {
+              if (updatedTask.assignees) {
+                return { ...t, ...updatedTask, assignees: updatedTask.assignees };
+              }
+              if (!updatedTask.workspace_id && 'user_id' in updatedTask) {
+                const userId = (updatedTask as any).user_id;
+                const status = (updatedTask as any).status;
+                const updatedAssignees = t.assignees?.map(a => {
+                  if (a.user_id === userId) {
+                    return { ...a, status };
+                  }
+                  return a;
+                }) || [];
+                return { ...t, assignees: updatedAssignees };
+              }
+              return { ...t, ...updatedTask };
+            }
+            return t;
+          });
+        } else {
+          if (updatedTask.workspace_id) {
+            return prev.filter(t => t.id !== updatedTask.id);
           }
           return prev;
-        });
-      } else {
-        setTasks(prev => prev.filter(t => t.id !== updatedTask.id));
-      }
+        }
+      });
+
+      setSelectedTask(prev => {
+        if (prev && prev.id === updatedTask.id) {
+          fetchActivities(updatedTask.id);
+          if (updatedTask.assignees) {
+            return { ...prev, ...updatedTask, assignees: updatedTask.assignees };
+          }
+          if (!updatedTask.workspace_id && 'user_id' in updatedTask) {
+            const userId = (updatedTask as any).user_id;
+            const status = (updatedTask as any).status;
+            const updatedAssignees = prev.assignees?.map(a => {
+              if (a.user_id === userId) {
+                return { ...a, status };
+              }
+              return a;
+            }) || [];
+            return { ...prev, assignees: updatedAssignees };
+          }
+          return { ...prev, ...updatedTask };
+        }
+        return prev;
+      });
+    };
+
+    const handleAssignmentStatusUpdated = (data: { 
+      task_id?: number; 
+      taskId?: number; 
+      user_id?: number; 
+      status?: string; 
+      completed_at?: string | null; 
+      assignees?: any[];
+    }) => {
+      const targetTaskId = data.taskId || data.task_id;
+      if (!targetTaskId) return;
+
+      setTasks(prev => prev.map(t => {
+        if (t.id === targetTaskId) {
+          if (data.assignees) {
+            return { ...t, assignees: data.assignees };
+          }
+          const updatedAssignees = t.assignees?.map(a => {
+            if (a.user_id === data.user_id) {
+              return { ...a, status: data.status!, completed_at: data.completed_at };
+            }
+            return a;
+          }) || [];
+          return { ...t, assignees: updatedAssignees };
+        }
+        return t;
+      }));
+
+      setSelectedTask(prev => {
+        if (prev && prev.id === targetTaskId) {
+          if (data.assignees) {
+            return { ...prev, assignees: data.assignees };
+          }
+          const updatedAssignees = prev.assignees?.map(a => {
+            if (a.user_id === data.user_id) {
+              return { ...a, status: data.status!, completed_at: data.completed_at };
+            }
+            return a;
+          }) || [];
+          return { ...prev, assignees: updatedAssignees };
+        }
+        return prev;
+      });
     };
 
     const handleTaskDeleted = (deleted: { id: number }) => {
@@ -318,11 +455,13 @@ export default function PageTasksScreen() {
     socket.on('task_created', handleTaskCreated);
     socket.on('task_updated', handleTaskUpdated);
     socket.on('task_deleted', handleTaskDeleted);
+    socket.on('assignment_status_updated', handleAssignmentStatusUpdated);
 
     return () => {
       socket.off('task_created', handleTaskCreated);
       socket.off('task_updated', handleTaskUpdated);
       socket.off('task_deleted', handleTaskDeleted);
+      socket.off('assignment_status_updated', handleAssignmentStatusUpdated);
     };
   }, [socket, workspaceId, user, selectedTask]);
 
@@ -371,7 +510,7 @@ export default function PageTasksScreen() {
           status: 'todo', // default Chưa bắt đầu
           priority: 'low', // default Bình thường
           description: null,
-          assigned_to: null,
+          assigned_to: 'all',
         }),
       });
       const result = await res.json();
@@ -389,32 +528,64 @@ export default function PageTasksScreen() {
 
 
 
+  const showToastMsg = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 3000);
+  };
+
   const handleCreateTask = async () => {
-    if (!formTitle.trim()) return;
+    const trimmedTitle = formTitle.trim();
+    if (!trimmedTitle) {
+      setFormError("Vui lòng nhập tên nhiệm vụ.");
+      return;
+    }
+    if (trimmedTitle.length < 3 || trimmedTitle.length > 255) {
+      setFormError("Tên nhiệm vụ phải từ 3 đến 255 ký tự.");
+      return;
+    }
+    if (formSelectedUsers.length === 0) {
+      setFormError("Vui lòng chọn ít nhất một người nhận.");
+      return;
+    }
+
     try {
+      setFormError(null);
       setSubmittingTask(true);
       const res = await fetch(`${API_BASE_URL}/tasks/tasks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           workspace_id: parseInt(workspaceId as string),
-          title: formTitle,
+          title: trimmedTitle,
           description: formDesc,
-          status: formStatus,
+          status: 'todo', // Trạng thái mặc định: todo
           priority: formPriority,
-          assigned_to: formAssignedTo ? parseInt(formAssignedTo) : null,
+          assigned_to: formSelectedUsers,
           deadline: null,
         }),
       });
       const result = await res.json();
       if (result.status === 'success') {
         setIsTaskModalOpen(false);
+        setFormTitle('');
+        setFormDesc('');
+        setFormPriority('medium');
+        setFormSelectedUsers([]);
+        setAssigneeSearchInput('');
+        setFormError(null);
+        showToastMsg("✅ Đã tạo nhiệm vụ thành công.");
+        
+        setTimeout(() => {
+          verticalScrollViewRef.current?.scrollToEnd({ animated: true });
+        }, 150);
       } else {
-        alert(result.message || 'Lỗi khi tạo công việc.');
+        setFormError(result.message || 'Lỗi khi tạo công việc.');
       }
     } catch (err) {
       console.error(err);
-      alert('Lỗi kết nối mạng.');
+      setFormError("Không thể tạo nhiệm vụ. Vui lòng kiểm tra kết nối mạng.");
     } finally {
       setSubmittingTask(false);
     }
@@ -426,7 +597,8 @@ export default function PageTasksScreen() {
     setFormDesc(task.description || '');
     setFormStatus(task.status);
     setFormPriority(task.priority);
-    setFormAssignedTo(task.assigned_to ? String(task.assigned_to) : '');
+    const ids = task.assignees ? task.assignees.map((a: any) => a.user_id) : (task.assigned_to ? [task.assigned_to] : []);
+    setFormSelectedUsers(ids);
     setIsDetailModalOpen(false);
     setIsTaskModalOpen(true);
   };
@@ -443,7 +615,7 @@ export default function PageTasksScreen() {
           description: formDesc,
           status: formStatus,
           priority: formPriority,
-          assigned_to: formAssignedTo ? parseInt(formAssignedTo) : null,
+          assigned_to: formSelectedUsers,
           deadline: null,
         }),
       });
@@ -507,6 +679,39 @@ export default function PageTasksScreen() {
       setSubmittingUrge(false);
     }
   };
+
+  const handleQuickAssigneeChange = async () => {
+    if (!quickAssigneeTask) return;
+    try {
+      const res = await fetch(`${API_BASE_URL}/tasks/tasks/${quickAssigneeTask.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          assigned_to: quickSelectedUsers,
+        }),
+      });
+      const result = await res.json();
+      if (result.status === 'success') {
+        setQuickAssigneeTask(null);
+      } else {
+        alert(result.message || 'Lỗi cập nhật phân công.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Lỗi kết nối mạng.');
+    }
+  };
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && quickAssigneeTask) {
+        handleQuickAssigneeChange();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [quickAssigneeTask, quickSelectedUsers]);
 
   const handleQuickStatusChange = async (task: Task, newStatus: 'todo' | 'in_progress' | 'completed') => {
     try {
@@ -641,6 +846,33 @@ export default function PageTasksScreen() {
     }
   };
 
+  const getDynamicStatus = (task: any) => {
+    const approval = task.approval_status;
+    if (['waiting_approval', 'completed', 'revision_required'].includes(approval)) {
+      let text = '';
+      let statusKey = approval;
+      if (approval === 'waiting_approval') {
+        text = '⏳ Chờ duyệt';
+      } else if (approval === 'completed') {
+        text = '✅ Hoàn thành';
+      } else if (approval === 'revision_required') {
+        text = '🔄 Cần làm lại';
+      }
+      return { text, colorKey: statusKey, hasInProgress: false, assignees: [] };
+    }
+
+    const inProgressAssignees = (task.assignees || []).filter((a: any) => a.status === 'in_progress');
+    if (inProgressAssignees.length === 0) {
+      return { text: 'Chưa bắt đầu', colorKey: 'todo', hasInProgress: false, assignees: [] };
+    } else if (inProgressAssignees.length <= 3) {
+      const text = inProgressAssignees.map((a: any) => `${a.name} đang thực hiện`).join('\n');
+      return { text, colorKey: 'in_progress', hasInProgress: true, assignees: inProgressAssignees };
+    } else {
+      const text = `🟢 ${inProgressAssignees.length} người đang thực hiện`;
+      return { text, colorKey: 'in_progress', hasInProgress: true, assignees: inProgressAssignees };
+    }
+  };
+
   const getPriorityText = (priority: string) => {
     switch (priority) {
       case 'low': return 'Thấp';
@@ -717,6 +949,117 @@ export default function PageTasksScreen() {
       case 'reviewed': return '#10b981';
       default: return colors.tabIconDefault;
     }
+  };
+
+  const renderAssigneeStack = (task: Task) => {
+    const assignees = task.assignees || [];
+    const total = assignees.length > 0 ? assignees.length : (task.assigned_to ? 1 : 0);
+
+    if (total === 0) {
+      return (
+        <Text style={{ color: colors.tabIconDefault, fontSize: 13, fontStyle: 'italic', paddingLeft: 8 }}>
+          Chưa gán
+        </Text>
+      );
+    }
+
+    const isMobile = windowWidth < 768;
+
+    if (isMobile) {
+      return (
+        <Text style={{ color: colors.text, fontSize: 13, paddingLeft: 8, fontWeight: '600' }}>
+          👥 {total} người
+        </Text>
+      );
+    }
+
+    // Desktop/Tablet: Show stack + count text below
+    let displayList: any[] = [];
+    if (assignees.length > 0) {
+      displayList = assignees;
+    } else if (task.assigned_to) {
+      displayList = [{
+        user_id: task.assigned_to,
+        name: task.assignee_name || 'Người nhận',
+        avatar: task.assignee_avatar,
+        avatar_url: task.assignee_avatar
+      }];
+    }
+
+    const maxAvatars = 5;
+    const avatarsToShow = displayList.slice(0, maxAvatars);
+    const remaining = displayList.length - maxAvatars;
+
+    return (
+      <View style={{ alignItems: 'flex-start', paddingLeft: 8, paddingVertical: 4 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+          {avatarsToShow.map((assignee, index) => {
+            const avatarUri = assignee.avatar_url || assignee.avatar;
+            const webTooltip = Platform.OS === 'web' ? { title: assignee.name } as any : {};
+            return avatarUri ? (
+              <Image
+                key={assignee.user_id || index}
+                source={{ uri: avatarUri }}
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: 14,
+                  borderWidth: 2,
+                  borderColor: colors.card,
+                  marginRight: -8,
+                  zIndex: maxAvatars - index
+                }}
+                {...webTooltip}
+              />
+            ) : (
+              <View
+                key={assignee.user_id || index}
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: 14,
+                  backgroundColor: colors.border,
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  borderWidth: 2,
+                  borderColor: colors.card,
+                  marginRight: -8,
+                  zIndex: maxAvatars - index
+                }}
+                {...webTooltip}
+              >
+                <Text style={{ fontSize: 9, color: colors.text, fontWeight: '700' }}>
+                  {assignee.name ? assignee.name.charAt(0).toUpperCase() : '?'}
+                </Text>
+              </View>
+            );
+          })}
+          {remaining > 0 && (
+            <View
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: 14,
+                backgroundColor: colors.border,
+                justifyContent: 'center',
+                alignItems: 'center',
+                borderWidth: 2,
+                borderColor: colors.card,
+                marginRight: -8,
+                zIndex: 0
+              }}
+            >
+              <Text style={{ fontSize: 9, color: colors.text, fontWeight: '700' }}>
+                +{remaining}
+              </Text>
+            </View>
+          )}
+        </View>
+        <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600', marginTop: 2 }}>
+          {total} người
+        </Text>
+      </View>
+    );
   };
 
   return (
@@ -829,7 +1172,7 @@ export default function PageTasksScreen() {
         </View>
       ) : (
         <ScrollView style={{ flex: 1 }} horizontal={true} showsHorizontalScrollIndicator={true} contentContainerStyle={{ minWidth: '100%' }}>
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 120 }}>
+          <ScrollView ref={verticalScrollViewRef} style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 120 }}>
             {/* Table Header Row */}
             <View style={[styles.tableHeader, { backgroundColor: colors.background, borderBottomColor: colors.border, borderTopColor: colors.border }]}>
               <View style={[styles.colHeader, styles.colTitle, { borderRightColor: colors.border }]}>
@@ -907,25 +1250,102 @@ export default function PageTasksScreen() {
                   </View>
 
                   {/* Column 2: Trạng thái */}
-                  <View style={[styles.colCell, styles.colStatus, { borderRightColor: colors.border }]}>
-                    <TouchableOpacity
-                      style={[styles.notionStatusBadge, { backgroundColor: statusColor.bg }]}
-                      onPress={() => {
-                        if (canEditStatus) {
-                          setQuickStatusTask(task);
-                        } else {
-                          // Tự động mở chi tiết nếu là nhân viên
-                          setSelectedTask(task);
-                          setIsDetailModalOpen(true);
-                        }
-                      }}
-                      activeOpacity={0.7}
-                    >
-                      <View style={[styles.statusDot, { backgroundColor: statusColor.dot }]} />
-                      <Text style={[styles.notionStatusText, { color: statusColor.text }]}>
-                        {getStatusText(task.approval_status || task.status)}
-                      </Text>
-                    </TouchableOpacity>
+                  <View style={[styles.colCell, styles.colStatus, { borderRightColor: colors.border, paddingVertical: 6, alignItems: 'flex-start' }]}>
+                    {(() => {
+                      const approval = task.approval_status;
+                      const isApprovalState = ['waiting_approval', 'completed', 'revision_required'].includes(approval || '');
+                      
+                      if (isApprovalState) {
+                        let text = '';
+                        let colorKey = approval;
+                        if (approval === 'waiting_approval') text = '⏳ Chờ duyệt';
+                        else if (approval === 'completed') text = '✅ Hoàn thành';
+                        else if (approval === 'revision_required') text = '🔄 Cần làm lại';
+
+                        const sColor = getStatusColor(colorKey || '');
+                        return (
+                          <TouchableOpacity
+                            style={[styles.notionStatusBadge, { backgroundColor: sColor.bg, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12 }]}
+                            onPress={() => {
+                              if (canEditStatus) {
+                                setQuickStatusTask(task);
+                              } else {
+                                setSelectedTask(task);
+                                setIsDetailModalOpen(true);
+                              }
+                            }}
+                            activeOpacity={0.7}
+                          >
+                            <Text style={[styles.notionStatusText, { color: sColor.text, fontSize: 12, fontWeight: '700', lineHeight: 16 }]}>
+                              {text}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      }
+
+                      // Dynamic Status based on in progress members
+                      const inProgressAssignees = (task.assignees || []).filter((a: any) => a.status === 'in_progress');
+                      const sColor = getStatusColor(inProgressAssignees.length > 0 ? 'in_progress' : 'todo');
+
+                      if (inProgressAssignees.length === 0) {
+                        return (
+                          <TouchableOpacity
+                            style={[styles.notionStatusBadge, { backgroundColor: sColor.bg, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12 }]}
+                            onPress={() => {
+                              if (canEditStatus) {
+                                setQuickStatusTask(task);
+                              } else {
+                                setSelectedTask(task);
+                                setIsDetailModalOpen(true);
+                              }
+                            }}
+                            activeOpacity={0.7}
+                          >
+                            <View style={[styles.statusDot, { backgroundColor: sColor.dot }]} />
+                            <Text style={[styles.notionStatusText, { color: sColor.text, fontSize: 12, fontWeight: '700', lineHeight: 16 }]}>
+                              Chưa bắt đầu
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      }
+
+                      // Render each member on a new line, each starting with 🟢
+                      return (
+                        <TouchableOpacity
+                          style={{ width: '100%' }}
+                          onPress={() => {
+                            if (canEditStatus) {
+                              setQuickStatusTask(task);
+                            } else {
+                              setSelectedTask(task);
+                              setIsDetailModalOpen(true);
+                            }
+                          }}
+                          activeOpacity={0.7}
+                        >
+                          <View style={{ gap: 4, width: '100%' }}>
+                            {inProgressAssignees.map((a: any, idx: number) => (
+                              <View 
+                                key={a.user_id || idx} 
+                                style={[
+                                  styles.notionStatusBadge, 
+                                  { 
+                                    backgroundColor: sColor.bg, 
+                                    paddingHorizontal: 10, 
+                                    paddingVertical: 4, 
+                                    borderRadius: 12 
+                                  }
+                                ]}
+                              >
+                                <Text style={[styles.notionStatusText, { color: sColor.text, fontSize: 11, fontWeight: '700', lineHeight: 14 }]} numberOfLines={1}>
+                                  🟢 {a.name} đang thực hiện
+                                </Text>
+                              </View>
+                            ))}
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    })()}
                   </View>
 
                   {/* Column 3: Mức độ */}
@@ -967,24 +1387,21 @@ export default function PageTasksScreen() {
 
                   {/* Column 3.2: Người nhận */}
                   <View style={[styles.colCell, styles.colUser, { borderRightColor: colors.border }]}>
-                    {task.assigned_to ? (
-                      <View style={styles.assigneeContainer}>
-                        {task.assignee_avatar ? (
-                          <Image source={{ uri: task.assignee_avatar }} style={styles.assigneeAvatar} />
-                        ) : (
-                          <View style={[styles.assigneeAvatar, { backgroundColor: colors.border, justifyContent: 'center', alignItems: 'center' }]}>
-                            <Text style={{ fontSize: 10, color: colors.text, fontWeight: '700' }}>
-                              {task.assignee_name ? task.assignee_name.charAt(0).toUpperCase() : '?'}
-                            </Text>
-                          </View>
-                        )}
-                        <Text style={[styles.assigneeNameText, { color: colors.text }]} numberOfLines={1}>
-                          {task.assignee_name} {task.assigned_to === user?.id ? '(Tôi)' : ''}
-                        </Text>
-                      </View>
-                    ) : (
-                      <Text style={{ color: colors.tabIconDefault, fontSize: 13, fontStyle: 'italic' }}>Chưa gán</Text>
-                    )}
+                    <TouchableOpacity
+                      style={{ width: '100%', height: '100%', justifyContent: 'center' }}
+                      onPress={() => {
+                        if (isAdmin) {
+                          setQuickAssigneeTask(task);
+                          const ids = task.assignees ? task.assignees.map((a: any) => a.user_id) : (task.assigned_to ? [task.assigned_to] : []);
+                          setQuickSelectedUsers(ids);
+                        } else {
+                          alert('Chỉ có Quản trị viên mới được phân công công việc.');
+                        }
+                      }}
+                      activeOpacity={isAdmin ? 0.7 : 1}
+                    >
+                      {renderAssigneeStack(task)}
+                    </TouchableOpacity>
                   </View>
 
                   {/* Column 4: Duyệt */}
@@ -1013,7 +1430,7 @@ export default function PageTasksScreen() {
 
                   {/* Column 4.5: Hối thúc */}
                   <View style={[styles.colCell, styles.colUrge, { borderRightColor: colors.border, alignItems: 'center', justifyContent: 'center' }]}>
-                    {task.priority?.toLowerCase() === 'high' && !task.completed ? (
+                    {!task.completed ? (
                       isAdmin ? (
                         <TouchableOpacity
                           style={{
@@ -1109,18 +1526,15 @@ export default function PageTasksScreen() {
                   <TouchableOpacity
                     style={{ flexDirection: 'row', alignItems: 'center', width: '100%', paddingVertical: 4 }}
                     onPress={() => {
-                      if (isAdmin) {
-                        setIsInlineAdding(true);
-                      } else {
-                        // For standard users, open Modal immediately to let them select assignee
-                        setFormTitle('');
-                        setFormDesc('');
-                        setFormStatus('todo');
-                        setFormPriority('medium');
-                        setFormAssignedTo('');
-                        setSelectedTask(null);
-                        setIsTaskModalOpen(true);
-                      }
+                      setFormTitle('');
+                      setFormDesc('');
+                      setFormStatus('todo');
+                      setFormPriority('medium');
+                      setFormSelectedUsers(workspaceMembers.map(m => m.id));
+                      setSelectedTask(null);
+                      setFormError(null);
+                      setAssigneeSearchInput('');
+                      setIsTaskModalOpen(true);
                     }}
                     activeOpacity={0.6}
                   >
@@ -1227,6 +1641,86 @@ export default function PageTasksScreen() {
         </TouchableOpacity>
       </Modal>
 
+      {/* 5.7. Quick Assignee Change Modal */}
+      <Modal
+        visible={quickAssigneeTask !== null}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setQuickAssigneeTask(null)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setQuickAssigneeTask(null)}
+        >
+          <View style={[styles.quickStatusCard, { backgroundColor: colors.card, width: '100%', maxWidth: 320 }]} onStartShouldSetResponder={() => true}>
+            <Text style={[styles.quickStatusTitle, { color: colors.text, marginBottom: 16 }]}>Người nhận việc</Text>
+            
+            <ScrollView style={{ maxHeight: 200, marginBottom: 16 }} nestedScrollEnabled>
+              {workspaceMembers.map(m => {
+                const isSelected = quickSelectedUsers.includes(m.id);
+                return (
+                  <TouchableOpacity
+                    key={m.id}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      paddingVertical: 10,
+                      paddingHorizontal: 8,
+                      borderBottomWidth: 0.5,
+                      borderBottomColor: colors.border,
+                      justifyContent: 'space-between'
+                    }}
+                    onPress={() => {
+                      if (isSelected) {
+                        setQuickSelectedUsers(prev => prev.filter(id => id !== m.id));
+                      } else {
+                        setQuickSelectedUsers(prev => [...prev, m.id]);
+                      }
+                    }}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      {m.avatar ? (
+                        <Image source={{ uri: m.avatar }} style={{ width: 20, height: 20, borderRadius: 10 }} />
+                      ) : (
+                        <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: colors.border, justifyContent: 'center', alignItems: 'center' }}>
+                          <Text style={{ fontSize: 9, color: colors.text, fontWeight: '700' }}>
+                            {m.name ? m.name.charAt(0).toUpperCase() : '?'}
+                          </Text>
+                        </View>
+                      )}
+                      <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
+                        {m.name} {m.id === user?.id ? '(Tôi)' : ''}
+                      </Text>
+                    </View>
+                    <Ionicons 
+                      name={isSelected ? "checkbox" : "square-outline"} 
+                      size={20} 
+                      color={colors.tint} 
+                    />
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12 }}>
+              <TouchableOpacity
+                style={[styles.btnCancel, { borderColor: colors.border, height: 38 }]}
+                onPress={() => setQuickAssigneeTask(null)}
+              >
+                <Text style={[styles.btnCancelText, { color: colors.text, fontSize: 13 }]}>Hủy</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.btnSubmit, { backgroundColor: colors.tint, height: 38 }]}
+                onPress={handleQuickAssigneeChange}
+              >
+                <Text style={[styles.btnSubmitText, { fontSize: 13 }]}>Lưu</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
       {/* 6. Modal: Giao việc & Chỉnh sửa */}
       <Modal
         visible={isTaskModalOpen}
@@ -1238,12 +1732,36 @@ export default function PageTasksScreen() {
         }}
       >
         <View style={styles.modalOverlay}>
-          <ScrollView style={{ width: '100%', maxWidth: 360 }} contentContainerStyle={{ justifyContent: 'center', flexGrow: 1 }}>
+          <ScrollView 
+            style={{ width: '100%', maxWidth: 450 }} 
+            contentContainerStyle={{ justifyContent: 'center', flexGrow: 1, paddingVertical: 20 }}
+            showsVerticalScrollIndicator={false}
+          >
             <View style={[styles.formCard, { backgroundColor: colors.card }]}>
-              <Text style={[styles.formTitle, { color: colors.text }]}>
-                {selectedTask ? 'Chỉnh sửa nhiệm vụ' : 'Nhiệm vụ mới'}
-              </Text>
+              {/* Header with Title and Close Button */}
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                <Text style={[styles.formTitle, { color: colors.text, marginBottom: 0, textAlign: 'left' }]}>
+                  {selectedTask ? 'Chỉnh sửa nhiệm vụ' : 'Nhiệm vụ mới'}
+                </Text>
+                <TouchableOpacity
+                  onPress={() => {
+                    setIsTaskModalOpen(false);
+                    setSelectedTask(null);
+                  }}
+                  style={{ padding: 4 }}
+                >
+                  <Ionicons name="close" size={22} color={colors.tabIconDefault} />
+                </TouchableOpacity>
+              </View>
 
+              {/* Error message section */}
+              {formError && (
+                <View style={{ backgroundColor: '#fee2e2', padding: 10, borderRadius: 8, marginBottom: 14 }}>
+                  <Text style={{ color: '#dc2626', fontSize: 12.5, fontWeight: '600' }}>{formError}</Text>
+                </View>
+              )}
+
+              {/* Tên nhiệm vụ */}
               <Text style={[styles.formLabel, { color: colors.text }]}>Tên nhiệm vụ *</Text>
               <TextInput
                 style={[
@@ -1251,22 +1769,29 @@ export default function PageTasksScreen() {
                   { 
                     color: colors.text, 
                     borderColor: colors.border, 
-                    backgroundColor: (!selectedTask || isAdmin) ? colors.background : colors.card, 
-                    opacity: (!selectedTask || isAdmin) ? 1 : 0.6 
+                    backgroundColor: colors.background,
                   }
                 ]}
-                placeholder="Nhập tên nhiệm vụ..."
+                placeholder="Nhập tên nhiệm vụ (tối thiểu 3 ký tự)..."
                 placeholderTextColor={colors.tabIconDefault}
                 value={formTitle}
                 onChangeText={setFormTitle}
-                editable={!selectedTask || isAdmin}
                 onSubmitEditing={selectedTask ? handleUpdateTask : handleCreateTask}
               />
 
-              <Text style={[styles.formLabel, { color: colors.text }]}>Mô tả</Text>
+              {/* Mô tả */}
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <Text style={[styles.formLabel, { color: colors.text, marginBottom: 0 }]}>Mô tả</Text>
+                <VoiceMicButton
+                  currentValue={formDesc}
+                  onSpeechRecognized={setFormDesc}
+                  onStateChange={setIsDescMicListening}
+                  compact={false}
+                />
+              </View>
               <TextInput
                 style={[styles.formInput, styles.formTextArea, { color: colors.text, borderColor: colors.border, backgroundColor: colors.background }]}
-                placeholder="Mô tả công việc chi tiết..."
+                placeholder={isDescMicListening ? "🎤 Đang nghe..." : "Mô tả công việc chi tiết..."}
                 placeholderTextColor={colors.tabIconDefault}
                 value={formDesc}
                 onChangeText={setFormDesc}
@@ -1274,122 +1799,217 @@ export default function PageTasksScreen() {
                 numberOfLines={3}
               />
 
-              {/* Assignee Selection */}
-              {(!selectedTask || isAdmin) && (
-                <View style={{ marginBottom: 12 }}>
-                  <Text style={[styles.formLabel, { color: colors.text, marginBottom: 6 }]}>Người nhận việc *</Text>
-                  {getAssigneeOptions().length === 0 ? (
-                    <Text style={{ color: colors.tabIconDefault, fontSize: 13, fontStyle: 'italic' }}>
-                      Không tìm thấy người nhận phù hợp.
+              {/* Mức độ (Segmented Priority Buttons) */}
+              <Text style={[styles.formLabel, { color: colors.text, marginBottom: 6 }]}>Mức độ</Text>
+              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 14 }}>
+                {(['low', 'medium', 'high'] as const).map((p) => {
+                  const isSelected = formPriority === p;
+                  const pColor = getPriorityColor(p);
+                  return (
+                    <TouchableOpacity
+                      key={p}
+                      style={{
+                        flex: 1,
+                        paddingVertical: 8,
+                        borderRadius: 8,
+                        borderWidth: 1,
+                        borderColor: isSelected ? pColor.text : colors.border,
+                        backgroundColor: isSelected ? pColor.bg : colors.card,
+                        alignItems: 'center',
+                      }}
+                      onPress={() => setFormPriority(p)}
+                    >
+                      <Text style={{ fontSize: 13, fontWeight: '700', color: isSelected ? pColor.text : colors.tabIconDefault }}>
+                        {getPriorityText(p)}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {/* Người giao (Readonly) */}
+              <Text style={[styles.formLabel, { color: colors.text }]}>Người giao</Text>
+              <View style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: colors.background,
+                padding: 10,
+                borderRadius: 10,
+                borderWidth: 1,
+                borderColor: colors.border,
+                marginBottom: 14,
+                gap: 8
+              }}>
+                {selectedTask && selectedTask.creator_avatar ? (
+                  <Image source={{ uri: selectedTask.creator_avatar }} style={{ width: 24, height: 24, borderRadius: 12 }} />
+                ) : user?.avatar ? (
+                  <Image source={{ uri: user.avatar }} style={{ width: 24, height: 24, borderRadius: 12 }} />
+                ) : (
+                  <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: colors.border, justifyContent: 'center', alignItems: 'center' }}>
+                    <Text style={{ fontSize: 10, color: colors.text, fontWeight: '700' }}>
+                      {selectedTask ? (selectedTask.creator_name ? selectedTask.creator_name.charAt(0).toUpperCase() : '?') : (user?.name ? user.name.charAt(0).toUpperCase() : '?')}
                     </Text>
-                  ) : (
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexDirection: 'row', paddingVertical: 4 }}>
-                      {isAdmin && (
-                        <TouchableOpacity
-                          style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            paddingHorizontal: 12,
-                            paddingVertical: 6,
-                            borderRadius: 20,
-                            borderWidth: 1,
-                            borderColor: formAssignedTo === '' ? colors.tint : colors.border,
-                            backgroundColor: formAssignedTo === '' ? colors.tint + '15' : colors.card,
-                            marginRight: 8,
-                          }}
-                          onPress={() => setFormAssignedTo('')}
-                          activeOpacity={0.7}
-                        >
-                          <Text style={{ fontSize: 12.5, color: colors.text, fontWeight: formAssignedTo === '' ? '700' : '500' }}>Không gán</Text>
-                        </TouchableOpacity>
-                      )}
-                      
-                      {getAssigneeOptions().map((u) => {
-                        const isSelected = String(u.id) === formAssignedTo;
-                        return (
-                          <TouchableOpacity
-                            key={u.id}
-                            style={{
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              paddingHorizontal: 12,
-                              paddingVertical: 6,
-                              borderRadius: 20,
-                              borderWidth: 1,
-                              borderColor: isSelected ? colors.tint : colors.border,
-                              backgroundColor: isSelected ? colors.tint + '15' : colors.card,
-                              marginRight: 8,
-                              gap: 6
-                            }}
-                            onPress={() => setFormAssignedTo(isSelected ? '' : String(u.id))}
-                            activeOpacity={0.7}
-                          >
-                            {u.avatar ? (
-                              <Image source={{ uri: u.avatar }} style={{ width: 18, height: 18, borderRadius: 9 }} />
-                            ) : (
-                              <View style={{ width: 18, height: 18, borderRadius: 9, backgroundColor: colors.border, justifyContent: 'center', alignItems: 'center' }}>
-                                <Text style={{ fontSize: 9, color: colors.text, fontWeight: '700' }}>
-                                  {u.name ? u.name.charAt(0).toUpperCase() : '?'}
-                                </Text>
-                              </View>
-                            )}
-                            <Text style={{ fontSize: 12.5, color: colors.text, fontWeight: isSelected ? '700' : '500' }}>
-                              {u.name} {u.id === user?.id ? '(Tôi)' : ''}
+                  </View>
+                )}
+                <Text style={{ fontSize: 13, color: colors.text, fontWeight: '600' }}>
+                  {selectedTask ? (selectedTask.creator_name || 'Hệ thống') : (user?.name || 'Hệ thống')}
+                </Text>
+              </View>
+
+              {/* Người nhận việc (Assignees Selection) */}
+              <Text style={[styles.formLabel, { color: colors.text, marginBottom: 6 }]}>Người nhận việc *</Text>
+              
+              {/* Search Assignees */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: colors.border, borderRadius: 10, backgroundColor: colors.background, paddingHorizontal: 10, height: 38, marginBottom: 8 }}>
+                <Ionicons name="search" size={16} color={colors.tabIconDefault} style={{ marginRight: 6 }} />
+                <TextInput
+                  style={{ flex: 1, fontSize: 13, color: colors.text, padding: 0 }}
+                  placeholder="Tìm kiếm thành viên..."
+                  placeholderTextColor={colors.tabIconDefault}
+                  value={assigneeSearchInput}
+                  onChangeText={setAssigneeSearchInput}
+                />
+                {assigneeSearchInput.length > 0 && (
+                  <TouchableOpacity onPress={() => setAssigneeSearchInput('')}>
+                    <Ionicons name="close-circle" size={16} color={colors.tabIconDefault} />
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {/* Select All Checkbox & Counter */}
+              {getAssigneeOptions().length > 0 && (
+                <TouchableOpacity
+                  style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8, paddingVertical: 4, gap: 8 }}
+                  onPress={() => {
+                    const isAllSelected = getAssigneeOptions().every(u => formSelectedUsers.includes(u.id));
+                    if (isAllSelected) {
+                      setFormSelectedUsers([]);
+                    } else {
+                      setFormSelectedUsers(getAssigneeOptions().map(u => u.id));
+                    }
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons
+                    name={getAssigneeOptions().every(u => formSelectedUsers.includes(u.id)) ? "checkbox" : "square-outline"}
+                    size={20}
+                    color={getAssigneeOptions().every(u => formSelectedUsers.includes(u.id)) ? colors.tint : colors.tabIconDefault}
+                  />
+                  <Text style={{ fontSize: 13, color: colors.text, fontWeight: '600' }}>
+                    Tất cả thành viên
+                  </Text>
+                  <Text style={{ fontSize: 12, color: colors.tabIconDefault, marginLeft: 'auto' }}>
+                    Đã chọn {formSelectedUsers.length}/{getAssigneeOptions().length} thành viên
+                  </Text>
+                </TouchableOpacity>
+              )}
+
+              {/* Members List ScrollView */}
+              <ScrollView style={{ maxHeight: 150, marginBottom: 14 }} nestedScrollEnabled={true}>
+                {getAssigneeOptions()
+                  .filter(u => {
+                    const q = assigneeSearchQuery.toLowerCase().trim();
+                    if (!q) return true;
+                    return u.name?.toLowerCase().includes(q) || u.email?.toLowerCase().includes(q);
+                  })
+                  .map((u) => {
+                    const isSelected = formSelectedUsers.includes(u.id);
+                    return (
+                      <TouchableOpacity
+                        key={u.id}
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          paddingVertical: 8,
+                          paddingHorizontal: 8,
+                          borderRadius: 8,
+                          backgroundColor: isSelected ? colors.tint + '10' : 'transparent',
+                          marginBottom: 4,
+                          gap: 10
+                        }}
+                        onPress={() => {
+                          if (isSelected) {
+                            setFormSelectedUsers(prev => prev.filter(id => id !== u.id));
+                          } else {
+                            setFormSelectedUsers(prev => [...prev, u.id]);
+                          }
+                        }}
+                      >
+                        <Ionicons
+                          name={isSelected ? "checkbox" : "square-outline"}
+                          size={18}
+                          color={isSelected ? colors.tint : colors.tabIconDefault}
+                        />
+                        {u.avatar ? (
+                          <Image source={{ uri: u.avatar }} style={{ width: 24, height: 24, borderRadius: 12 }} />
+                        ) : (
+                          <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: colors.border, justifyContent: 'center', alignItems: 'center' }}>
+                            <Text style={{ fontSize: 10, color: colors.text, fontWeight: '700' }}>
+                              {u.name ? u.name.charAt(0).toUpperCase() : '?'}
                             </Text>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </ScrollView>
-                  )}
+                          </View>
+                        )}
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ fontSize: 13, color: colors.text, fontWeight: isSelected ? '700' : '500' }}>
+                            {u.name} {u.id === user?.id ? '(Tôi)' : ''}
+                          </Text>
+                          {u.email && (
+                            <Text style={{ fontSize: 11, color: colors.tabIconDefault }}>
+                              {u.email}
+                            </Text>
+                          )}
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                {getAssigneeOptions().length === 0 && (
+                  <Text style={{ color: colors.tabIconDefault, fontSize: 12, fontStyle: 'italic', textAlign: 'center', marginTop: 10 }}>
+                    Không tìm thấy thành viên phù hợp
+                  </Text>
+                )}
+              </ScrollView>
+
+              {/* Trạng thái (Only shown when editing a task) */}
+              {selectedTask && (
+                <View style={{ marginBottom: 14 }}>
+                  <Text style={[styles.formLabel, { color: colors.text }]}>Trạng thái</Text>
+                  <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
+                    {(['todo', 'in_progress', 'completed'] as const).map((s) => {
+                      const isSelected = formStatus === s;
+                      const sColor = getStatusColor(s);
+                      return (
+                        <TouchableOpacity
+                          key={s}
+                          style={{
+                            flex: 1,
+                            paddingVertical: 8,
+                            borderRadius: 8,
+                            borderWidth: 1,
+                            borderColor: isSelected ? sColor.dot : colors.border,
+                            backgroundColor: isSelected ? sColor.bg : colors.card,
+                            alignItems: 'center',
+                          }}
+                          onPress={() => setFormStatus(s)}
+                        >
+                          <Text style={{ fontSize: 12, fontWeight: '700', color: isSelected ? sColor.text : colors.tabIconDefault }}>
+                            {getStatusText(s)}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
                 </View>
               )}
 
-              <View style={styles.formRow}>
-                <View style={{ flex: 1, marginRight: 8 }}>
-                  <Text style={[styles.formLabel, { color: colors.text }]}>Trạng thái</Text>
-                  <View style={[styles.pickerContainer, { borderColor: colors.border, backgroundColor: colors.background }]}>
-                    <TouchableOpacity
-                      style={styles.pickerTrigger}
-                      onPress={() => {
-                        const next: Record<string, 'todo' | 'in_progress' | 'completed'> = { todo: 'in_progress', in_progress: 'completed', completed: 'todo' };
-                        setFormStatus(next[formStatus]);
-                      }}
-                    >
-                      <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
-                        {getStatusText(formStatus)}
-                      </Text>
-                      <Ionicons name="swap-vertical" size={14} color={colors.tabIconDefault} />
-                    </TouchableOpacity>
-                  </View>
-                </View>
-
-                <View style={{ flex: 1, marginLeft: 8 }}>
-                  <Text style={[styles.formLabel, { color: colors.text }]}>Mức độ</Text>
-                  <View style={[styles.pickerContainer, { borderColor: colors.border, backgroundColor: colors.background }]}>
-                    <TouchableOpacity
-                      style={styles.pickerTrigger}
-                      onPress={() => {
-                        const next: Record<string, 'low' | 'medium' | 'high'> = { low: 'medium', medium: 'high', high: 'low' };
-                        setFormPriority(next[formPriority]);
-                      }}
-                    >
-                      <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
-                        {getPriorityText(formPriority)}
-                      </Text>
-                      <Ionicons name="swap-vertical" size={14} color={colors.tabIconDefault} />
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              </View>
-
-
-              <View style={styles.formButtons}>
+              {/* Form Buttons */}
+              <View style={[styles.formButtons, { marginTop: 10 }]}>
                 <TouchableOpacity
                   style={[styles.btnCancel, { borderColor: colors.border }]}
                   onPress={() => {
                     setIsTaskModalOpen(false);
                     setSelectedTask(null);
                   }}
+                  disabled={submittingTask}
                 >
                   <Text style={[styles.btnCancelText, { color: colors.text }]}>Hủy</Text>
                 </TouchableOpacity>
@@ -1400,9 +2020,16 @@ export default function PageTasksScreen() {
                   disabled={submittingTask || !formTitle.trim()}
                 >
                   {submittingTask ? (
-                    <ActivityIndicator size="small" color="#ffffff" />
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <ActivityIndicator size="small" color="#ffffff" />
+                      <Text style={styles.btnSubmitText}>
+                        {selectedTask ? 'Lưu thay đổi...' : 'Tạo nhiệm vụ...'}
+                      </Text>
+                    </View>
                   ) : (
-                    <Text style={styles.btnSubmitText}>Lưu</Text>
+                    <Text style={styles.btnSubmitText}>
+                      {selectedTask ? 'Lưu thay đổi' : 'Tạo nhiệm vụ'}
+                    </Text>
                   )}
                 </TouchableOpacity>
               </View>
@@ -1461,7 +2088,7 @@ export default function PageTasksScreen() {
                   {selectedTask.description || 'Không có mô tả chi tiết cho nhiệm vụ này.'}
                 </Text>
 
-                {isAdmin && selectedTask.priority?.toLowerCase() === 'high' && !selectedTask.completed && (
+                {isAdmin && !selectedTask.completed && (
                   <TouchableOpacity
                     style={{ 
                       backgroundColor: '#d97706', 
@@ -1520,27 +2147,53 @@ export default function PageTasksScreen() {
                   </View>
 
                   <View style={{ flex: 1, paddingLeft: 8 }}>
-                    <Text style={[styles.detailLabel, { color: colors.tabIconDefault }]}>NGƯỜI NHẬN VIỆC</Text>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6 }}>
-                      {selectedTask.assigned_to ? (
-                        <>
-                          {selectedTask.assignee_avatar ? (
-                            <Image source={{ uri: selectedTask.assignee_avatar }} style={{ width: 24, height: 24, borderRadius: 12, marginRight: 8 }} />
-                          ) : (
-                            <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: colors.border, justifyContent: 'center', alignItems: 'center', marginRight: 8 }}>
-                              <Text style={{ fontSize: 12, color: colors.text, fontWeight: '700' }}>
-                                {selectedTask.assignee_name ? selectedTask.assignee_name.charAt(0).toUpperCase() : '?'}
+                    <Text style={[styles.detailLabel, { color: colors.tabIconDefault, marginBottom: 4 }]}>NGƯỜI NHẬN VIỆC</Text>
+                    {selectedTask.assignees && selectedTask.assignees.length > 0 ? (
+                      <View style={{ gap: 6, marginTop: 4 }}>
+                        {selectedTask.assignees.map((assignee: any) => {
+                          const isCompleted = assignee.status === 'completed';
+                          const isInProgress = assignee.status === 'in_progress';
+                          const statusIcon = isCompleted ? '✅' : isInProgress ? '🔄' : '⏳';
+                          const statusText = isCompleted ? 'Hoàn thành' : isInProgress ? 'Đang làm' : 'Chưa bắt đầu';
+                          return (
+                            <View key={assignee.user_id} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                              {assignee.avatar ? (
+                                <Image source={{ uri: assignee.avatar }} style={{ width: 20, height: 20, borderRadius: 10 }} />
+                              ) : (
+                                <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: colors.border, justifyContent: 'center', alignItems: 'center' }}>
+                                  <Text style={{ fontSize: 10, color: colors.text, fontWeight: '700' }}>
+                                    {assignee.name ? assignee.name.charAt(0).toUpperCase() : '?'}
+                                  </Text>
+                                </View>
+                              )}
+                              <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600', flex: 1 }} numberOfLines={1}>
+                                {assignee.name} {assignee.user_id === user?.id ? '(Tôi)' : ''}
+                              </Text>
+                              <Text style={{ fontSize: 11, color: isCompleted ? '#10b981' : isInProgress ? '#3b82f6' : '#6b7280', fontWeight: '600' }}>
+                                {statusText} {statusIcon}
                               </Text>
                             </View>
-                          )}
-                          <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
-                            {selectedTask.assignee_name} {selectedTask.assigned_to === user?.id ? '(Tôi)' : ''}
-                          </Text>
-                        </>
-                      ) : (
-                        <Text style={{ color: colors.tabIconDefault, fontSize: 13, fontStyle: 'italic' }}>Chưa gán</Text>
-                      )}
-                    </View>
+                          );
+                        })}
+                      </View>
+                    ) : selectedTask.assigned_to ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6 }}>
+                        {selectedTask.assignee_avatar ? (
+                          <Image source={{ uri: selectedTask.assignee_avatar }} style={{ width: 24, height: 24, borderRadius: 12, marginRight: 8 }} />
+                        ) : (
+                          <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: colors.border, justifyContent: 'center', alignItems: 'center', marginRight: 8 }}>
+                            <Text style={{ fontSize: 12, color: colors.text, fontWeight: '700' }}>
+                              {selectedTask.assignee_name ? selectedTask.assignee_name.charAt(0).toUpperCase() : '?'}
+                            </Text>
+                          </View>
+                        )}
+                        <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
+                          {selectedTask.assignee_name} {selectedTask.assigned_to === user?.id ? '(Tôi)' : ''}
+                        </Text>
+                      </View>
+                    ) : (
+                      <Text style={{ color: colors.tabIconDefault, fontSize: 13, fontStyle: 'italic', marginTop: 6 }}>Chưa gán</Text>
+                    )}
                   </View>
                 </View>
 
@@ -1939,6 +2592,27 @@ export default function PageTasksScreen() {
       </Modal>
 
       {/* 8. Popover: Share Menu removed */}
+      {toastMessage && (
+        <View style={{
+          position: 'absolute',
+          bottom: 50,
+          alignSelf: 'center',
+          backgroundColor: '#10b981',
+          paddingHorizontal: 20,
+          paddingVertical: 10,
+          borderRadius: 20,
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.25,
+          shadowRadius: 3.84,
+          elevation: 5,
+          zIndex: 9999
+        }}>
+          <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 13.5 }}>
+            {toastMessage}
+          </Text>
+        </View>
+      )}
     </SafeAreaView>
   );
 }
@@ -2131,7 +2805,7 @@ colCell: {
     width: 220,
   },
   colStatus: {
-    width: 140,
+    width: 220,
   },
   colUser: {
     width: 160,
@@ -2167,6 +2841,7 @@ colCell: {
     paddingVertical: 3,
     borderRadius: 4,
     alignSelf: 'flex-start',
+    maxWidth: '100%',
   },
   statusDot: {
     width: 6,

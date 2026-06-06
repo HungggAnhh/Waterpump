@@ -39,9 +39,9 @@ router.get('/', async (req, res) => {
          m.id, m.conversation_id, m.sender_id,
          u.name   AS sender_name,
          u.avatar AS sender_avatar,
-         m.message, m.type, m.file_url, m.created_at,
-         m.reply_to, m.edited, m.edited_at, m.recalled, m.recalled_by, m.recalled_at, m.forwarded,
-         m.deleted,
+         m.message, m.type, m.file_url, m.attachment_url, m.attachment_duration, m.attachment_mime_type, m.created_at,
+         m.reply_to, m.edited, m.edited_at, m.recalled, m.recalled_by, m.recalled_at, m.forwarded, m.client_message_id,
+         m.deleted, m.task_id,
          (SELECT EXISTS(SELECT 1 FROM deleted_messages WHERE message_id = m.id AND user_id = $2)) AS deleted_for_me
        FROM messages m
        JOIN users u ON m.sender_id = u.id
@@ -71,6 +71,10 @@ router.get('/', async (req, res) => {
       message:         msg.recalled ? "Tin nhắn đã được thu hồi" : msg.message,
       type:            msg.type,
       file_url:        msg.file_url,
+      attachment_url:  msg.attachment_url,
+      attachment_duration: msg.attachment_duration ? parseInt(msg.attachment_duration) : null,
+      attachment_mime_type: msg.attachment_mime_type,
+      client_message_id: msg.client_message_id,
       created_at:      new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       raw_time:        msg.created_at,
       reply_to:        msg.reply_to ? parseInt(msg.reply_to) : null,
@@ -81,7 +85,8 @@ router.get('/', async (req, res) => {
       recalled_at:     msg.recalled_at,
       forwarded:       !!msg.forwarded,
       deleted:         !!msg.deleted,
-      deleted_for_me:  !!msg.deleted_for_me
+      deleted_for_me:  !!msg.deleted_for_me,
+      task_id:         msg.task_id ? parseInt(msg.task_id) : null
     }));
 
     const messageIds = formatted.map(m => m.id);
@@ -133,11 +138,52 @@ router.get('/', async (req, res) => {
       });
     }
 
-    // Gắn reactions và reply_to_message vào từng tin nhắn
+    // Lấy thông tin nhiệm vụ (nếu có tin nhắn dạng task)
+    const taskIds = formatted.map(m => m.task_id).filter(Boolean);
+    let tasksMap = {};
+    if (taskIds.length > 0) {
+      const tasksRes = await query(
+        `SELECT t.*, u.name AS creator_name, u.avatar AS creator_avatar
+         FROM tasks t
+         LEFT JOIN users u ON t.created_by = u.id
+         WHERE t.id = ANY($1)`,
+        [taskIds]
+      );
+      
+      const assigneesRes = await query(
+        `SELECT ta.task_id, ta.user_id, ta.status, ta.started_at, ta.completed_at, u.name, u.avatar, u.avatar AS avatar_url
+         FROM task_assignments ta
+         JOIN users u ON ta.user_id = u.id
+         WHERE ta.task_id = ANY($1)`,
+        [taskIds]
+      );
+
+      const assigneesMap = {};
+      assigneesRes.rows.forEach(row => {
+        if (!assigneesMap[row.task_id]) assigneesMap[row.task_id] = [];
+        assigneesMap[row.task_id].push({
+          user_id: row.user_id,
+          status: row.status,
+          started_at: row.started_at,
+          completed_at: row.completed_at,
+          name: row.name,
+          avatar: row.avatar,
+          avatar_url: row.avatar_url
+        });
+      });
+
+      tasksRes.rows.forEach(t => {
+        t.assignees = assigneesMap[t.id] || [];
+        tasksMap[t.id] = t;
+      });
+    }
+
+    // Gắn reactions, reply_to_message và task vào từng tin nhắn
     const finalData = formatted.map(msg => ({
       ...msg,
       reactions: reactionsMap[msg.id] || [],
-      reply_to_message: msg.reply_to ? parentMsgsMap[msg.reply_to] || null : null
+      reply_to_message: msg.reply_to ? parentMsgsMap[msg.reply_to] || null : null,
+      task: msg.task_id ? tasksMap[msg.task_id] || null : null
     }));
 
     return res.status(200).json({
@@ -154,7 +200,7 @@ router.get('/', async (req, res) => {
 
 // POST /api/messages — gửi tin nhắn qua HTTP (fallback, chủ yếu dùng Socket.IO)
 router.post('/', async (req, res) => {
-  const { conversation_id, sender_id, message, type = 'text', file_url = null, reply_to = null, forwarded = false } = req.body;
+  const { conversation_id, sender_id, message, type = 'text', file_url = null, reply_to = null, forwarded = false, attachment_url = null, attachment_duration = null, attachment_mime_type = null, client_message_id = null } = req.body;
 
   if (!conversation_id || !sender_id || !message) {
     return res.status(400).json({ status: 'error', message: 'Vui lòng cung cấp đầy đủ: conversation_id, sender_id và message.' });
@@ -162,11 +208,21 @@ router.post('/', async (req, res) => {
 
   try {
     const insertRes = await query(
-      'INSERT INTO messages (conversation_id, sender_id, message, type, file_url, reply_to, forwarded) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id',
-      [parseInt(conversation_id), parseInt(sender_id), message, type, file_url, reply_to ? parseInt(reply_to) : null, !!forwarded]
+      `INSERT INTO messages (conversation_id, sender_id, message, type, file_url, reply_to, forwarded, attachment_url, attachment_duration, attachment_mime_type, client_message_id) 
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) 
+       ON CONFLICT (client_message_id) 
+       DO NOTHING 
+       RETURNING id`,
+      [parseInt(conversation_id), parseInt(sender_id), message, type, file_url, reply_to ? parseInt(reply_to) : null, !!forwarded, attachment_url, attachment_duration ? parseInt(attachment_duration) : null, attachment_mime_type, client_message_id]
     );
 
-    const msgId = insertRes.rows[0].id;
+    let msgId;
+    if (insertRes.rows.length > 0) {
+      msgId = insertRes.rows[0].id;
+    } else {
+      const existingRes = await query('SELECT id FROM messages WHERE client_message_id = $1 LIMIT 1', [client_message_id]);
+      msgId = existingRes.rows[0]?.id;
+    }
 
     // Auto-restore logic for direct conversation
     const convCheck = await query(
@@ -269,12 +325,19 @@ router.post('/', async (req, res) => {
           if (tokensRes.rows.length > 0) {
             const { sendPWAPushNotification } = require('../config/firebaseAdmin');
             
-            const title = `💬 Tin nhắn mới từ ${senderName}`;
-            let body = message;
+            let formattedDuration = '';
+            if (type === 'voice' && attachment_duration) {
+              const m = Math.floor(parseInt(attachment_duration) / 60);
+              const s = parseInt(attachment_duration) % 60;
+              formattedDuration = ` (${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')})`;
+            }
+
+            const title = type === 'voice' ? '🎤 Tin nhắn thoại mới' : `💬 Tin nhắn mới từ ${senderName}`;
+            let body = type === 'voice' ? `${senderName} đã gửi tin nhắn thoại${formattedDuration}` : message;
             if (type === 'image') body = '📷 [Hình ảnh]';
             else if (type === 'file') body = '📁 [Tệp tin]';
             
-            if (body.length > 100) {
+            if (type !== 'voice' && body.length > 100) {
               body = body.substring(0, 100) + '...';
             }
 
@@ -302,6 +365,10 @@ router.post('/', async (req, res) => {
         message,
         type,
         file_url,
+        attachment_url,
+        attachment_duration: attachment_duration ? parseInt(attachment_duration) : null,
+        attachment_mime_type,
+        client_message_id,
         created_at:      new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         raw_time:        new Date().toISOString(),
         reply_to:        reply_to ? parseInt(reply_to) : null,

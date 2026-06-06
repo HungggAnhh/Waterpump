@@ -2,16 +2,20 @@
 import React from 'react';
 import { StyleSheet, Text, View, Image, TouchableOpacity, Platform, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import VoiceMessage from './VoiceMessage';
 
 export interface Message {
-  id: number;
+  id: number | string; // support string client-side optimistic IDs
   conversation_id: number;
   sender_id: number;
   sender_name: string;
   sender_avatar: string | null;
   message: string;
-  type: 'text' | 'image' | 'file' | 'call';
+  type: 'text' | 'image' | 'file' | 'call' | 'task' | 'system' | 'voice';
   file_url: string | null;
+  attachment_url?: string | null;
+  attachment_duration?: number | null;
+  attachment_mime_type?: string | null;
   created_at: string;
   raw_time?: string;
   reply_to?: number | null;
@@ -19,7 +23,7 @@ export interface Message {
     id: number;
     sender_name: string;
     message: string;
-    type: 'text' | 'image' | 'file' | 'call';
+    type: 'text' | 'image' | 'file' | 'call' | 'task' | 'system' | 'voice';
     file_url: string | null;
     recalled?: boolean;
   } | null;
@@ -36,6 +40,27 @@ export interface Message {
     user_name: string;
     reaction: string;
   }>;
+  task_id?: number | null;
+  task?: {
+    id: number;
+    title: string;
+    description: string | null;
+    status: string;
+    priority: string;
+    deadline: string | null;
+    completed: boolean;
+    assignees?: Array<{
+      user_id: number;
+      name: string;
+      avatar: string | null;
+      status: string;
+      started_at?: string | null;
+      completed_at?: string | null;
+    }>;
+  } | null;
+  status?: 'pending' | 'uploading' | 'sent' | 'failed';
+  uploadProgress?: number;
+  client_message_id?: string;
 }
 
 interface MessageItemProps {
@@ -55,6 +80,10 @@ interface MessageItemProps {
     name: string;
     avatar?: string | null;
   }>;
+  currentUserId?: number;
+  onUpdateTaskStatus?: (taskId: number, status: string) => void;
+  onResendVoice?: (clientMessageId: string) => void;
+  onDeleteVoice?: (clientMessageId: string) => void;
 }
 
 const renderMessageText = (text: string, isMine: boolean, colors: any, isMentioned: boolean, isHighlighted: boolean) => {
@@ -106,8 +135,24 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
   currentUserName,
   isHighlighted = false,
   onRecallPress,
-  readBy
+  readBy,
+  currentUserId,
+  onUpdateTaskStatus,
+  onResendVoice,
+  onDeleteVoice
 }) => {
+  if (item.type === 'system') {
+    return (
+      <View style={styles.systemMessageWrapper}>
+        <View style={[styles.systemMessageContainer, { backgroundColor: colors.border + '35' }]}>
+          <Text style={[styles.systemMessageText, { color: colors.textSecondary }]}>
+            {item.message}
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
   const isMentioned = !!(!isMine && item.message && item.message.includes(`@${currentUserName}`));
   const [isHovered, setIsHovered] = React.useState(false);
 
@@ -283,6 +328,171 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
               </View>
             )}
           </TouchableOpacity>
+        ) : item.type === 'task' && item.task ? (
+          /* Task Message Card */
+          <TouchableOpacity
+            activeOpacity={0.9}
+            onLongPress={(event) => onLongPress && onLongPress(item, event)}
+            style={[
+              styles.taskCard,
+              { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1 },
+              isHighlighted && { borderColor: '#f59e0b', borderWidth: 2 }
+            ]}
+          >
+            {/* Header: Title & Priority */}
+            <View style={styles.taskCardHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+                <Ionicons name="clipboard-outline" size={18} color={colors.tint} />
+                <Text style={[styles.taskCardTitle, { color: colors.text }]} numberOfLines={2}>
+                  {item.task.title}
+                </Text>
+              </View>
+              <View 
+                style={[
+                  styles.priorityBadge, 
+                  item.task.priority === 'high' 
+                    ? { backgroundColor: 'rgba(239, 68, 68, 0.12)' } 
+                    : item.task.priority === 'medium' 
+                      ? { backgroundColor: 'rgba(245, 158, 11, 0.12)' } 
+                      : { backgroundColor: 'rgba(16, 185, 129, 0.12)' }
+                ]}
+              >
+                <Text 
+                  style={{ 
+                    fontSize: 10.5, 
+                    fontWeight: '700',
+                    color: item.task.priority === 'high' 
+                      ? '#ef4444' 
+                      : item.task.priority === 'medium' 
+                        ? '#d97706' 
+                        : '#10b981' 
+                  }}
+                >
+                  {item.task.priority === 'high' ? 'Cao' : item.task.priority === 'medium' ? 'Trung bình' : 'Thấp'}
+                </Text>
+              </View>
+            </View>
+
+            {/* Description */}
+            {item.task.description && (
+              <Text style={[styles.taskCardDesc, { color: colors.textSecondary }]}>
+                {item.task.description}
+              </Text>
+            )}
+
+            {/* Deadline */}
+            {item.task.deadline && (
+              <View style={styles.taskCardMetaRow}>
+                <Ionicons name="calendar-outline" size={14} color={colors.textSecondary} />
+                <Text style={[styles.taskCardMetaText, { color: colors.textSecondary }]}>
+                  Hạn chót: {new Date(item.task.deadline).toLocaleDateString('vi-VN')}
+                </Text>
+              </View>
+            )}
+
+            {/* Summary Progress */}
+            {(() => {
+              const assignees = item.task.assignees || [];
+              if (assignees.length === 0) return null;
+              const total = assignees.length;
+              const completedCount = assignees.filter((a: any) => a.status === 'completed').length;
+              return (
+                <View style={styles.progressSummaryContainer}>
+                  <Text style={[styles.progressSummaryText, { color: colors.text }]}>
+                    Tiến độ: {completedCount}/{total} hoàn thành
+                  </Text>
+                  <View style={[styles.progressBarBg, { backgroundColor: colors.border }]}>
+                    <View 
+                      style={[
+                        styles.progressBarFill, 
+                        { 
+                          backgroundColor: completedCount === total ? '#10b981' : colors.tint,
+                          width: `${(completedCount / total) * 100}%` 
+                        }
+                      ]} 
+                    />
+                  </View>
+                </View>
+              );
+            })()}
+
+            {/* Divider */}
+            <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
+            {/* Assignees List Board */}
+            <View style={styles.assigneesBoard}>
+              {item.task.assignees && item.task.assignees.map((assignee: any) => {
+                const isCompleted = assignee.status === 'completed';
+                const isInProgress = assignee.status === 'in_progress';
+                return (
+                  <View key={assignee.user_id} style={styles.assigneeRow}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+                      {assignee.avatar ? (
+                        <Image source={{ uri: assignee.avatar }} style={styles.assigneeAvatar} />
+                      ) : (
+                        <View style={[styles.assigneeAvatarFallback, { backgroundColor: colors.border }]}>
+                          <Text style={{ fontSize: 9, color: colors.text, fontWeight: '700' }}>
+                            {assignee.name ? assignee.name.charAt(0).toUpperCase() : '?'}
+                          </Text>
+                        </View>
+                      )}
+                      <Text style={[styles.assigneeNameText, { color: colors.text }]} numberOfLines={1}>
+                        {assignee.name} {assignee.user_id === currentUserId ? '(Tôi)' : ''}
+                      </Text>
+                    </View>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                      <Text 
+                        style={{ 
+                          fontSize: 12, 
+                          color: isCompleted ? '#10b981' : isInProgress ? '#3b82f6' : '#6b7280',
+                          fontWeight: '600'
+                        }}
+                      >
+                        {isCompleted ? 'Hoàn thành' : isInProgress ? 'Đang làm' : 'Chưa bắt đầu'}
+                      </Text>
+                      <Text style={{ fontSize: 13 }}>
+                        {isCompleted ? '✅' : isInProgress ? '🔄' : '⏳'}
+                      </Text>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+
+            {/* Quick Action Button for current user */}
+            {(() => {
+              const assignees = item.task.assignees || [];
+              const myAssignment = assignees.find((a: any) => a.user_id === currentUserId);
+              if (!myAssignment) return null;
+
+              let buttonText = 'Bắt đầu làm';
+              let buttonColor = colors.tint;
+              let nextStatus = 'in_progress';
+              let iconName = 'play-circle-outline';
+
+              if (myAssignment.status === 'in_progress') {
+                buttonText = 'Hoàn thành';
+                buttonColor = '#10b981';
+                nextStatus = 'completed';
+                iconName = 'checkmark-circle-outline';
+              } else if (myAssignment.status === 'completed') {
+                buttonText = 'Làm lại';
+                buttonColor = '#6b7280';
+                nextStatus = 'todo';
+                iconName = 'refresh-outline';
+              }
+
+              return (
+                <TouchableOpacity
+                  style={[styles.taskQuickActionBtn, { backgroundColor: buttonColor }]}
+                  onPress={() => onUpdateTaskStatus && onUpdateTaskStatus(item.task!.id, nextStatus)}
+                >
+                  <Ionicons name={iconName as any} size={15} color="#fff" />
+                  <Text style={styles.taskQuickActionBtnText}>{buttonText}</Text>
+                </TouchableOpacity>
+              );
+            })()}
+          </TouchableOpacity>
         ) : (
           /* Text/File message bubble */
           <TouchableOpacity
@@ -318,6 +528,15 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                   </Text>
                 </View>
               </View>
+            ) : item.type === 'voice' && item.attachment_url ? (
+              <VoiceMessage
+                messageId={item.id}
+                attachmentUrl={item.attachment_url}
+                duration={item.attachment_duration || 0}
+                currentUserId={currentUserId}
+                isMine={isMine}
+                colors={colors}
+              />
             ) : item.type === 'file' && item.file_url ? (
               <View style={styles.videoAttachmentCard}>
                 <Ionicons name="play-circle-outline" size={32} color={(isMine && !isHighlighted) ? '#fff' : colors.tint} />
@@ -361,12 +580,58 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
         )}
 
         <View style={styles.messageMeta}>
-          <Text style={styles.messageTime}>
-            {formatMessageTime(item.created_at)}
-            {item.edited && !item.recalled && <Text style={styles.editedText}> (đã chỉnh sửa)</Text>}
-          </Text>
-          {isMine && (
-            <Ionicons name="checkmark-done" size={14} color={colors.tint} style={{ marginLeft: 4 }} />
+          {item.type === 'voice' && item.status && item.status !== 'sent' ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              {item.status === 'uploading' && (
+                <Text style={[styles.messageTime, { color: colors.textSecondary }]}>
+                  ⏳ Đang tải lên... {item.uploadProgress || 0}%
+                </Text>
+              )}
+              {item.status === 'pending' && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                  <Text style={[styles.messageTime, { color: '#f59e0b' }]}>
+                    ⏳ Đang chờ gửi
+                  </Text>
+                  {onResendVoice && item.client_message_id && (
+                    <TouchableOpacity onPress={() => onResendVoice(item.client_message_id!)}>
+                      <Text style={{ fontSize: 10, color: colors.tint, fontWeight: '700' }}>Gửi lại</Text>
+                    </TouchableOpacity>
+                  )}
+                  {onDeleteVoice && item.client_message_id && (
+                    <TouchableOpacity onPress={() => onDeleteVoice(item.client_message_id!)}>
+                      <Text style={{ fontSize: 10, color: '#ef4444', fontWeight: '700', marginLeft: 4 }}>Xóa</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
+              {item.status === 'failed' && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                  <Text style={[styles.messageTime, { color: '#ef4444' }]}>
+                    ❌ Lỗi tải lên
+                  </Text>
+                  {onResendVoice && item.client_message_id && (
+                    <TouchableOpacity onPress={() => onResendVoice(item.client_message_id!)}>
+                      <Text style={{ fontSize: 10, color: colors.tint, fontWeight: '700' }}>Thử lại</Text>
+                    </TouchableOpacity>
+                  )}
+                  {onDeleteVoice && item.client_message_id && (
+                    <TouchableOpacity onPress={() => onDeleteVoice(item.client_message_id!)}>
+                      <Text style={{ fontSize: 10, color: '#ef4444', fontWeight: '700', marginLeft: 4 }}>Xóa</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
+            </View>
+          ) : (
+            <>
+              <Text style={styles.messageTime}>
+                {formatMessageTime(item.created_at)}
+                {item.edited && !item.recalled && <Text style={styles.editedText}> (đã chỉnh sửa)</Text>}
+              </Text>
+              {isMine && !item.status && (
+                <Ionicons name="checkmark-done" size={14} color={colors.tint} style={{ marginLeft: 4 }} />
+              )}
+            </>
           )}
         </View>
 
@@ -374,33 +639,9 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
         {readBy && readBy.length > 0 && (
           <View style={[styles.readReceiptsContainer, isMine ? styles.myReadReceipts : styles.otherReadReceipts]}>
             <Ionicons name="checkmark-done" size={11} color={colors.textSecondary || '#727785'} style={{ marginRight: 4 }} />
-            {readBy.length === 1 ? (
-              <Text style={[styles.readReceiptText, { color: colors.textSecondary || '#727785' }]}>
-                {readBy[0].name} đã xem
-              </Text>
-            ) : readBy.length === 2 ? (
-              <Text style={[styles.readReceiptText, { color: colors.textSecondary || '#727785' }]}>
-                {readBy[0].name}, {readBy[1].name} đã xem
-              </Text>
-            ) : readBy.length === 3 ? (
-              <Text style={[styles.readReceiptText, { color: colors.textSecondary || '#727785' }]}>
-                {readBy[0].name}, {readBy[1].name}, {readBy[2].name} đã xem
-              </Text>
-            ) : (
-              <Text style={[styles.readReceiptText, { color: colors.textSecondary || '#727785' }]}>
-                {readBy[0].name}, {readBy[1].name}, {readBy[2].name} và{' '}
-                <Text
-                  style={{ color: colors.tint, fontWeight: '700', textDecorationLine: 'underline' }}
-                  onPress={() => {
-                    const names = readBy.map(m => m.name);
-                    Alert.alert('Danh sách người đã xem', names.join('\n'), [{ text: 'Đóng', style: 'cancel' }]);
-                  }}
-                >
-                  +{readBy.length - 3} người khác
-                </Text>{' '}
-                đã xem
-              </Text>
-            )}
+            <Text style={[styles.readReceiptText, { color: colors.textSecondary || '#727785' }]}>
+              {readBy.map(m => m.name).join(', ')} đã xem
+            </Text>
           </View>
         )}
       </View>
@@ -628,5 +869,133 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(160, 174, 192, 0.15)',
     justifyContent: 'center',
     alignItems: 'center',
-  }
+  },
+  systemMessageWrapper: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+  },
+  systemMessageContainer: {
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 14,
+    maxWidth: '85%',
+  },
+  systemMessageText: {
+    fontSize: 12,
+    textAlign: 'center',
+    fontWeight: '600',
+    lineHeight: 16,
+  },
+  taskCard: {
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 4,
+    width: 280,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  taskCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+    gap: 8,
+  },
+  taskCardTitle: {
+    fontSize: 14.5,
+    fontWeight: '700',
+  },
+  priorityBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  priorityText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  taskCardDesc: {
+    fontSize: 12.5,
+    marginBottom: 8,
+    lineHeight: 16,
+  },
+  taskCardMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 8,
+  },
+  taskCardMetaText: {
+    fontSize: 12,
+  },
+  progressSummaryContainer: {
+    marginBottom: 10,
+  },
+  progressSummaryText: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  progressBarBg: {
+    height: 6,
+    borderRadius: 3,
+    width: '100%',
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    borderRadius: 3,
+  },
+  divider: {
+    height: 1,
+    width: '100%',
+    marginBottom: 8,
+  },
+  assigneesBoard: {
+    gap: 6,
+    marginBottom: 10,
+  },
+  assigneeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+  },
+  assigneeAvatar: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+  },
+  assigneeAvatarFallback: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  assigneeNameText: {
+    fontSize: 13,
+    fontWeight: '500',
+    flex: 1,
+  },
+  taskQuickActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 6,
+    marginTop: 4,
+  },
+  taskQuickActionBtnText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
+  },
 });
