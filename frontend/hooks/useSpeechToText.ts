@@ -4,9 +4,10 @@ import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
 export interface UseSpeechToTextProps {
   onTranscript: (transcript: string) => void;
   onError?: (errorMessage: string) => void;
+  onStart?: () => void;
 }
 
-export function useSpeechToText({ onTranscript, onError }: UseSpeechToTextProps) {
+export function useSpeechToText({ onTranscript, onError, onStart }: UseSpeechToTextProps) {
   const [isListening, setIsListening] = useState(false);
   const [isSupported, setIsSupported] = useState(true);
   const [isStarting, setIsStarting] = useState(false);
@@ -14,6 +15,8 @@ export function useSpeechToText({ onTranscript, onError }: UseSpeechToTextProps)
   const silenceTimeoutRef = useRef<any>(null);
   const onTranscriptRef = useRef(onTranscript);
   const onErrorRef = useRef(onError);
+  const onStartRef = useRef(onStart);
+  const browserRecognitionRef = useRef<any>(null);
 
   // Keep references fresh to avoid re-binding listeners
   useEffect(() => {
@@ -24,11 +27,20 @@ export function useSpeechToText({ onTranscript, onError }: UseSpeechToTextProps)
     onErrorRef.current = onError;
   }, [onError]);
 
+  useEffect(() => {
+    onStartRef.current = onStart;
+  }, [onStart]);
+
   // Check speech recognition compatibility on mount
   useEffect(() => {
     try {
-      const available = ExpoSpeechRecognitionModule.isRecognitionAvailable();
-      setIsSupported(!!available);
+      const isExpoSupported = !!(
+        ExpoSpeechRecognitionModule &&
+        typeof ExpoSpeechRecognitionModule.isRecognitionAvailable === 'function' &&
+        ExpoSpeechRecognitionModule.isRecognitionAvailable()
+      );
+      const isBrowserSupported = typeof window !== 'undefined' && !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
+      setIsSupported(isExpoSupported || isBrowserSupported);
     } catch (e) {
       setIsSupported(false);
     }
@@ -41,7 +53,11 @@ export function useSpeechToText({ onTranscript, onError }: UseSpeechToTextProps)
     }
     silenceTimeoutRef.current = setTimeout(() => {
       try {
-        ExpoSpeechRecognitionModule.abort();
+        if (browserRecognitionRef.current) {
+          browserRecognitionRef.current.stop();
+        } else {
+          ExpoSpeechRecognitionModule.abort();
+        }
       } catch (err) {
         console.warn("Silence timeout: failed to abort", err);
       }
@@ -70,6 +86,9 @@ export function useSpeechToText({ onTranscript, onError }: UseSpeechToTextProps)
           setIsListening(true);
           setIsStarting(false);
           resetSilenceTimer();
+          if (onStartRef.current) {
+            onStartRef.current();
+          }
         })
       );
 
@@ -86,12 +105,11 @@ export function useSpeechToText({ onTranscript, onError }: UseSpeechToTextProps)
           // Reset silence timer on any speech result (interim or final)
           resetSilenceTimer();
 
-          const result = event.results?.[0];
-          if (result && result.isFinal) {
-            const finalTranscript = result.transcript;
-            if (finalTranscript && finalTranscript.trim()) {
+          if (event.results && Array.isArray(event.results)) {
+            const transcript = event.results.map((r: any) => r.transcript).join(' ');
+            if (transcript && transcript.trim()) {
               if (onTranscriptRef.current) {
-                onTranscriptRef.current(finalTranscript);
+                onTranscriptRef.current(transcript);
               }
             }
           }
@@ -132,6 +150,11 @@ export function useSpeechToText({ onTranscript, onError }: UseSpeechToTextProps)
       if (silenceTimeoutRef.current) {
         clearTimeout(silenceTimeoutRef.current);
       }
+      if (browserRecognitionRef.current) {
+        try {
+          browserRecognitionRef.current.stop();
+        } catch (e) {}
+      }
     };
   }, [resetSilenceTimer, clearSilenceTimer]);
 
@@ -144,12 +167,65 @@ export function useSpeechToText({ onTranscript, onError }: UseSpeechToTextProps)
     setIsStarting(true);
 
     try {
-      // 1. Check browser/system availability
-      const available = ExpoSpeechRecognitionModule.isRecognitionAvailable();
-      if (!available) {
+      const isExpoSupported = ExpoSpeechRecognitionModule && typeof ExpoSpeechRecognitionModule.isRecognitionAvailable === 'function' && ExpoSpeechRecognitionModule.isRecognitionAvailable();
+      const isBrowserSupported = typeof window !== 'undefined' && !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
+
+      if (!isExpoSupported && isBrowserSupported) {
+        console.log('[STT] Falling back to Web Speech API...');
+        const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        const recognition = new SpeechRecognition();
+        recognition.lang = 'vi-VN';
+        recognition.interimResults = true;
+        recognition.continuous = true;
+
+        recognition.onstart = () => {
+          setIsListening(true);
+          setIsStarting(false);
+          resetSilenceTimer();
+          if (onStartRef.current) {
+            onStartRef.current();
+          }
+        };
+
+        recognition.onend = () => {
+          setIsListening(false);
+          setIsStarting(false);
+          clearSilenceTimer();
+        };
+
+        recognition.onresult = (event: any) => {
+          resetSilenceTimer();
+          const results = event.results;
+          let transcript = '';
+          for (let i = 0; i < results.length; ++i) {
+            transcript += results[i][0].transcript;
+          }
+          if (transcript && transcript.trim()) {
+            if (onTranscriptRef.current) {
+              onTranscriptRef.current(transcript);
+            }
+          }
+        };
+
+        recognition.onerror = (event: any) => {
+          console.error('[STT] Browser SpeechRecognition error:', event.error);
+          setIsListening(false);
+          setIsStarting(false);
+          clearSilenceTimer();
+          if (onErrorRef.current) {
+            onErrorRef.current("Lỗi nhận diện giọng nói: " + event.error);
+          }
+        };
+
+        browserRecognitionRef.current = recognition;
+        recognition.start();
+        return;
+      }
+
+      if (!isExpoSupported) {
         setIsStarting(false);
         if (onErrorRef.current) {
-          onErrorRef.current("Trình duyệt hiện tại không hỗ trợ nhận diện giọng nói.");
+          onErrorRef.current("Trình duyệt hoặc thiết bị này không hỗ trợ nhận diện giọng nói.");
         }
         return;
       }
@@ -177,17 +253,28 @@ export function useSpeechToText({ onTranscript, onError }: UseSpeechToTextProps)
         onErrorRef.current("Không thể khởi động nhận diện giọng nói. Vui lòng thử lại.");
       }
     }
-  }, [isListening, isStarting]);
+  }, [isListening, isStarting, resetSilenceTimer, clearSilenceTimer]);
 
   const stopListening = useCallback(async () => {
-    try {
-      await ExpoSpeechRecognitionModule.stop();
-    } catch (err) {
-      // Ignore stop errors
-    }
     setIsListening(false);
     setIsStarting(false);
     clearSilenceTimer();
+
+    if (browserRecognitionRef.current) {
+      try {
+        browserRecognitionRef.current.stop();
+      } catch (err) {}
+      browserRecognitionRef.current = null;
+    } else {
+      try {
+        const isExpoSupported = ExpoSpeechRecognitionModule && typeof ExpoSpeechRecognitionModule.isRecognitionAvailable === 'function' && ExpoSpeechRecognitionModule.isRecognitionAvailable();
+        if (isExpoSupported) {
+          await ExpoSpeechRecognitionModule.stop();
+        }
+      } catch (err) {
+        // Ignore stop errors
+      }
+    }
   }, [clearSilenceTimer]);
 
   return {
@@ -198,3 +285,4 @@ export function useSpeechToText({ onTranscript, onError }: UseSpeechToTextProps)
     stopListening,
   };
 }
+export default useSpeechToText;

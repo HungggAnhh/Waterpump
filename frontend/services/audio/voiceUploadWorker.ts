@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
 import { API_BASE_URL } from '../../constants/Config';
 
@@ -178,36 +178,67 @@ class VoiceUploadWorker {
 
       const signedUrl = signResult.signedUrl;
 
-      // 2. Load audio blob
-      const audioResponse = await fetch(item.localUri);
-      const audioBlob = await audioResponse.blob();
+      let uploadStatus = 0;
 
-      // 3. PUT binary directly to Supabase Storage
-      const xhr = new XMLHttpRequest();
-      xhr.open('PUT', signedUrl, true);
-      xhr.setRequestHeader('Content-Type', audioBlob.type || `audio/${ext}`);
+      if (Platform.OS === 'web') {
+        // 2. Load audio blob
+        const audioResponse = await fetch(item.localUri);
+        const audioBlob = await audioResponse.blob();
 
-      xhr.upload.onprogress = (event) => {
-        if (event.lengthComputable) {
-          const percent = Math.round((event.loaded / event.total) * 100);
-          this.updateItemProgress(item.client_message_id, percent);
+        // 3. PUT binary directly to Supabase Storage
+        const xhr = new XMLHttpRequest();
+        xhr.open('PUT', signedUrl, true);
+        xhr.setRequestHeader('Content-Type', audioBlob.type || `audio/${ext}`);
+
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) {
+            const percent = Math.round((event.loaded / event.total) * 100);
+            this.updateItemProgress(item.client_message_id, percent);
+          }
+        };
+
+        const uploadPromise = new Promise<{ status: number; text: string }>((resolve, reject) => {
+          xhr.onload = () => {
+            resolve({ status: xhr.status, text: xhr.responseText });
+          };
+          xhr.onerror = () => {
+            reject(new Error('Lỗi kết nối mạng khi upload.'));
+          };
+        });
+
+        xhr.send(audioBlob);
+        const uploadRes = await uploadPromise;
+        uploadStatus = uploadRes.status;
+      } else {
+        // On native platforms (iOS/Android), use FileSystem.createUploadTask
+        // which does not suffer from fetch local file failures
+        console.log(`[UploadWorker] Starting native binary upload via Expo FileSystem...`);
+        const uploadTask = FileSystem.createUploadTask(
+          signedUrl,
+          item.localUri,
+          {
+            headers: {
+              'Content-Type': `audio/${ext}`,
+            },
+            httpMethod: 'PUT',
+            uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+          },
+          (data) => {
+            const percent = Math.round((data.totalBytesSent / data.totalBytesExpectedToSend) * 100);
+            this.updateItemProgress(item.client_message_id, percent);
+          }
+        );
+
+        const uploadRes = await uploadTask.uploadAsync();
+        if (!uploadRes) {
+          throw new Error('Native upload returned empty response.');
         }
-      };
+        uploadStatus = uploadRes.status;
+        console.log(`[UploadWorker] Native upload completed with status: ${uploadStatus}`);
+      }
 
-      const uploadPromise = new Promise<{ status: number; text: string }>((resolve, reject) => {
-        xhr.onload = () => {
-          resolve({ status: xhr.status, text: xhr.responseText });
-        };
-        xhr.onerror = () => {
-          reject(new Error('Lỗi kết nối mạng khi upload.'));
-        };
-      });
-
-      xhr.send(audioBlob);
-      const uploadRes = await uploadPromise;
-
-      if (uploadRes.status < 200 || uploadRes.status >= 300) {
-        throw new Error('Upload HTTP error code: ' + uploadRes.status);
+      if (uploadStatus < 200 || uploadStatus >= 300) {
+        throw new Error('Upload HTTP error code: ' + uploadStatus);
       }
 
       // 4. Construct attachment private URL

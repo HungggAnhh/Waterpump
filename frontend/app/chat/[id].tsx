@@ -90,14 +90,29 @@ export default function ChatRoomScreen() {
 
   // Zalo style voice states
   const [showVoiceSheet, setShowVoiceSheet] = useState(false);
+  const sttBaseTextRef = useRef<string | null>(null);
+
+  const handleSttStart = () => {
+    sttBaseTextRef.current = inputMessage;
+    console.log('[STT] Session started. Captured base text:', sttBaseTextRef.current);
+  };
 
   const handleTranscript = (transcript: string) => {
-    setInputMessage(prev => {
-      const existing = prev ? prev.trim() : '';
-      const speech = transcript ? transcript.trim() : '';
-      return existing ? `${existing} ${speech}` : speech;
-    });
+    if (sttBaseTextRef.current === null) {
+      sttBaseTextRef.current = inputMessage;
+    }
+    const base = sttBaseTextRef.current;
+    const speech = transcript ? transcript.trim() : '';
+    const newValue = base ? `${base.trim()} ${speech}` : speech;
+    setInputMessage(newValue);
   };
+
+  // Reset STT base text when sheet closes
+  useEffect(() => {
+    if (!showVoiceSheet) {
+      sttBaseTextRef.current = null;
+    }
+  }, [showVoiceSheet]);
 
   // Auto clean up old voice caches when screen mounts
   useEffect(() => {
@@ -1784,6 +1799,7 @@ export default function ChatRoomScreen() {
         onClose={() => setShowVoiceSheet(false)}
         onVoiceRecorded={handleVoiceRecordingComplete}
         onTranscript={handleTranscript}
+        onSttStart={handleSttStart}
         colors={{
           tint: colors.tint,
           card: colors.card,

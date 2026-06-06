@@ -23,6 +23,7 @@ interface VoiceActionSheetProps {
   onClose: () => void;
   onVoiceRecorded: (uri: string, duration: number) => void;
   onTranscript: (transcript: string) => void;
+  onSttStart?: () => void;
   colors: {
     tint: string;
     card: string;
@@ -64,6 +65,7 @@ export default function VoiceActionSheet({
   onClose,
   onVoiceRecorded,
   onTranscript,
+  onSttStart,
   colors,
 }: VoiceActionSheetProps) {
   const [activeTab, setActiveTab] = useState<'voice' | 'stt'>('voice');
@@ -93,15 +95,42 @@ export default function VoiceActionSheet({
     startListening: startStt,
     stopListening: stopStt,
   } = useSpeechToText({
+    onStart: () => {
+      console.log('[STT] Speech Recognition session started.');
+      if (onSttStart) {
+        onSttStart();
+      }
+    },
     onTranscript: (text) => {
+      console.log('[STT] Transcript received:', text);
       if (text && text.trim()) {
         onTranscript(text);
       }
     },
     onError: (err) => {
+      console.error('[STT] Error event:', err);
       Alert.alert('Thông báo', err);
     },
   });
+
+  // State refs to completely solve PanResponder stale closure bugs
+  const stateRef = useRef({
+    activeTab,
+    isHandsFree,
+    swipeCancel,
+    duration,
+    isRecording,
+  });
+
+  useEffect(() => {
+    stateRef.current = {
+      activeTab,
+      isHandsFree,
+      swipeCancel,
+      duration,
+      isRecording,
+    };
+  }, [activeTab, isHandsFree, swipeCancel, duration, isRecording]);
 
   const triggerHaptic = async () => {
     try {
@@ -114,6 +143,7 @@ export default function VoiceActionSheet({
   // Reset tab and states when modal opens
   useEffect(() => {
     if (visible) {
+      console.log('[VoicePanel] Panel opened. Resetting states.');
       setActiveTab('voice');
       setIsHandsFree(false);
       setSwipeCancel(false);
@@ -131,7 +161,7 @@ export default function VoiceActionSheet({
         }),
       ]).start();
     } else {
-      // Cleanup recordings/listeners on close
+      console.log('[VoicePanel] Panel closed. Stopping active recording/listening sessions.');
       if (isRecording) {
         cancelRecording();
       }
@@ -206,30 +236,39 @@ export default function VoiceActionSheet({
     setSwipeCancel(false);
     setIsHandsFree(false);
     triggerHaptic();
-    console.log('[Analytics] voice_record_started');
+    console.log('[VoiceRecorder] Starting recording session...');
     try {
       await startRecording();
     } catch (err) {
-      console.error('Error starting voice recording:', err);
+      console.error('[VoiceRecorder] Failed to start recording:', err);
     }
   };
 
   const handleReleaseRecord = async () => {
-    if (swipeCancel) {
-      console.log('[Analytics] voice_record_cancelled (user swiped left)');
+    const currentSwipeCancel = stateRef.current.swipeCancel;
+    if (currentSwipeCancel) {
+      console.log('[VoiceRecorder] Recording cancelled by user swipe gesture.');
       triggerHaptic();
       await cancelRecording();
     } else {
+      console.log('[VoiceRecorder] Stopping recording and fetching URI...');
       const { uri, duration: finalDuration } = await stopRecording();
+      const actualDuration = finalDuration > 0 ? finalDuration : stateRef.current.duration;
+      console.log('[VoiceRecorder] stopRecording result:', { uri, finalDuration, actualDuration });
+      
       if (uri) {
-        if (finalDuration < 1) {
-          console.log('[Analytics] voice_record_cancelled (duration < 1s)');
+        if (actualDuration < 1) {
+          console.warn('[VoiceRecorder] Recording duration too short (< 1s). Cancelling.');
           triggerHaptic();
           await cancelRecording();
         } else {
-          onVoiceRecorded(uri, finalDuration);
+          console.log('[VoiceRecorder] Valid recording completed. Triggering callback.', { uri, actualDuration });
+          onVoiceRecorded(uri, actualDuration);
           handleDismiss();
         }
+      } else {
+        console.error('[VoiceRecorder] stopRecording returned null URI');
+        Alert.alert('Lỗi', 'Không thể trích xuất file ghi âm.');
       }
     }
     setSwipeCancel(false);
@@ -237,7 +276,7 @@ export default function VoiceActionSheet({
   };
 
   const handleHandsFreeCancel = async () => {
-    console.log('[Analytics] voice_record_cancelled (Hands-Free Cancel clicked)');
+    console.log('[VoiceRecorder] Hands-Free recording cancelled.');
     triggerHaptic();
     await cancelRecording();
     setIsHandsFree(false);
@@ -246,20 +285,39 @@ export default function VoiceActionSheet({
   };
 
   const handleHandsFreeSend = async () => {
+    console.log('[VoiceRecorder] Hands-Free send triggered.');
     const { uri, duration: finalDuration } = await stopRecording();
+    const actualDuration = finalDuration > 0 ? finalDuration : stateRef.current.duration;
+    console.log('[VoiceRecorder] Hands-Free stopRecording result:', { uri, finalDuration, actualDuration });
+    
     if (uri) {
-      if (finalDuration < 1) {
-        console.log('[Analytics] voice_record_cancelled (duration < 1s)');
+      if (actualDuration < 1) {
+        console.warn('[VoiceRecorder] Hands-Free duration too short. Cancelling.');
         triggerHaptic();
         await cancelRecording();
       } else {
-        onVoiceRecorded(uri, finalDuration);
+        console.log('[VoiceRecorder] Hands-Free complete. Sending.');
+        onVoiceRecorded(uri, actualDuration);
       }
+    } else {
+      console.error('[VoiceRecorder] Hands-Free stopRecording returned null URI');
+      Alert.alert('Lỗi', 'Không thể trích xuất file ghi âm.');
     }
     setIsHandsFree(false);
     setSwipeCancel(false);
     handleDismiss();
   };
+
+  // Keep callback refs fresh for PanResponder to execute latest logic
+  const startRecordRef = useRef(handleStartRecord);
+  const releaseRecordRef = useRef(handleReleaseRecord);
+  const cancelRecordRef = useRef(cancelRecording);
+
+  useEffect(() => {
+    startRecordRef.current = handleStartRecord;
+    releaseRecordRef.current = handleReleaseRecord;
+    cancelRecordRef.current = cancelRecording;
+  });
 
   // PanResponder for Tab 1 circular button (Hold or Tap to Record)
   const panResponder = useRef(
@@ -267,12 +325,12 @@ export default function VoiceActionSheet({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: () => {
-        if (activeTab !== 'voice' || isHandsFree) return;
+        if (stateRef.current.activeTab !== 'voice' || stateRef.current.isHandsFree) return;
         pressStartRef.current = Date.now();
-        handleStartRecord();
+        startRecordRef.current();
       },
       onPanResponderMove: (_, gestureState) => {
-        if (activeTab !== 'voice' || isHandsFree) return;
+        if (stateRef.current.activeTab !== 'voice' || stateRef.current.isHandsFree) return;
         if (gestureState.dx < -60) {
           setSwipeCancel(true);
         } else {
@@ -280,18 +338,21 @@ export default function VoiceActionSheet({
         }
       },
       onPanResponderRelease: () => {
-        if (activeTab !== 'voice' || isHandsFree) return;
+        if (stateRef.current.activeTab !== 'voice' || stateRef.current.isHandsFree) return;
         const pressDuration = Date.now() - pressStartRef.current;
+        console.log('[VoiceRecorder] Button released. Press duration:', pressDuration, 'ms');
         if (pressDuration < 300) {
+          console.log('[VoiceRecorder] Quick press detected. Switching to Hands-Free mode.');
           setIsHandsFree(true);
         } else {
-          handleReleaseRecord();
+          releaseRecordRef.current();
         }
       },
       onPanResponderTerminate: () => {
-        cancelRecording();
-        setSwipeCancel(false);
+        console.log('[VoiceRecorder] PanResponder terminated.');
+        cancelRecordRef.current();
         setIsHandsFree(false);
+        setSwipeCancel(false);
       },
     })
   ).current;
@@ -299,14 +360,21 @@ export default function VoiceActionSheet({
   // Trigger for Tab 2 STT Press
   const handleSttPress = async () => {
     if (!isSttSupported) {
+      console.warn('[STT] Speech recognition not supported on this device.');
       Alert.alert('Thông báo', 'Thiết bị hiện tại không hỗ trợ chuyển giọng nói thành văn bản.');
       return;
     }
     triggerHaptic();
-    if (isSttListening) {
-      await stopStt();
-    } else {
-      await startStt();
+    try {
+      if (isSttListening) {
+        console.log('[STT] Stopping Speech Recognition session...');
+        await stopStt();
+      } else {
+        console.log('[STT] Starting Speech Recognition session...');
+        await startStt();
+      }
+    } catch (err) {
+      console.error('[STT] Error toggling STT:', err);
     }
   };
 
