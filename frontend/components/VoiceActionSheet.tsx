@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Modal,
   View,
@@ -9,15 +9,20 @@ import {
   Animated,
   Dimensions,
   Platform,
+  PanResponder,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
+import { useVoiceRecorder } from '../hooks/useVoiceRecorder';
+import { useSpeechToText } from '../hooks/useSpeechToText';
+import { voiceUploadWorker } from '../services/audio/voiceUploadWorker';
 
 interface VoiceActionSheetProps {
   visible: boolean;
   onClose: () => void;
-  onSelectVoiceMessage: () => void;
-  onSelectSpeechToText: () => void;
-  speechSupported: boolean;
+  onVoiceRecorded: (uri: string, duration: number) => void;
+  onTranscript: (transcript: string) => void;
   colors: {
     tint: string;
     card: string;
@@ -28,24 +33,94 @@ interface VoiceActionSheetProps {
   };
 }
 
-const { height: SCREEN_HEIGHT } = Dimensions.get('window');
+const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
+
+const Waveform = () => {
+  const [heights, setHeights] = useState([8, 12, 6, 15, 10, 14, 8, 5]);
+  
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setHeights(
+        Array.from({ length: 8 }, () => Math.floor(Math.random() * 16) + 4)
+      );
+    }, 120);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <View style={styles.waveformContainer}>
+      {heights.map((h, i) => (
+        <View
+          key={i}
+          style={[styles.waveformBar, { height: h }]}
+        />
+      ))}
+    </View>
+  );
+};
 
 export default function VoiceActionSheet({
   visible,
   onClose,
-  onSelectVoiceMessage,
-  onSelectSpeechToText,
-  speechSupported,
+  onVoiceRecorded,
+  onTranscript,
   colors,
 }: VoiceActionSheetProps) {
+  const [activeTab, setActiveTab] = useState<'voice' | 'stt'>('voice');
+  const [swipeCancel, setSwipeCancel] = useState(false);
+  const [isHandsFree, setIsHandsFree] = useState(false);
+  
+  const pressStartRef = useRef<number>(0);
   const slideAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
   const backdropAnim = useRef(new Animated.Value(0)).current;
+  const pulseScale = useRef(new Animated.Value(1)).current;
+  const pulseOpacity = useRef(new Animated.Value(0.4)).current;
 
+  // Voice Recorder Hook
+  const {
+    isRecording,
+    duration,
+    startRecording,
+    stopRecording,
+    cancelRecording,
+  } = useVoiceRecorder();
+
+  // Speech to Text Hook
+  const {
+    isListening: isSttListening,
+    isStarting: isSttStarting,
+    isSupported: isSttSupported,
+    startListening: startStt,
+    stopListening: stopStt,
+  } = useSpeechToText({
+    onTranscript: (text) => {
+      if (text && text.trim()) {
+        onTranscript(text);
+      }
+    },
+    onError: (err) => {
+      Alert.alert('Thông báo', err);
+    },
+  });
+
+  const triggerHaptic = async () => {
+    try {
+      if (Platform.OS !== 'web') {
+        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      }
+    } catch (e) {}
+  };
+
+  // Reset tab and states when modal opens
   useEffect(() => {
     if (visible) {
+      setActiveTab('voice');
+      setIsHandsFree(false);
+      setSwipeCancel(false);
+      
       Animated.parallel([
         Animated.timing(backdropAnim, {
-          toValue: 0.5,
+          toValue: 0.4,
           duration: 250,
           useNativeDriver: true,
         }),
@@ -56,24 +131,52 @@ export default function VoiceActionSheet({
         }),
       ]).start();
     } else {
-      Animated.parallel([
-        Animated.timing(backdropAnim, {
-          toValue: 0,
-          duration: 200,
-          useNativeDriver: true,
-        }),
-        Animated.timing(slideAnim, {
-          toValue: SCREEN_HEIGHT,
-          duration: 200,
-          useNativeDriver: true,
-        }),
-      ]).start();
+      // Cleanup recordings/listeners on close
+      if (isRecording) {
+        cancelRecording();
+      }
+      if (isSttListening) {
+        stopStt();
+      }
     }
   }, [visible]);
 
-  if (!visible) return null;
+  // Pulse animation loop
+  useEffect(() => {
+    let animation: Animated.CompositeAnimation | null = null;
+    if (isRecording || isSttListening) {
+      animation = Animated.loop(
+        Animated.parallel([
+          Animated.timing(pulseScale, {
+            toValue: 1.6,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseOpacity, {
+            toValue: 0,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+        ])
+      );
+      animation.start();
+    } else {
+      pulseScale.setValue(1);
+      pulseOpacity.setValue(0.4);
+    }
+
+    return () => {
+      if (animation) animation.stop();
+    };
+  }, [isRecording, isSttListening]);
 
   const handleDismiss = () => {
+    if (isRecording) {
+      cancelRecording();
+    }
+    if (isSttListening) {
+      stopStt();
+    }
     Animated.parallel([
       Animated.timing(backdropAnim, {
         toValue: 0,
@@ -90,39 +193,138 @@ export default function VoiceActionSheet({
     });
   };
 
-  const selectVoiceMessage = () => {
-    Animated.parallel([
-      Animated.timing(backdropAnim, {
-        toValue: 0,
-        duration: 150,
-        useNativeDriver: true,
-      }),
-      Animated.timing(slideAnim, {
-        toValue: SCREEN_HEIGHT,
-        duration: 150,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      onSelectVoiceMessage();
-    });
+  const handleStartRecord = async () => {
+    const pendingCount = voiceUploadWorker.getQueue().filter(q => q.status !== 'sent').length;
+    if (pendingCount >= 50) {
+      Alert.alert(
+        'Không thể ghi âm',
+        'Bạn đang có quá nhiều tin nhắn thoại chưa gửi. Vui lòng đợi hoặc xóa bớt tin nhắn chưa gửi.'
+      );
+      return;
+    }
+
+    setSwipeCancel(false);
+    setIsHandsFree(false);
+    triggerHaptic();
+    console.log('[Analytics] voice_record_started');
+    try {
+      await startRecording();
+    } catch (err) {
+      console.error('Error starting voice recording:', err);
+    }
   };
 
-  const selectSpeechToText = () => {
-    if (!speechSupported) return;
-    Animated.parallel([
-      Animated.timing(backdropAnim, {
-        toValue: 0,
-        duration: 150,
-        useNativeDriver: true,
-      }),
-      Animated.timing(slideAnim, {
-        toValue: SCREEN_HEIGHT,
-        duration: 150,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      onSelectSpeechToText();
-    });
+  const handleReleaseRecord = async () => {
+    if (swipeCancel) {
+      console.log('[Analytics] voice_record_cancelled (user swiped left)');
+      triggerHaptic();
+      await cancelRecording();
+    } else {
+      const { uri, duration: finalDuration } = await stopRecording();
+      if (uri) {
+        if (finalDuration < 1) {
+          console.log('[Analytics] voice_record_cancelled (duration < 1s)');
+          triggerHaptic();
+          await cancelRecording();
+        } else {
+          onVoiceRecorded(uri, finalDuration);
+          handleDismiss();
+        }
+      }
+    }
+    setSwipeCancel(false);
+    setIsHandsFree(false);
+  };
+
+  const handleHandsFreeCancel = async () => {
+    console.log('[Analytics] voice_record_cancelled (Hands-Free Cancel clicked)');
+    triggerHaptic();
+    await cancelRecording();
+    setIsHandsFree(false);
+    setSwipeCancel(false);
+    handleDismiss();
+  };
+
+  const handleHandsFreeSend = async () => {
+    const { uri, duration: finalDuration } = await stopRecording();
+    if (uri) {
+      if (finalDuration < 1) {
+        console.log('[Analytics] voice_record_cancelled (duration < 1s)');
+        triggerHaptic();
+        await cancelRecording();
+      } else {
+        onVoiceRecorded(uri, finalDuration);
+      }
+    }
+    setIsHandsFree(false);
+    setSwipeCancel(false);
+    handleDismiss();
+  };
+
+  // PanResponder for Tab 1 circular button (Hold or Tap to Record)
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        if (activeTab !== 'voice' || isHandsFree) return;
+        pressStartRef.current = Date.now();
+        handleStartRecord();
+      },
+      onPanResponderMove: (_, gestureState) => {
+        if (activeTab !== 'voice' || isHandsFree) return;
+        if (gestureState.dx < -60) {
+          setSwipeCancel(true);
+        } else {
+          setSwipeCancel(false);
+        }
+      },
+      onPanResponderRelease: () => {
+        if (activeTab !== 'voice' || isHandsFree) return;
+        const pressDuration = Date.now() - pressStartRef.current;
+        if (pressDuration < 300) {
+          setIsHandsFree(true);
+        } else {
+          handleReleaseRecord();
+        }
+      },
+      onPanResponderTerminate: () => {
+        cancelRecording();
+        setSwipeCancel(false);
+        setIsHandsFree(false);
+      },
+    })
+  ).current;
+
+  // Trigger for Tab 2 STT Press
+  const handleSttPress = async () => {
+    if (!isSttSupported) {
+      Alert.alert('Thông báo', 'Thiết bị hiện tại không hỗ trợ chuyển giọng nói thành văn bản.');
+      return;
+    }
+    triggerHaptic();
+    if (isSttListening) {
+      await stopStt();
+    } else {
+      await startStt();
+    }
+  };
+
+  const formatTime = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  const getTitle = () => {
+    if (isRecording) {
+      if (swipeCancel) return 'Buông tay để hủy ghi âm';
+      return 'Đang ghi âm...';
+    }
+    if (isSttListening) {
+      return '🎤 Đang nghe...';
+    }
+    return 'Bấm hoặc bấm giữ để ghi âm';
   };
 
   return (
@@ -134,14 +336,7 @@ export default function VoiceActionSheet({
     >
       <View style={styles.modalOverlay}>
         <TouchableWithoutFeedback onPress={handleDismiss}>
-          <Animated.View
-            style={[
-              styles.backdrop,
-              {
-                opacity: backdropAnim,
-              },
-            ]}
-          />
+          <Animated.View style={[styles.backdrop, { opacity: backdropAnim }]} />
         </TouchableWithoutFeedback>
 
         <Animated.View
@@ -154,81 +349,149 @@ export default function VoiceActionSheet({
             },
           ]}
         >
-          {/* Header */}
-          <View style={[styles.header, { borderBottomColor: colors.border }]}>
+          {/* Handle bar */}
+          <View style={styles.handleBar}>
             <View style={styles.handle} />
-            <Text style={[styles.title, { color: colors.text }]}>Bấm hoặc bấm giữ để ghi âm</Text>
-            <Text style={[styles.subtitle, { color: colors.textSecondary }]}>Chọn cách sử dụng giọng nói</Text>
           </View>
 
-          {/* Options */}
-          <View style={styles.optionsContainer}>
-            {/* Option 1: Voice Message */}
-            <TouchableOpacity
-              style={[styles.optionRow, { borderBottomColor: colors.border }]}
-              onPress={selectVoiceMessage}
-              activeOpacity={0.7}
-            >
-              <View style={[styles.iconContainer, { backgroundColor: colors.tint + '15' }]}>
-                <Ionicons name="mic" size={24} color={colors.tint} />
-              </View>
-              <View style={styles.optionTextContainer}>
-                <Text style={[styles.optionTitle, { color: colors.text }]}>🎤 Gửi bản ghi âm</Text>
-                <Text style={[styles.optionDescription, { color: colors.textSecondary }]}>
-                  Gửi file ghi âm như tin nhắn thoại
+          {/* Title Area */}
+          <Text style={[styles.title, { color: colors.text }]}>{getTitle()}</Text>
+
+          {/* Center Area: Animated elements and Microphone button */}
+          <View style={styles.centerContainer}>
+            {/* Waveform / Progress Info while Recording */}
+            {isRecording && (
+              <View style={styles.recordingStatusContainer}>
+                <Waveform />
+                <Text style={[styles.timerText, { color: colors.tint }]}>{formatTime(duration)}</Text>
+                <Text style={[styles.sizeText, { color: colors.textSecondary }]}>
+                  ({(duration * 0.016).toFixed(2)} MB)
                 </Text>
               </View>
-            </TouchableOpacity>
+            )}
 
-            {/* Option 2: Speech to Text */}
+            {/* Hold/Cancel Status text */}
+            {isRecording && !isHandsFree && (
+              <Text style={[styles.cancelHint, { color: swipeCancel ? '#ef4444' : colors.textSecondary }]}>
+                {swipeCancel ? '❌ Thả tay để hủy' : '← Vuốt trái để hủy'}
+              </Text>
+            )}
+
+            {/* Pulse Rings behind Microphone */}
+            {(isRecording || isSttListening) && (
+              <Animated.View
+                style={[
+                  styles.pulseRing,
+                  {
+                    borderColor: activeTab === 'stt' ? '#22c55e' : colors.tint,
+                    transform: [{ scale: pulseScale }],
+                    opacity: pulseOpacity,
+                  },
+                ]}
+              />
+            )}
+
+            {/* Main Interactive Button Layout */}
+            <View style={styles.micLayout}>
+              {/* Hands-Free: Cancel Button (Left) */}
+              {isRecording && isHandsFree && (
+                <TouchableOpacity
+                  style={[styles.actionBtn, styles.cancelBtn]}
+                  onPress={handleHandsFreeCancel}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="trash-outline" size={24} color="#ef4444" />
+                </TouchableOpacity>
+              )}
+
+              {/* Central Large Microphone Button */}
+              {activeTab === 'voice' ? (
+                <View {...panResponder.panHandlers}>
+                  <TouchableOpacity
+                    style={[styles.bigMicCircle, { backgroundColor: colors.tint }]}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="mic" size={42} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <TouchableOpacity
+                  style={[styles.bigMicCircle, { backgroundColor: isSttListening ? '#22c55e' : colors.tint }]}
+                  onPress={handleSttPress}
+                  activeOpacity={0.8}
+                >
+                  <View style={styles.sttBtnContent}>
+                    <Text style={styles.sttTextLabel}>[A]</Text>
+                    <Ionicons name="mic" size={32} color="#fff" style={{ marginTop: -2 }} />
+                  </View>
+                </TouchableOpacity>
+              )}
+
+              {/* Hands-Free: Send Button (Right) */}
+              {isRecording && isHandsFree && (
+                <TouchableOpacity
+                  style={[styles.actionBtn, { backgroundColor: colors.tint }]}
+                  onPress={handleHandsFreeSend}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="checkmark" size={24} color="#fff" />
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+
+          {/* Segmented control tabs */}
+          <View style={[styles.tabContainer, { backgroundColor: colors.background }]}>
             <TouchableOpacity
               style={[
-                styles.optionRow,
-                { borderBottomColor: colors.border },
-                !speechSupported && styles.disabledOption,
+                styles.tabButton,
+                activeTab === 'voice' && [
+                  styles.activeTabButton,
+                  { backgroundColor: colors.card },
+                ],
               ]}
-              onPress={selectSpeechToText}
-              disabled={!speechSupported}
-              activeOpacity={0.7}
+              onPress={() => {
+                if (isRecording || isSttListening) return; // Prevent tab switching while active
+                setActiveTab('voice');
+              }}
+              activeOpacity={0.8}
             >
-              <View
+              <Text
                 style={[
-                  styles.iconContainer,
-                  { backgroundColor: speechSupported ? '#22c55e15' : colors.border },
+                  styles.tabText,
+                  { color: activeTab === 'voice' ? colors.text : colors.textSecondary },
+                  activeTab === 'voice' && styles.activeTabText,
                 ]}
               >
-                <Ionicons
-                  name="document-text"
-                  size={24}
-                  color={speechSupported ? '#22c55e' : colors.textSecondary}
-                />
-              </View>
-              <View style={styles.optionTextContainer}>
-                <Text
-                  style={[
-                    styles.optionTitle,
-                    { color: speechSupported ? colors.text : colors.textSecondary },
-                  ]}
-                >
-                  📝 Gửi dạng văn bản
-                </Text>
-                <Text style={[styles.optionDescription, { color: colors.textSecondary }]}>
-                  {speechSupported
-                    ? 'Chuyển giọng nói thành văn bản'
-                    : 'Thiết bị hiện tại không hỗ trợ chuyển giọng nói thành văn bản.'}
-                </Text>
-              </View>
+                Gửi bản ghi âm
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.tabButton,
+                activeTab === 'stt' && [
+                  styles.activeTabButton,
+                  { backgroundColor: colors.card },
+                ],
+              ]}
+              onPress={() => {
+                if (isRecording || isSttListening) return; // Prevent tab switching while active
+                setActiveTab('stt');
+              }}
+              activeOpacity={0.8}
+            >
+              <Text
+                style={[
+                  styles.tabText,
+                  { color: activeTab === 'stt' ? colors.text : colors.textSecondary },
+                  activeTab === 'stt' && styles.activeTabText,
+                ]}
+              >
+                Gửi dạng văn bản
+              </Text>
             </TouchableOpacity>
           </View>
-
-          {/* Cancel Button */}
-          <TouchableOpacity
-            style={[styles.cancelButton, { backgroundColor: colors.background }]}
-            onPress={handleDismiss}
-            activeOpacity={0.8}
-          >
-            <Text style={[styles.cancelText, { color: colors.text }]}>Hủy</Text>
-          </TouchableOpacity>
         </Animated.View>
       </View>
     </Modal>
@@ -248,72 +511,152 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     borderTopWidth: 1,
-    paddingBottom: Platform.OS === 'ios' ? 34 : 20,
+    paddingBottom: Platform.OS === 'ios' ? 40 : 26,
     paddingHorizontal: 20,
-    maxHeight: SCREEN_HEIGHT * 0.7,
-  },
-  header: {
     alignItems: 'center',
-    paddingVertical: 14,
-    borderBottomWidth: 0.5,
+    height: 380,
+  },
+  handleBar: {
+    paddingVertical: 10,
+    width: '100%',
+    alignItems: 'center',
   },
   handle: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
+    width: 40,
+    height: 5,
+    borderRadius: 2.5,
     backgroundColor: '#cbd5e1',
-    marginBottom: 10,
   },
   title: {
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: '600',
     textAlign: 'center',
-    marginBottom: 4,
+    marginTop: 4,
+    marginBottom: 8,
   },
-  subtitle: {
-    fontSize: 13,
-    textAlign: 'center',
-  },
-  optionsContainer: {
-    paddingVertical: 10,
-  },
-  optionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 16,
-    borderBottomWidth: 0.5,
-  },
-  iconContainer: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
+  centerContainer: {
+    flex: 1,
+    width: '100%',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 16,
+    position: 'relative',
   },
-  optionTextContainer: {
-    flex: 1,
+  recordingStatusContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+    position: 'absolute',
+    top: 5,
   },
-  optionTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    marginBottom: 2,
+  waveformContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2.5,
+    paddingHorizontal: 8,
   },
-  optionDescription: {
+  waveformBar: {
+    width: 3,
+    borderRadius: 1.5,
+    backgroundColor: '#ef4444',
+  },
+  timerText: {
+    fontSize: 14,
+    fontWeight: '700',
+    marginHorizontal: 6,
+    fontVariant: ['tabular-nums'],
+  },
+  sizeText: {
+    fontSize: 12,
+  },
+  cancelHint: {
     fontSize: 13,
+    position: 'absolute',
+    top: 35,
   },
-  disabledOption: {
-    opacity: 0.6,
+  pulseRing: {
+    position: 'absolute',
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    borderWidth: 4,
   },
-  cancelButton: {
-    marginTop: 12,
+  micLayout: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    gap: 36,
+  },
+  bigMicCircle: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 5,
+    zIndex: 10,
+  },
+  sttBtnContent: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sttTextLabel: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: '#fff',
+    letterSpacing: 0.5,
+  },
+  actionBtn: {
+    width: 50,
     height: 50,
     borderRadius: 25,
     justifyContent: 'center',
     alignItems: 'center',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 3,
   },
-  cancelText: {
-    fontSize: 15,
-    fontWeight: '600',
+  cancelBtn: {
+    backgroundColor: '#f1f5f9',
+  },
+  tabContainer: {
+    flexDirection: 'row',
+    width: '85%',
+    height: 44,
+    borderRadius: 22,
+    padding: 3,
+    elevation: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    marginTop: 10,
+  },
+  tabButton: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 20,
+  },
+  activeTabButton: {
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1.5 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+  },
+  tabText: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  activeTabText: {
+    fontWeight: '700',
   },
 });

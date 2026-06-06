@@ -41,7 +41,6 @@ import { useShallow } from 'zustand/shallow';
 import VoiceRecorder from '../../components/VoiceRecorder';
 import voiceUploadWorker from '../../services/audio/voiceUploadWorker';
 import VoiceActionSheet from '../../components/VoiceActionSheet';
-import { useSpeechToText } from '../../hooks/useSpeechToText';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { VoicePlayer } from '../../services/audio/player';
@@ -90,93 +89,14 @@ export default function ChatRoomScreen() {
   const [showAttachMenu, setShowAttachMenu] = useState(false);
 
   // Zalo style voice states
-  const [inputMode, setInputMode] = useState<'text' | 'voice'>('text');
   const [showVoiceSheet, setShowVoiceSheet] = useState(false);
-  const [sttReady, setSttReady] = useState(false);
-  const AUTO_RETURN_TO_TEXT_MODE = true;
 
-  const {
-    isListening: isSttListening,
-    isStarting: isSttStarting,
-    isSupported: isSttSupported,
-    startListening: startStt,
-    stopListening: stopStt,
-  } = useSpeechToText({
-    onTranscript: (transcript) => {
-      setInputMessage(prev => {
-        const existing = prev ? prev.trim() : '';
-        const speech = transcript ? transcript.trim() : '';
-        return existing ? `${existing} ${speech}` : speech;
-      });
-    },
-    onError: (err) => {
-      Alert.alert('Thông báo', err);
-    },
-  });
-
-  const pulseAnim = useRef(new Animated.Value(0.4)).current;
-  useEffect(() => {
-    let animation: Animated.CompositeAnimation | null = null;
-    if (isSttListening) {
-      animation = Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulseAnim, {
-            toValue: 1,
-            duration: 800,
-            useNativeDriver: true,
-          }),
-          Animated.timing(pulseAnim, {
-            toValue: 0.4,
-            duration: 800,
-            useNativeDriver: true,
-          }),
-        ])
-      );
-      animation.start();
-    } else {
-      pulseAnim.setValue(0.4);
-    }
-    return () => {
-      if (animation) animation.stop();
-    };
-  }, [isSttListening]);
-
-  // Load saved inputMode from AsyncStorage on mount
-  useEffect(() => {
-    const loadInputMode = async () => {
-      try {
-        if (conversationId) {
-          const savedMode = await AsyncStorage.getItem(`chat_input_mode_${conversationId}`);
-          if (savedMode === 'voice' || savedMode === 'text') {
-            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-            setInputMode(savedMode);
-          }
-        }
-      } catch (err) {
-        console.error('Failed to load inputMode from storage:', err);
-      }
-    };
-    loadInputMode();
-  }, [conversationId]);
-
-  const changeInputMode = async (mode: 'text' | 'voice') => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setInputMode(mode);
-    try {
-      if (conversationId) {
-        await AsyncStorage.setItem(`chat_input_mode_${conversationId}`, mode);
-      }
-    } catch (err) {
-      console.error('Failed to save inputMode to storage:', err);
-    }
-  };
-
-  const handleMicPress = () => {
-    if (sttReady) {
-      startStt();
-    } else {
-      setShowVoiceSheet(true);
-    }
+  const handleTranscript = (transcript: string) => {
+    setInputMessage(prev => {
+      const existing = prev ? prev.trim() : '';
+      const speech = transcript ? transcript.trim() : '';
+      return existing ? `${existing} ${speech}` : speech;
+    });
   };
 
   // Auto clean up old voice caches when screen mounts
@@ -1364,10 +1284,6 @@ export default function ChatRoomScreen() {
       client_message_id: clientMessageId,
       userId: currentUser.id
     });
-
-    if (AUTO_RETURN_TO_TEXT_MODE) {
-      changeInputMode('text');
-    }
   };
 
   const handleSelectMemberTag = (memberName: string) => {
@@ -1758,147 +1674,89 @@ export default function ChatRoomScreen() {
               paddingTop: 10
             }
           ]}>
-            {inputMode === 'voice' ? (
-              <>
-                <TouchableOpacity
-                  style={[styles.emojiBtn, { marginRight: 4 }]}
-                  onPress={() => changeInputMode('text')}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons name="keypad-outline" size={24} color={colors.tint} />
-                </TouchableOpacity>
+            <TouchableOpacity 
+              style={styles.attachBtn} 
+              onPress={() => setShowAttachMenu(!showAttachMenu)}
+              disabled={uploadingMedia}
+            >
+              {uploadingMedia ? (
+                <ActivityIndicator size="small" color={colors.tint} />
+              ) : (
+                <Ionicons name={showAttachMenu ? "close" : "add"} size={24} color={showAttachMenu ? colors.tint : colors.textSecondary} />
+              )}
+            </TouchableOpacity>
 
-                <VoiceRecorder
-                  variant="full"
-                  onRecordingComplete={handleVoiceRecordingComplete}
-                  colors={{
-                    tint: colors.tint,
-                    card: colors.card,
-                    text: colors.text,
-                    border: colors.border,
-                    textSecondary: colors.textSecondary,
-                  }}
+            <TouchableOpacity
+              style={styles.emojiBtn}
+              onPress={handleToggleEmoji}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name={showEmojiPanel ? 'happy' : 'happy-outline'}
+                size={24}
+                color={showEmojiPanel ? colors.tint : colors.textSecondary}
+              />
+            </TouchableOpacity>
+
+            {!!((window as any).electronAPI && (window as any).electronAPI.isElectron()) && (
+              <TouchableOpacity
+                style={{ padding: 8, marginRight: 4 }}
+                onPress={() => handleTriggerScreenshot(true)}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name="cut-outline"
+                  size={22}
+                  color={colors.textSecondary}
                 />
-              </>
+              </TouchableOpacity>
+            )}
+
+            {voiceUploading ? (
+              <View style={[styles.input, { backgroundColor: colors.background, borderColor: colors.border, justifyContent: 'center', paddingHorizontal: 16 }]}>
+                <Text style={{ color: colors.text, fontWeight: '600' }}>
+                  🎤 Đang tải lên... {voiceUploadProgress}%
+                </Text>
+              </View>
             ) : (
-              <>
-                <TouchableOpacity 
-                  style={styles.attachBtn} 
-                  onPress={() => setShowAttachMenu(!showAttachMenu)}
-                  disabled={uploadingMedia}
-                >
-                  {uploadingMedia ? (
-                    <ActivityIndicator size="small" color={colors.tint} />
-                  ) : (
-                    <Ionicons name={showAttachMenu ? "close" : "add"} size={24} color={showAttachMenu ? colors.tint : colors.textSecondary} />
-                  )}
-                </TouchableOpacity>
+              <TextInput
+                ref={inputRef}
+                style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+                placeholder={editingMessage ? "Chỉnh sửa tin nhắn..." : "Nhập tin nhắn..."}
+                placeholderTextColor="#a0aec0"
+                value={inputMessage}
+                onChangeText={handleTextChange}
+                onSubmitEditing={handleSendMessage}
+                returnKeyType={editingMessage ? "done" : "send"}
+                blurOnSubmit={false}
+                onFocus={() => {
+                  if (showEmojiPanel) {
+                    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                    setShowEmojiPanel(false);
+                  }
+                }}
+              />
+            )}
 
-                <TouchableOpacity
-                  style={styles.emojiBtn}
-                  onPress={handleToggleEmoji}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons
-                    name={showEmojiPanel ? 'happy' : 'happy-outline'}
-                    size={24}
-                    color={showEmojiPanel ? colors.tint : colors.textSecondary}
-                  />
-                </TouchableOpacity>
+            {/* Single Microphone Button */}
+            {!voiceUploading && (
+              <TouchableOpacity
+                style={{ padding: 8, justifyContent: 'center', alignItems: 'center', marginRight: 6 }}
+                onPress={() => setShowVoiceSheet(true)}
+                activeOpacity={0.7}
+              >
+                <Ionicons 
+                  name="mic-outline" 
+                  size={22} 
+                  color={colors.textSecondary} 
+                />
+              </TouchableOpacity>
+            )}
 
-                {!!((window as any).electronAPI && (window as any).electronAPI.isElectron()) && (
-                  <TouchableOpacity
-                    style={{ padding: 8, marginRight: 4 }}
-                    onPress={() => handleTriggerScreenshot(true)}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons
-                      name="cut-outline"
-                      size={22}
-                      color={colors.textSecondary}
-                    />
-                  </TouchableOpacity>
-                )}
-
-                {voiceUploading ? (
-                  <View style={[styles.input, { backgroundColor: colors.background, borderColor: colors.border, justifyContent: 'center', paddingHorizontal: 16 }]}>
-                    <Text style={{ color: colors.text, fontWeight: '600' }}>
-                      🎤 Đang tải lên... {voiceUploadProgress}%
-                    </Text>
-                  </View>
-                ) : (
-                  <TextInput
-                    ref={inputRef}
-                    style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
-                    placeholder={isSttListening ? "🎤 Đang nghe..." : (editingMessage ? "Chỉnh sửa tin nhắn..." : "Nhập tin nhắn...")}
-                    placeholderTextColor="#a0aec0"
-                    value={inputMessage}
-                    onChangeText={handleTextChange}
-                    onSubmitEditing={handleSendMessage}
-                    returnKeyType={editingMessage ? "done" : "send"}
-                    blurOnSubmit={false}
-                    onFocus={() => {
-                      if (showEmojiPanel) {
-                        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-                        setShowEmojiPanel(false);
-                      }
-                      if (sttReady) {
-                        setSttReady(false);
-                      }
-                    }}
-                  />
-                )}
-
-                {/* Single Microphone Button */}
-                {!voiceUploading && (
-                  isSttStarting ? (
-                    <View style={{ padding: 8, justifyContent: 'center', alignItems: 'center', marginRight: 6 }}>
-                      <ActivityIndicator size="small" color={colors.tint} />
-                    </View>
-                  ) : isSttListening ? (
-                    <TouchableOpacity
-                      style={{
-                        padding: 8,
-                        justifyContent: 'center',
-                        alignItems: 'center',
-                        backgroundColor: '#fef2f2',
-                        borderColor: '#fca5a5',
-                        borderWidth: 1,
-                        borderRadius: 20,
-                        flexDirection: 'row',
-                        paddingHorizontal: 10,
-                        marginRight: 6
-                      }}
-                      onPress={stopStt}
-                      activeOpacity={0.8}
-                    >
-                      <Animated.View style={{ opacity: pulseAnim, marginRight: 4 }}>
-                        <Text style={{ fontSize: 10 }}>🔴</Text>
-                      </Animated.View>
-                      <Text style={{ color: '#ef4444', fontSize: 12, fontWeight: '700', marginRight: 4 }}>Đang nghe...</Text>
-                      <Ionicons name="mic" size={18} color="#ef4444" />
-                    </TouchableOpacity>
-                  ) : (
-                    <TouchableOpacity
-                      style={{ padding: 8, justifyContent: 'center', alignItems: 'center', marginRight: 6 }}
-                      onPress={handleMicPress}
-                      activeOpacity={0.7}
-                    >
-                      <Ionicons 
-                        name={sttReady ? "mic" : "mic-outline"} 
-                        size={22} 
-                        color={sttReady ? colors.tint : colors.textSecondary} 
-                      />
-                    </TouchableOpacity>
-                  )
-                )}
-
-                {!voiceUploading && (
-                  <TouchableOpacity style={[styles.sendBtn, { backgroundColor: editingMessage ? '#f59e0b' : colors.tint, marginLeft: 4 }]} onPress={handleSendMessage}>
-                    <Ionicons name={editingMessage ? "checkmark" : "send"} size={18} color="#fff" />
-                  </TouchableOpacity>
-                )}
-              </>
+            {!voiceUploading && (
+              <TouchableOpacity style={[styles.sendBtn, { backgroundColor: editingMessage ? '#f59e0b' : colors.tint, marginLeft: 4 }]} onPress={handleSendMessage}>
+                <Ionicons name={editingMessage ? "checkmark" : "send"} size={18} color="#fff" />
+              </TouchableOpacity>
             )}
           </View>
 
@@ -1924,15 +1782,8 @@ export default function ChatRoomScreen() {
       <VoiceActionSheet
         visible={showVoiceSheet}
         onClose={() => setShowVoiceSheet(false)}
-        onSelectVoiceMessage={() => {
-          setShowVoiceSheet(false);
-          changeInputMode('voice');
-        }}
-        onSelectSpeechToText={() => {
-          setShowVoiceSheet(false);
-          setSttReady(true);
-        }}
-        speechSupported={isSttSupported}
+        onVoiceRecorded={handleVoiceRecordingComplete}
+        onTranscript={handleTranscript}
         colors={{
           tint: colors.tint,
           card: colors.card,
