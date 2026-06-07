@@ -38,6 +38,291 @@ const getAuthUser = (req) => {
   return null;
 };
 
+// GET /api/tasks — Lấy toàn bộ danh sách nhiệm vụ hệ thống
+router.get('/', async (req, res) => {
+  const user = getAuthUser(req);
+  if (!user) {
+    return res.status(401).json({ status: 'error', message: 'Không thể xác thực người dùng.' });
+  }
+
+  const {
+    status,
+    workspace_id,
+    priority,
+    search,
+    assignee_id,
+    creator_id,
+    from_date,
+    to_date,
+    quick_filter
+  } = req.query;
+
+  try {
+    let queryText = `
+      SELECT DISTINCT t.*, 
+             w.name AS workspace_name,
+             c.name AS creator_name, c.avatar AS creator_avatar 
+      FROM tasks t 
+      LEFT JOIN workspaces w ON t.workspace_id = w.id
+      LEFT JOIN users c ON t.created_by = c.id
+      LEFT JOIN task_assignments ta ON ta.task_id = t.id
+      LEFT JOIN workspace_members wm ON wm.workspace_id = t.workspace_id
+      WHERE (t.is_deleted = FALSE OR t.is_deleted IS NULL)
+    `;
+
+    const queryParams = [];
+    let paramIndex = 1;
+
+    // Phân quyền cơ bản
+    if (user.role !== 'admin') {
+      queryText += ` AND (
+        t.created_by = $${paramIndex} OR 
+        t.assigned_to = $${paramIndex} OR 
+        ta.user_id = $${paramIndex} OR 
+        wm.user_id = $${paramIndex}
+      )`;
+      queryParams.push(user.id);
+      paramIndex++;
+    }
+
+    // Lọc theo trạng thái (status)
+    if (status && status !== 'all') {
+      if (status === 'not_started' || status === 'pending') {
+        queryText += ` AND (t.approval_status = 'pending' OR t.approval_status IS NULL)`;
+      } else {
+        queryText += ` AND t.approval_status = $${paramIndex}`;
+        queryParams.push(status);
+        paramIndex++;
+      }
+    }
+
+    // Lọc theo workspace
+    if (workspace_id) {
+      queryText += ` AND t.workspace_id = $${paramIndex}`;
+      queryParams.push(parseInt(workspace_id));
+      paramIndex++;
+    }
+
+    // Lọc theo priority
+    if (priority) {
+      queryText += ` AND t.priority = $${paramIndex}`;
+      queryParams.push(priority);
+      paramIndex++;
+    }
+
+    // Tìm kiếm search realtime (search by title or description)
+    if (search && search.trim()) {
+      queryText += ` AND (t.title ILIKE $${paramIndex} OR t.description ILIKE $${paramIndex})`;
+      queryParams.push(`%${search.trim()}%`);
+      paramIndex++;
+    }
+
+    // Lọc theo người thực hiện
+    if (assignee_id) {
+      queryText += ` AND (t.assigned_to = $${paramIndex} OR ta.user_id = $${paramIndex})`;
+      queryParams.push(parseInt(assignee_id));
+      paramIndex++;
+    }
+
+    // Lọc theo người tạo
+    if (creator_id) {
+      queryText += ` AND t.created_by = $${paramIndex}`;
+      queryParams.push(parseInt(creator_id));
+      paramIndex++;
+    }
+
+    // Lọc theo khoảng thời gian (deadline)
+    if (from_date) {
+      queryText += ` AND t.deadline >= $${paramIndex}`;
+      queryParams.push(from_date);
+      paramIndex++;
+    }
+    if (to_date) {
+      queryText += ` AND t.deadline <= $${paramIndex}`;
+      queryParams.push(to_date);
+      paramIndex++;
+    }
+
+    // Bộ lọc nhanh (Quick Filters)
+    if (quick_filter) {
+      if (quick_filter === 'my_tasks' || quick_filter === 'mine') {
+        queryText += ` AND (t.assigned_to = $${paramIndex} OR ta.user_id = $${paramIndex} OR t.created_by = $${paramIndex})`;
+        queryParams.push(user.id);
+        paramIndex++;
+      } else if (quick_filter === 'assigned_to_me') {
+        queryText += ` AND (t.assigned_to = $${paramIndex} OR ta.user_id = $${paramIndex})`;
+        queryParams.push(user.id);
+        paramIndex++;
+      } else if (quick_filter === 'created_by_me') {
+        queryText += ` AND t.created_by = $${paramIndex}`;
+        queryParams.push(user.id);
+        paramIndex++;
+      } else if (quick_filter === 'overdue') {
+        queryText += ` AND t.deadline < NOW() AND (t.approval_status != 'completed' AND t.status != 'completed')`;
+      }
+    }
+
+    queryText += ` ORDER BY t.id DESC`;
+
+    const result = await query(queryText, queryParams);
+    const tasks = result.rows;
+
+    if (tasks.length > 0) {
+      const taskIds = tasks.map(t => t.id);
+      const assigneesRes = await query(
+        `SELECT ta.task_id, ta.user_id, ta.status, ta.started_at, ta.completed_at, u.name, u.avatar, u.avatar AS avatar_url
+         FROM task_assignments ta
+         JOIN users u ON ta.user_id = u.id
+         WHERE ta.task_id = ANY($1)`,
+        [taskIds]
+      );
+
+      const assigneesMap = {};
+      assigneesRes.rows.forEach(row => {
+        if (!assigneesMap[row.task_id]) assigneesMap[row.task_id] = [];
+        assigneesMap[row.task_id].push({
+          user_id: row.user_id,
+          status: row.status,
+          started_at: row.started_at,
+          completed_at: row.completed_at,
+          name: row.name,
+          avatar: row.avatar,
+          avatar_url: row.avatar_url
+        });
+      });
+
+      tasks.forEach(t => {
+        t.assignees = assigneesMap[t.id] || [];
+      });
+    }
+
+    return res.status(200).json({ status: 'success', data: tasks });
+  } catch (err) {
+    return res.status(500).json({ status: 'error', message: 'Lỗi lấy danh sách nhiệm vụ: ' + err.message });
+  }
+});
+
+// GET /api/tasks/tasks/:taskId/comments — Lấy danh sách bình luận
+router.get('/tasks/:taskId/comments', async (req, res) => {
+  const user = getAuthUser(req);
+  if (!user) return res.status(401).json({ status: 'error', message: 'Không thể xác thực người dùng.' });
+  const taskId = parseInt(req.params.taskId);
+  try {
+    const result = await query(
+      `SELECT tc.id, tc.task_id, tc.user_id, COALESCE(tc.content, tc.comment) AS comment, tc.file_url, tc.created_at,
+              u.name AS user_name, u.avatar AS user_avatar, u.role AS user_role
+       FROM task_comments tc
+       JOIN users u ON tc.user_id = u.id
+       WHERE tc.task_id = $1
+       ORDER BY tc.id ASC`,
+      [taskId]
+    );
+    return res.status(200).json({ status: 'success', data: result.rows });
+  } catch (err) {
+    return res.status(500).json({ status: 'error', message: 'Lỗi lấy danh sách bình luận: ' + err.message });
+  }
+});
+
+// POST /api/tasks/tasks/:taskId/comments — Tạo bình luận mới
+router.post('/tasks/:taskId/comments', async (req, res) => {
+  const user = getAuthUser(req);
+  if (!user) return res.status(401).json({ status: 'error', message: 'Không thể xác thực người dùng.' });
+  const taskId = parseInt(req.params.taskId);
+  const { comment, file_url } = req.body;
+  if (!comment || !comment.trim()) {
+    return res.status(400).json({ status: 'error', message: 'Nội dung bình luận không được để trống.' });
+  }
+  try {
+    const result = await query(
+      `INSERT INTO task_comments (task_id, user_id, comment, content, file_url)
+       VALUES ($1, $2, $3, $3, $4)
+       RETURNING *`,
+      [taskId, user.id, comment.trim(), file_url || null]
+    );
+    const newComment = result.rows[0];
+    
+    // Join with user information to return
+    const userRes = await query('SELECT name, avatar, role FROM users WHERE id = $1', [user.id]);
+    if (userRes.rows.length > 0) {
+      newComment.user_name = userRes.rows[0].name;
+      newComment.user_avatar = userRes.rows[0].avatar;
+      newComment.user_role = userRes.rows[0].role;
+    }
+    
+    // Socket update
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('task_comment_created', { taskId, comment: newComment });
+    }
+    
+    return res.status(201).json({ status: 'success', data: newComment });
+  } catch (err) {
+    return res.status(500).json({ status: 'error', message: 'Lỗi gửi bình luận: ' + err.message });
+  }
+});
+
+// GET /api/tasks/tasks/:taskId/attachments — Lấy danh sách tệp đính kèm
+router.get('/tasks/:taskId/attachments', async (req, res) => {
+  const user = getAuthUser(req);
+  if (!user) return res.status(401).json({ status: 'error', message: 'Không thể xác thực người dùng.' });
+  const taskId = parseInt(req.params.taskId);
+  try {
+    const result = await query(
+      `SELECT ta.*, u.name AS user_name, u.avatar AS user_avatar
+       FROM task_attachments ta
+       LEFT JOIN users u ON ta.uploaded_by = u.id
+       WHERE ta.task_id = $1
+       ORDER BY ta.id ASC`,
+      [taskId]
+    );
+    return res.status(200).json({ status: 'success', data: result.rows });
+  } catch (err) {
+    return res.status(500).json({ status: 'error', message: 'Lỗi lấy danh sách tài liệu đính kèm: ' + err.message });
+  }
+});
+
+// POST /api/tasks/tasks/:taskId/attachments — Thêm tệp đính kèm mới
+router.post('/tasks/:taskId/attachments', async (req, res) => {
+  const user = getAuthUser(req);
+  if (!user) return res.status(401).json({ status: 'error', message: 'Không thể xác thực người dùng.' });
+  const taskId = parseInt(req.params.taskId);
+  const { file_url, file_type } = req.body;
+  if (!file_url) {
+    return res.status(400).json({ status: 'error', message: 'Đường dẫn tệp tin không được để trống.' });
+  }
+  try {
+    const result = await query(
+      `INSERT INTO task_attachments (task_id, uploaded_by, file_url, file_type)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *`,
+      [taskId, user.id, file_url, file_type || null]
+    );
+    const newAttachment = result.rows[0];
+    
+    // Join with user information to return
+    const userRes = await query('SELECT name, avatar FROM users WHERE id = $1', [user.id]);
+    if (userRes.rows.length > 0) {
+      newAttachment.user_name = userRes.rows[0].name;
+      newAttachment.user_avatar = userRes.rows[0].avatar;
+    }
+    
+    // Log activity
+    const fileName = file_url.split('/').pop() || 'tệp tin';
+    await logTaskActivity(taskId, user.id, 'file_attached', null, fileName);
+    
+    // Socket update
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('task_attachment_created', { taskId, attachment: newAttachment });
+      io.emit('task_updated', { id: taskId }); // Trigger refresh of activities
+    }
+    
+    return res.status(201).json({ status: 'success', data: newAttachment });
+  } catch (err) {
+    return res.status(500).json({ status: 'error', message: 'Lỗi đính kèm tệp tin: ' + err.message });
+  }
+});
+
 // 1. GET /api/tasks/workspaces — Lấy danh sách các trang lớn
 router.get('/workspaces', async (req, res) => {
   const user = getAuthUser(req);
@@ -1012,6 +1297,7 @@ router.get('/stats', async (req, res) => {
       result = await query(`
         SELECT 
           COUNT(*)::int AS total,
+          COUNT(CASE WHEN approval_status = 'pending' OR approval_status IS NULL THEN 1 END)::int AS pending,
           COUNT(CASE WHEN approval_status = 'in_progress' THEN 1 END)::int AS in_progress,
           COUNT(CASE WHEN approval_status = 'waiting_approval' THEN 1 END)::int AS waiting_approval,
           COUNT(CASE WHEN approval_status = 'revision_required' THEN 1 END)::int AS revision_required,
@@ -1023,12 +1309,23 @@ router.get('/stats', async (req, res) => {
       result = await query(`
         SELECT 
           COUNT(*)::int AS total,
+          COUNT(CASE WHEN approval_status = 'pending' OR approval_status IS NULL THEN 1 END)::int AS pending,
           COUNT(CASE WHEN approval_status = 'in_progress' THEN 1 END)::int AS in_progress,
           COUNT(CASE WHEN approval_status = 'waiting_approval' THEN 1 END)::int AS waiting_approval,
           COUNT(CASE WHEN approval_status = 'revision_required' THEN 1 END)::int AS revision_required,
           COUNT(CASE WHEN approval_status = 'completed' THEN 1 END)::int AS completed
         FROM tasks
-        WHERE (assigned_to = $1) AND (is_deleted = FALSE OR is_deleted IS NULL)
+        WHERE (is_deleted = FALSE OR is_deleted IS NULL)
+          AND (
+            created_by = $1 OR 
+            assigned_to = $1 OR 
+            EXISTS (
+              SELECT 1 FROM task_assignments ta WHERE ta.task_id = tasks.id AND ta.user_id = $1
+            ) OR
+            EXISTS (
+              SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = tasks.workspace_id AND wm.user_id = $1
+            )
+          )
       `, [user.id]);
     }
 
@@ -1039,6 +1336,7 @@ router.get('/stats', async (req, res) => {
 
     const statsData = {
       total,
+      pending: row.pending || 0,
       in_progress: row.in_progress || 0,
       waiting_approval: row.waiting_approval || 0,
       revision_required: row.revision_required || 0,

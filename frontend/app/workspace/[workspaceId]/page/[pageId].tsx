@@ -1,5 +1,4 @@
-// frontend/app/workspace/[workspaceId]/page/[pageId].tsx
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -13,7 +12,6 @@ import {
   Image,
   Alert,
   Clipboard,
-  Linking,
   Share,
   useWindowDimensions
 } from 'react-native';

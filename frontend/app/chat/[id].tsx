@@ -1,5 +1,5 @@
 // frontend/app/chat/[id].tsx
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   StyleSheet,
   Text,
@@ -20,7 +20,6 @@ import {
   AppStateStatus,
   Clipboard,
   ScrollView,
-  Animated,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -38,10 +37,8 @@ import { useOnlineStore } from '../../store/useOnlineStore';
 import { GroupInfoModal } from '../../components/GroupInfoModal';
 import { useIsFocused } from '@react-navigation/native';
 import { useShallow } from 'zustand/shallow';
-import VoiceRecorder from '../../components/VoiceRecorder';
 import voiceUploadWorker from '../../services/audio/voiceUploadWorker';
 import VoiceActionSheet from '../../components/VoiceActionSheet';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { VoicePlayer } from '../../services/audio/player';
 

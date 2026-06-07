@@ -154,7 +154,7 @@ io.on('connection', (socket) => {
       const insertRes = await query(
         `INSERT INTO messages (conversation_id, sender_id, message, type, file_url, reply_to, forwarded, attachment_url, attachment_duration, attachment_mime_type, client_message_id) 
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) 
-         ON CONFLICT (client_message_id) 
+         ON CONFLICT (client_message_id) WHERE client_message_id IS NOT NULL 
          DO NOTHING 
          RETURNING id, created_at`,
         [parseInt(conversation_id), parseInt(sender_id), message, type, file_url, reply_to ? parseInt(reply_to) : null, !!forwarded, attachment_url, attachment_duration ? parseInt(attachment_duration) : null, attachment_mime_type, client_message_id]

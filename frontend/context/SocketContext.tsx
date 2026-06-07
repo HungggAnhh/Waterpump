@@ -10,7 +10,7 @@ import { useWebRTC } from '../hooks/useWebRTC';
 import { useCallStore } from '../store/useCallStore';
 import { IncomingCallModal } from '../components/IncomingCallModal';
 import { CallScreen } from '../components/CallScreen';
-import { playRingtone, stopRingtone } from '../utils/webrtcShim';
+import { playRingtone } from '../utils/webrtcShim';
 
 interface SocketContextType {
   socket: Socket | null;

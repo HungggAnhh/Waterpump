@@ -1,5 +1,5 @@
 // frontend/app/(tabs)/tasks.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   StyleSheet,
   Text,
@@ -12,6 +12,8 @@ import {
   Platform,
   Image,
   Alert,
+  FlatList,
+  Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Colors from '@/constants/Colors';
@@ -20,7 +22,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useUser } from '@/context/UserContext';
 import { useSocket } from '@/context/SocketContext';
 import { API_BASE_URL } from '@/constants/Config';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
+import TaskDetailModal from '@/components/tasks/TaskDetailModal';
+
+const { width: windowWidth } = Dimensions.get('window');
 
 interface Workspace {
   id: number;
@@ -35,119 +40,474 @@ interface UserListItem {
   avatar: string | null;
 }
 
+interface Task {
+  id: number;
+  workspace_id: number;
+  workspace_name?: string;
+  title: string;
+  description: string | null;
+  status: 'todo' | 'in_progress' | 'completed';
+  priority: 'low' | 'medium' | 'high';
+  assigned_to: number | null;
+  assignee_name?: string;
+  assignee_avatar?: string;
+  assignees?: Array<{
+    user_id: number;
+    status: string;
+    started_at: string | null;
+    completed_at: string | null;
+    name: string;
+    avatar: string | null;
+  }>;
+  created_by: number | null;
+  creator_name?: string;
+  creator_avatar?: string;
+  creator_role?: string;
+  deadline: string | null;
+  completed: boolean;
+  is_reviewed?: boolean;
+  reminder_interval?: 'hourly' | 'daily' | null;
+  last_reminded_at?: string | null;
+  created_at: string;
+  updated_at?: string;
+  approval_status?: 'pending' | 'in_progress' | 'waiting_approval' | 'completed' | 'revision_required';
+  approved_by?: number | null;
+  approved_at?: string | null;
+  revision_note?: string | null;
+  revision_count?: number;
+}
+
+interface KPIStats {
+  total: number;
+  pending: number;
+  in_progress: number;
+  waiting_approval: number;
+  revision_required: number;
+  completed: number;
+}
+
+// Memoized Task Card for the FlatList
+const TaskItem = React.memo(({ 
+  task, 
+  colors, 
+  onPress, 
+  isHighlighted 
+}: { 
+  task: Task; 
+  colors: any; 
+  onPress: () => void; 
+  isHighlighted: boolean;
+}) => {
+  const getStatusText = (status?: string) => {
+    switch (status) {
+      case 'pending': return 'Chưa làm';
+      case 'in_progress': return 'Đang làm';
+      case 'waiting_approval': return 'Chờ duyệt';
+      case 'revision_required': return 'Làm lại';
+      case 'completed': return 'Hoàn thành';
+      default: return 'Chưa làm';
+    }
+  };
+
+  const getStatusColor = (status?: string) => {
+    switch (status) {
+      case 'pending': return { bg: '#f3f4f6', text: '#374151' };
+      case 'in_progress': return { bg: '#e0f2fe', text: '#0369a1' };
+      case 'waiting_approval': return { bg: '#fef3c7', text: '#b45309' };
+      case 'revision_required': return { bg: '#fee2e2', text: '#b91c1c' };
+      case 'completed': return { bg: '#d1fae5', text: '#065f46' };
+      default: return { bg: '#f3f4f6', text: '#374151' };
+    }
+  };
+
+  const getPriorityText = (priority?: string) => {
+    switch (priority) {
+      case 'low': return 'Thấp';
+      case 'medium': return 'T.Bình';
+      case 'high': return 'Cao';
+      default: return 'T.Bình';
+    }
+  };
+
+  const getPriorityColor = (priority?: string) => {
+    switch (priority) {
+      case 'low': return { bg: '#f3f4f6', text: '#4b5563' };
+      case 'medium': return { bg: '#fffbeb', text: '#d97706' };
+      case 'high': return { bg: '#fee2e2', text: '#dc2626' };
+      default: return { bg: '#f3f4f6', text: '#4b5563' };
+    }
+  };
+
+  const statusStyle = getStatusColor(task.approval_status || task.status);
+  const priorityStyle = getPriorityColor(task.priority);
+
+  return (
+    <TouchableOpacity
+      style={[
+        styles.taskCardItem, 
+        { 
+          backgroundColor: isHighlighted ? '#fef08a' : colors.card, 
+          borderColor: isHighlighted ? '#eab308' : colors.border,
+          borderWidth: isHighlighted ? 1.5 : 1
+        }
+      ]}
+      onPress={onPress}
+      activeOpacity={0.7}
+    >
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.taskCardTitle, { color: colors.text }]} numberOfLines={1}>
+          {task.title}
+        </Text>
+        <View style={styles.taskCardMetaRow}>
+          {task.workspace_name && (
+            <Text style={[styles.taskCardWorkspace, { color: colors.tint }]} numberOfLines={1}>
+              📂 {task.workspace_name}
+            </Text>
+          )}
+          {task.deadline && (
+            <Text style={{ fontSize: 11, color: colors.tabIconDefault }}>
+              📅 {new Date(task.deadline).toLocaleDateString('vi-VN')}
+            </Text>
+          )}
+        </View>
+      </View>
+      <View style={{ alignItems: 'flex-end', gap: 6 }}>
+        <View style={[styles.miniBadge, { backgroundColor: statusStyle.bg }]}>
+          <Text style={{ fontSize: 10, fontWeight: '700', color: statusStyle.text }}>
+            {getStatusText(task.approval_status || task.status)}
+          </Text>
+        </View>
+        <View style={[styles.miniBadge, { backgroundColor: priorityStyle.bg }]}>
+          <Text style={{ fontSize: 10, fontWeight: '700', color: priorityStyle.text }}>
+            {getPriorityText(task.priority)}
+          </Text>
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+});
+
 export default function WorkspaceScreen() {
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
   const { user } = useUser();
   const { socket } = useSocket();
+  const params = useLocalSearchParams<{ tab?: string; status?: string }>();
 
+  // Tabs states
+  const [activeTab, setActiveTab] = useState<'tasks' | 'summary'>('tasks');
+  const [activeSubView, setActiveSubView] = useState<'my_tasks' | 'all_tasks' | 'workspaces'>('workspaces');
+
+  // Original Workspaces states
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [usersList, setUsersList] = useState<UserListItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loadingWorkspaces, setLoadingWorkspaces] = useState(true);
 
-  // Modal states for creating Workspace
+  // Tab 1 Tasks list state
+  const [tab1Tasks, setTab1Tasks] = useState<Task[]>([]);
+  const [tab1Loading, setTab1Loading] = useState(false);
+  const [searchQueryTab1, setSearchQueryTab1] = useState('');
+
+  // Tab 2 Summary states
+  const [expandedAccordions, setExpandedAccordions] = useState<{[key: string]: boolean}>({});
+  const [accordionTasks, setAccordionTasks] = useState<{[key: string]: Task[]}>({});
+  const [accordionLoading, setAccordionLoading] = useState<{[key: string]: boolean}>({});
+  const [kpiStats, setKpiStats] = useState<KPIStats>({
+    total: 0,
+    pending: 0,
+    in_progress: 0,
+    waiting_approval: 0,
+    revision_required: 0,
+    completed: 0,
+  });
+  const [kpiLoading, setKpiLoading] = useState(true);
+
+  // Advanced filters (Tab 2)
+  const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [selectedWorkspace, setSelectedWorkspace] = useState<number | null>(null);
+  const [selectedAssignee, setSelectedAssignee] = useState<number | null>(null);
+  const [selectedCreator, setSelectedCreator] = useState<number | null>(null);
+  const [selectedPriority, setSelectedPriority] = useState<string | null>(null);
+  const [fromDate, setFromDate] = useState<string | null>(null);
+  const [toDate, setToDate] = useState<string | null>(null);
+  const [quickFilter, setQuickFilter] = useState<'all' | 'my_tasks' | 'assigned_to_me' | 'created_by_me' | 'overdue'>('all');
+
+  // Detail Modal states
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+
+  // Scroll and highlight states
+  const [highlightedAccordion, setHighlightedAccordion] = useState<string | null>(null);
+  const [highlightedTaskId, setHighlightedTaskId] = useState<number | null>(null);
+  const [pendingScrollTaskId, setPendingScrollTaskId] = useState<number | null>(null);
+
+  // Original Workspaces Modal states
   const [isWorkspaceModalOpen, setIsWorkspaceModalOpen] = useState(false);
   const [newWorkspaceName, setNewWorkspaceName] = useState('');
   const [selectedMembers, setSelectedMembers] = useState<number[]>([]);
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
 
-  // Modal states for editing Workspace
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingWorkspace, setEditingWorkspace] = useState<Workspace | null>(null);
   const [editWorkspaceName, setEditWorkspaceName] = useState('');
   const [editSelectedMembers, setEditSelectedMembers] = useState<number[]>([]);
   const [updatingWorkspace, setUpdatingWorkspace] = useState(false);
 
-  // Fetch workspaces list
+  // Refs
+  const flatListRef = useRef<FlatList>(null);
+  const scrollContainerRefTab2 = useRef<ScrollView>(null);
+  const accordionYRefs = useRef<{[key: string]: number}>({});
+
+  // Debounce search query
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedSearch(searchQuery);
+    }, 400);
+    return () => clearTimeout(handler);
+  }, [searchQuery]);
+
+  // Load URL query params
+  useEffect(() => {
+    if (params.tab === 'summary') {
+      setActiveTab('summary');
+      if (params.status) {
+        let statusFilter = params.status;
+        if (statusFilter === 'all') statusFilter = 'all';
+        else if (statusFilter === 'not_started') statusFilter = 'not_started';
+        else if (statusFilter === 'in_progress') statusFilter = 'in_progress';
+        else if (statusFilter === 'waiting_approval') statusFilter = 'waiting_approval';
+        else if (statusFilter === 'revision_required') statusFilter = 'revision_required';
+        else if (statusFilter === 'completed') statusFilter = 'completed';
+
+        // Expand accordion
+        setExpandedAccordions(prev => ({ ...prev, [statusFilter]: true }));
+        fetchAccordionTasks(statusFilter);
+
+        // Scroll and highlight
+        setTimeout(() => {
+          const y = accordionYRefs.current[statusFilter];
+          if (y !== undefined) {
+            scrollContainerRefTab2.current?.scrollTo({ y, animated: true });
+          }
+          setHighlightedAccordion(statusFilter);
+          setTimeout(() => {
+            setHighlightedAccordion(null);
+          }, 3000);
+        }, 300);
+      }
+    }
+  }, [params.tab, params.status]);
+
+  // Fetch workspaces & users list
   const fetchWorkspaces = async () => {
     try {
-      setLoading(true);
+      setLoadingWorkspaces(true);
       const wsResponse = await fetch(`${API_BASE_URL}/tasks/workspaces`);
       const wsResult = await wsResponse.json();
-      
       if (wsResult.status === 'success') {
         setWorkspaces(wsResult.data || []);
       }
     } catch (err) {
-      console.error('⚠️ [Tasks] Lỗi tải danh sách Trang:', err);
+      console.error('Error loading workspaces:', err);
     } finally {
-      setLoading(false);
+      setLoadingWorkspaces(false);
     }
   };
 
-  // Fetch users list for internal member selection
   const fetchUsers = async () => {
     try {
       const res = await fetch(`${API_BASE_URL}/users`);
       const result = await res.json();
       if (result.status === 'success') {
-        // Lọc bỏ chính người tạo (Admin) ra khỏi danh sách chọn vì họ mặc định được thêm làm chủ sở hữu trang
         const filtered = (result.data || []).filter((u: UserListItem) => u.id !== user?.id);
         setUsersList(filtered);
       }
     } catch (err) {
-      console.error('⚠️ [Tasks] Lỗi tải danh sách User:', err);
+      console.error('Error loading users:', err);
     }
   };
 
+  // Fetch Tab 1 Tasks list
+  const fetchTab1Tasks = async () => {
+    try {
+      setTab1Loading(true);
+      let url = `${API_BASE_URL}/tasks?`;
+      if (activeSubView === 'my_tasks') {
+        url += 'quick_filter=my_tasks';
+      }
+      if (searchQueryTab1.trim()) {
+        url += `&search=${encodeURIComponent(searchQueryTab1.trim())}`;
+      }
+      const res = await fetch(url);
+      const result = await res.json();
+      if (result.status === 'success') {
+        setTab1Tasks(result.data || []);
+      }
+    } catch (err) {
+      console.error('Error loading Tab 1 tasks:', err);
+    } finally {
+      setTab1Loading(false);
+    }
+  };
+
+  // Fetch Tab 2 Accordion tasks
+  const fetchAccordionTasks = async (status: string) => {
+    try {
+      setAccordionLoading(prev => ({ ...prev, [status]: true }));
+      let url = `${API_BASE_URL}/tasks?status=${status}`;
+      if (debouncedSearch.trim()) url += `&search=${encodeURIComponent(debouncedSearch.trim())}`;
+      if (selectedWorkspace) url += `&workspace_id=${selectedWorkspace}`;
+      if (selectedAssignee) url += `&assignee_id=${selectedAssignee}`;
+      if (selectedCreator) url += `&creator_id=${selectedCreator}`;
+      if (selectedPriority) url += `&priority=${selectedPriority}`;
+      if (fromDate) url += `&from_date=${fromDate}`;
+      if (toDate) url += `&to_date=${toDate}`;
+      if (quickFilter && quickFilter !== 'all') url += `&quick_filter=${quickFilter}`;
+
+      const res = await fetch(url);
+      const result = await res.json();
+      if (result.status === 'success') {
+        setAccordionTasks(prev => ({ ...prev, [status]: result.data || [] }));
+      }
+    } catch (err) {
+      console.error(`Error loading tasks for status ${status}:`, err);
+    } finally {
+      setAccordionLoading(prev => ({ ...prev, [status]: false }));
+    }
+  };
+
+  // Fetch Tab 2 KPI Stats
+  const fetchKPIStats = async () => {
+    try {
+      setKpiLoading(true);
+      const res = await fetch(`${API_BASE_URL}/tasks/stats`);
+      const result = await res.json();
+      if (result.status === 'success') {
+        setKpiStats(result.data || { total: 0, pending: 0, in_progress: 0, waiting_approval: 0, revision_required: 0, completed: 0 });
+      }
+    } catch (err) {
+      console.error('Error loading stats:', err);
+    } finally {
+      setKpiLoading(false);
+    }
+  };
+
+  // Re-fetch when dependencies change
   useEffect(() => {
     fetchWorkspaces();
     fetchUsers();
   }, [user]);
 
-  // Bind Realtime Socket listeners
+  useEffect(() => {
+    if (activeTab === 'tasks' && activeSubView !== 'workspaces') {
+      fetchTab1Tasks();
+    }
+  }, [activeTab, activeSubView, searchQueryTab1]);
+
+  useEffect(() => {
+    if (activeTab === 'summary') {
+      fetchKPIStats();
+      // Re-fetch all currently expanded accordions
+      Object.keys(expandedAccordions).forEach(status => {
+        if (expandedAccordions[status]) {
+          fetchAccordionTasks(status);
+        }
+      });
+    }
+  }, [
+    activeTab, 
+    debouncedSearch, 
+    selectedWorkspace, 
+    selectedAssignee, 
+    selectedCreator, 
+    selectedPriority, 
+    fromDate, 
+    toDate, 
+    quickFilter
+  ]);
+
+  // Realtime Socket Sync
   useEffect(() => {
     if (!socket) return;
 
-    const handleWorkspaceCreated = (newWs: Workspace) => {
-      console.log('📡 [SOCKET] workspace_created:', newWs);
-      setWorkspaces(prev => {
-        if (prev.some(w => w.id === newWs.id)) return prev;
-        return [...prev, newWs];
-      });
-    };
-
-    const handleWorkspaceDeleted = (deletedWs: { id: number }) => {
-      console.log('📡 [SOCKET] workspace_deleted:', deletedWs);
-      setWorkspaces(prev => prev.filter(w => w.id !== deletedWs.id));
-    };
-
-    const handleWorkspaceUpdated = (updatedWs: Workspace) => {
-      console.log('📡 [SOCKET] workspace_updated:', updatedWs);
-      setWorkspaces(prev => prev.map(w => w.id === updatedWs.id ? updatedWs : w));
-    };
-
-    socket.on('workspace_created', handleWorkspaceCreated);
-    socket.on('workspace_deleted', handleWorkspaceDeleted);
-    socket.on('workspace_updated', handleWorkspaceUpdated);
-
-    const refreshTrigger = () => {
-      // Re-fetch workspaces for non-admins when visibility updates
-      if (user?.role !== 'admin') {
-        fetchWorkspaces();
+    const handleTaskCreated = () => {
+      if (activeTab === 'summary') {
+        fetchKPIStats();
+        Object.keys(expandedAccordions).forEach(status => {
+          if (expandedAccordions[status]) fetchAccordionTasks(status);
+        });
+      } else if (activeTab === 'tasks' && activeSubView !== 'workspaces') {
+        fetchTab1Tasks();
       }
     };
-    socket.on('task_created', refreshTrigger);
-    socket.on('task_updated', refreshTrigger);
-    socket.on('task_deleted', refreshTrigger);
+
+    const handleTaskUpdated = () => {
+      handleTaskCreated();
+    };
+
+    const handleTaskDeleted = () => {
+      handleTaskCreated();
+    };
+
+    const handleWorkspaceChange = () => {
+      fetchWorkspaces();
+    };
+
+    socket.on('task_created', handleTaskCreated);
+    socket.on('task_updated', handleTaskUpdated);
+    socket.on('task_deleted', handleTaskDeleted);
+    socket.on('workspace_created', handleWorkspaceChange);
+    socket.on('workspace_updated', handleWorkspaceChange);
+    socket.on('workspace_deleted', handleWorkspaceChange);
 
     return () => {
-      socket.off('workspace_created', handleWorkspaceCreated);
-      socket.off('workspace_deleted', handleWorkspaceDeleted);
-      socket.off('workspace_updated', handleWorkspaceUpdated);
-      socket.off('task_created', refreshTrigger);
-      socket.off('task_updated', refreshTrigger);
-      socket.off('task_deleted', refreshTrigger);
+      socket.off('task_created', handleTaskCreated);
+      socket.off('task_updated', handleTaskUpdated);
+      socket.off('task_deleted', handleTaskDeleted);
+      socket.off('workspace_created', handleWorkspaceChange);
+      socket.off('workspace_updated', handleWorkspaceChange);
+      socket.off('workspace_deleted', handleWorkspaceChange);
     };
-  }, [socket, user]);
+  }, [socket, activeTab, activeSubView, expandedAccordions]);
 
+  // Pending scroll to task handler in Tab 1
+  useEffect(() => {
+    if (pendingScrollTaskId && tab1Tasks.length > 0 && activeTab === 'tasks') {
+      const index = tab1Tasks.findIndex(t => t.id === pendingScrollTaskId);
+      if (index !== -1) {
+        setPendingScrollTaskId(null);
+        setHighlightedTaskId(pendingScrollTaskId);
+        const clickedTask = tab1Tasks[index];
+        setSelectedTask(clickedTask);
+        setIsDetailModalOpen(true);
+
+        setTimeout(() => {
+          flatListRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.5 });
+        }, 200);
+
+        setTimeout(() => {
+          setHighlightedTaskId(null);
+        }, 3000);
+      } else if (activeSubView === 'my_tasks') {
+        // Fallback to all tasks if not found in my_tasks
+        setActiveSubView('all_tasks');
+      }
+    }
+  }, [tab1Tasks, pendingScrollTaskId, activeTab, activeSubView]);
+
+  // Workspace controls Handlers
   const handleToggleMember = (userId: number) => {
     setSelectedMembers(prev => {
-      if (prev.includes(userId)) {
-        return prev.filter(id => id !== userId);
-      } else {
-        return [...prev, userId];
-      }
+      if (prev.includes(userId)) return prev.filter(id => id !== userId);
+      return [...prev, userId];
+    });
+  };
+
+  const handleToggleEditMember = (userId: number) => {
+    setEditSelectedMembers(prev => {
+      if (prev.includes(userId)) return prev.filter(id => id !== userId);
+      return [...prev, userId];
     });
   };
 
@@ -169,28 +529,14 @@ export default function WorkspaceScreen() {
         setIsWorkspaceModalOpen(false);
         setNewWorkspaceName('');
         setSelectedMembers([]);
-        
-        // Điều hướng trực tiếp sang bảng cơ sở dữ liệu vừa tạo!
         router.push(`/workspace/${newWs.id}` as any);
-      } else {
-        alert(result.message || 'Không thể tạo trang mới.');
       }
     } catch (err) {
       console.error(err);
-      alert('Có lỗi mạng xảy ra.');
+      alert('Lỗi tạo trang mới.');
     } finally {
       setCreatingWorkspace(false);
     }
-  };
-
-  const handleToggleEditMember = (userId: number) => {
-    setEditSelectedMembers(prev => {
-      if (prev.includes(userId)) {
-        return prev.filter(id => id !== userId);
-      } else {
-        return [...prev, userId];
-      }
-    });
   };
 
   const handleOpenEditWorkspaceModal = async (ws: Workspace) => {
@@ -207,7 +553,7 @@ export default function WorkspaceScreen() {
         setEditSelectedMembers(memberIds);
       }
     } catch (err) {
-      console.error('Lỗi tải thành viên trang:', err);
+      console.error(err);
     }
   };
 
@@ -229,12 +575,10 @@ export default function WorkspaceScreen() {
         setEditingWorkspace(null);
         setEditWorkspaceName('');
         setEditSelectedMembers([]);
-      } else {
-        alert(result.message || 'Không thể sửa thông tin trang.');
       }
     } catch (err) {
       console.error(err);
-      alert('Có lỗi mạng xảy ra.');
+      alert('Lỗi sửa trang.');
     } finally {
       setUpdatingWorkspace(false);
     }
@@ -249,8 +593,6 @@ export default function WorkspaceScreen() {
         const result = await res.json();
         if (result.status === 'success') {
           setWorkspaces(prev => prev.filter(w => w.id !== id));
-        } else {
-          alert(result.message || 'Lỗi khi xóa trang.');
         }
       } catch (err) {
         console.error(err);
@@ -258,114 +600,466 @@ export default function WorkspaceScreen() {
       }
     };
 
-    const msg = `Bạn có chắc chắn muốn xóa trang "${name}" và toàn bộ công việc bên trong không? Hành động này không thể hoàn tác.`;
-
+    const msg = `Bạn có chắc chắn muốn xóa trang "${name}" và toàn bộ công việc bên trong không?`;
     if (Platform.OS === 'web') {
-      if (window.confirm(msg)) {
-        doDelete();
-      }
+      if (window.confirm(msg)) doDelete();
     } else {
-      Alert.alert(
-        "Xác nhận xóa trang",
-        msg,
-        [
-          { text: "Hủy", style: "cancel" },
-          { text: "Xóa", style: "destructive", onPress: doDelete }
-        ]
-      );
+      Alert.alert("Xác nhận xóa", msg, [
+        { text: "Hủy", style: "cancel" },
+        { text: "Xóa", style: "destructive", onPress: doDelete }
+      ]);
     }
   };
+
+  const handleToggleAccordion = useCallback((status: string) => {
+    const willExpand = !expandedAccordions[status];
+    setExpandedAccordions(prev => ({ ...prev, [status]: willExpand }));
+    if (willExpand) {
+      fetchAccordionTasks(status);
+    }
+  }, [expandedAccordions]);
+
+  // Click task in Tab 2 flow
+  const handleTaskClickFromSummary = useCallback((task: Task) => {
+    const isMine = task.assigned_to === user?.id || task.created_by === user?.id || task.assignees?.some(a => a.user_id === user?.id);
+    setActiveSubView(isMine ? 'my_tasks' : 'all_tasks');
+    setPendingScrollTaskId(task.id);
+    setActiveTab('tasks');
+  }, [user]);
+
+  const handleKPIPress = useCallback((status: string) => {
+    setExpandedAccordions(prev => ({ ...prev, [status]: true }));
+    fetchAccordionTasks(status);
+    
+    setTimeout(() => {
+      const y = accordionYRefs.current[status];
+      if (y !== undefined) {
+        scrollContainerRefTab2.current?.scrollTo({ y, animated: true });
+      }
+      setHighlightedAccordion(status);
+      setTimeout(() => {
+        setHighlightedAccordion(null);
+      }, 3000);
+    }, 150);
+  }, []);
+
+  const handleTaskUpdated = useCallback((updated: Task) => {
+    // Refresh both views
+    fetchKPIStats();
+    fetchTab1Tasks();
+    Object.keys(expandedAccordions).forEach(status => {
+      if (expandedAccordions[status]) fetchAccordionTasks(status);
+    });
+  }, [expandedAccordions]);
+
+  const handleTaskDeleted = useCallback((taskId: number) => {
+    handleTaskUpdated({} as Task);
+  }, [handleTaskUpdated]);
 
   const isAdmin = user?.role === 'admin';
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
-      {/* 1. Header */}
-      <View style={[styles.header, { borderColor: colors.border }]}>
-        <View style={styles.headerTitleRow}>
-          <Ionicons name="folder-open-outline" size={24} color={colors.tint} style={{ marginRight: 8 }} />
-          <Text style={[styles.headerTitle, { color: colors.text }]}>Công việc</Text>
-        </View>
-        
-        {/* Admin only: Thêm trang */}
-        {isAdmin && (
-          <TouchableOpacity
-            style={[styles.addWorkspaceBtn, { backgroundColor: colors.tint }]}
-            onPress={() => setIsWorkspaceModalOpen(true)}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="add" size={18} color="#ffffff" style={{ marginRight: 2 }} />
-            <Text style={styles.addWorkspaceBtnText}>Thêm trang</Text>
-          </TouchableOpacity>
-        )}
+      {/* Main Tabs Header */}
+      <View style={[styles.mainTabsHeader, { borderBottomColor: colors.border }]}>
+        <TouchableOpacity 
+          style={[styles.mainTabBtn, activeTab === 'tasks' && { borderBottomColor: colors.tint }]}
+          onPress={() => setActiveTab('tasks')}
+        >
+          <Text style={[styles.mainTabBtnText, { color: activeTab === 'tasks' ? colors.tint : colors.tabIconDefault }]}>
+            Công việc
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity 
+          style={[styles.mainTabBtn, activeTab === 'summary' && { borderBottomColor: colors.tint }]}
+          onPress={() => setActiveTab('summary')}
+        >
+          <Text style={[styles.mainTabBtnText, { color: activeTab === 'summary' ? colors.tint : colors.tabIconDefault }]}>
+            Tổng hợp
+          </Text>
+        </TouchableOpacity>
       </View>
 
-      {/* 2. Loading State */}
-      {loading && workspaces.length === 0 ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={colors.tint} />
-          <Text style={[styles.loadingText, { color: colors.tabIconDefault }]}>Đang tải không gian làm việc...</Text>
-        </View>
-      ) : (
-        <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
-          {workspaces.length === 0 ? (
-            <View style={styles.emptyContainer}>
-              <View style={[styles.emptyIconBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <Ionicons name="briefcase-outline" size={48} color={colors.tabIconDefault} />
+      {/* TAB 1: CÔNG VIỆC */}
+      {activeTab === 'tasks' && (
+        <View style={{ flex: 1 }}>
+
+
+          {/* Sub-view rendering */}
+          {activeSubView === 'workspaces' ? (
+            /* Original Workspaces list */
+            <View style={{ flex: 1 }}>
+              <View style={[styles.workspaceHeaderRow, { borderBottomColor: colors.border }]}>
+                <Text style={[styles.workspaceSectionTitle, { color: colors.text }]}>Các không gian làm việc</Text>
+                {isAdmin && (
+                  <TouchableOpacity
+                    style={[styles.addWorkspaceBtn, { backgroundColor: colors.tint }]}
+                    onPress={() => setIsWorkspaceModalOpen(true)}
+                  >
+                    <Ionicons name="add" size={16} color="#ffffff" style={{ marginRight: 2 }} />
+                    <Text style={styles.addWorkspaceBtnText}>Thêm trang</Text>
+                  </TouchableOpacity>
+                )}
               </View>
-              <Text style={[styles.emptyTitle, { color: colors.text }]}>Không có trang công việc nào</Text>
-              <Text style={[styles.emptySubtitle, { color: colors.tabIconDefault }]}>
-                {isAdmin
-                  ? 'Bấm nút "+ Thêm trang" ở góc trên để tạo mới không gian quản lý công việc.'
-                  : 'Không có nhiệm vụ nào được giao cho bạn hiện tại.'}
-              </Text>
+
+              {loadingWorkspaces ? (
+                <View style={styles.centerContainer}>
+                  <ActivityIndicator size="large" color={colors.tint} />
+                </View>
+              ) : workspaces.length === 0 ? (
+                <View style={styles.centerContainer}>
+                  <Text style={{ color: colors.tabIconDefault, fontSize: 13.5 }}>Chưa có không gian làm việc nào.</Text>
+                </View>
+              ) : (
+                <ScrollView contentContainerStyle={{ padding: 16 }}>
+                  <View style={{ gap: 10 }}>
+                    {workspaces.map(ws => (
+                      <TouchableOpacity
+                        key={ws.id}
+                        style={[styles.workspaceCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+                        onPress={() => router.push(`/workspace/${ws.id}` as any)}
+                        activeOpacity={0.7}
+                      >
+                        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                          <Ionicons name="briefcase-outline" size={18} color={colors.tint} style={{ marginRight: 10 }} />
+                          <Text style={[styles.workspaceNameText, { color: colors.text }]} numberOfLines={1}>
+                            {ws.name}
+                          </Text>
+                        </View>
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          {isAdmin && (
+                            <>
+                              <TouchableOpacity 
+                                style={{ padding: 6, marginRight: 4 }}
+                                onPress={(e) => { e.stopPropagation(); handleOpenEditWorkspaceModal(ws); }}
+                              >
+                                <Ionicons name="create-outline" size={18} color={colors.tint} />
+                              </TouchableOpacity>
+                              <TouchableOpacity 
+                                style={{ padding: 6, marginRight: 8 }}
+                                onPress={(e) => { e.stopPropagation(); handleDeleteWorkspace(ws.id, ws.name); }}
+                              >
+                                <Ionicons name="trash-outline" size={18} color="#ef4444" />
+                              </TouchableOpacity>
+                            </>
+                          )}
+                          <Ionicons name="chevron-forward" size={16} color={colors.tabIconDefault} />
+                        </View>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </ScrollView>
+              )}
             </View>
           ) : (
-            <View style={styles.listContainer}>
-              {workspaces.map(ws => (
-                <TouchableOpacity
-                  key={ws.id}
-                  style={[styles.workspaceItemCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                  onPress={() => router.push(`/workspace/${ws.id}` as any)}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.workspaceItemLeft}>
-                    <Ionicons name="document-text" size={20} color="#059669" style={{ marginRight: 12 }} />
-                    <Text style={[styles.workspaceName, { color: colors.text }]}>{ws.name}</Text>
-                  </View>
-                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    {isAdmin && (
-                      <>
-                        <TouchableOpacity 
-                          style={{ padding: 8, marginRight: 4 }}
-                          onPress={(e) => {
-                            e.stopPropagation(); // Prevents navigating to the workspace
-                            handleOpenEditWorkspaceModal(ws);
-                          }}
-                        >
-                          <Ionicons name="create-outline" size={18} color={colors.tint} />
-                        </TouchableOpacity>
-                        <TouchableOpacity 
-                          style={{ padding: 8, marginRight: 8 }}
-                          onPress={(e) => {
-                            e.stopPropagation(); // Prevents navigating to the workspace
-                            handleDeleteWorkspace(ws.id, ws.name);
-                          }}
-                        >
-                          <Ionicons name="trash-outline" size={18} color={colors.danger || '#ef4444'} />
-                        </TouchableOpacity>
-                      </>
-                    )}
-                    <Ionicons name="chevron-forward" size={16} color={colors.tabIconDefault} />
-                  </View>
-                </TouchableOpacity>
-              ))}
+            /* Tasks Lists (FlatList) */
+            <View style={{ flex: 1 }}>
+              {/* Simple Tab 1 Search */}
+              <View style={styles.searchBarContainer}>
+                <Ionicons name="search-outline" size={18} color={colors.tabIconDefault} style={{ marginRight: 8 }} />
+                <TextInput
+                  style={[styles.searchBarInput, { color: colors.text }]}
+                  placeholder="Tìm kiếm nhiệm vụ..."
+                  placeholderTextColor={colors.tabIconDefault}
+                  value={searchQueryTab1}
+                  onChangeText={setSearchQueryTab1}
+                />
+                {searchQueryTab1.length > 0 && (
+                  <TouchableOpacity onPress={() => setSearchQueryTab1('')}>
+                    <Ionicons name="close-circle" size={18} color={colors.tabIconDefault} />
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {tab1Loading ? (
+                <View style={styles.centerContainer}>
+                  <ActivityIndicator size="large" color={colors.tint} />
+                </View>
+              ) : tab1Tasks.length === 0 ? (
+                <View style={styles.centerContainer}>
+                  <Ionicons name="file-tray-outline" size={48} color={colors.tabIconDefault} style={{ marginBottom: 12 }} />
+                  <Text style={{ color: colors.tabIconDefault, fontSize: 13.5 }}>Không tìm thấy nhiệm vụ nào.</Text>
+                </View>
+              ) : (
+                <FlatList
+                  ref={flatListRef}
+                  data={tab1Tasks}
+                  keyExtractor={item => item.id.toString()}
+                  getItemLayout={(data, index) => ({ length: 95, offset: 95 * index, index })}
+                  onScrollToIndexFailed={(info) => {
+                    const wait = new Promise(resolve => setTimeout(resolve, 50));
+                    wait.then(() => {
+                      flatListRef.current?.scrollToIndex({ index: info.index, animated: true, viewPosition: 0.5 });
+                    });
+                  }}
+                  contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
+                  renderItem={({ item }) => (
+                    <TaskItem
+                      task={item}
+                      colors={colors}
+                      isHighlighted={item.id === highlightedTaskId}
+                      onPress={() => {
+                        setSelectedTask(item);
+                        setIsDetailModalOpen(true);
+                      }}
+                    />
+                  )}
+                />
+              )}
             </View>
           )}
+        </View>
+      )}
+
+      {/* TAB 2: TỔNG HỢP */}
+      {activeTab === 'summary' && (
+        <ScrollView 
+          ref={scrollContainerRefTab2} 
+          style={{ flex: 1 }} 
+          contentContainerStyle={{ paddingBottom: 100 }}
+        >
+          {/* KPI Statistics */}
+          <Text style={[styles.sectionTitleHeader, { color: colors.text }]}>Thống kê nhanh</Text>
+          {kpiLoading ? (
+            <ActivityIndicator size="small" color={colors.tint} style={{ marginVertical: 14 }} />
+          ) : (
+            <View style={styles.kpiGridContainer}>
+              <TouchableOpacity style={[styles.kpiBox, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => handleKPIPress('all')}>
+                <Text style={[styles.kpiBoxLabel, { color: colors.tabIconDefault }]}>Tổng việc</Text>
+                <Text style={[styles.kpiBoxVal, { color: '#2563eb' }]}>{kpiStats.total}</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={[styles.kpiBox, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => handleKPIPress('not_started')}>
+                <Text style={[styles.kpiBoxLabel, { color: colors.tabIconDefault }]}>Chưa làm</Text>
+                <Text style={[styles.kpiBoxVal, { color: '#4b5563' }]}>{kpiStats.pending}</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={[styles.kpiBox, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => handleKPIPress('in_progress')}>
+                <Text style={[styles.kpiBoxLabel, { color: colors.tabIconDefault }]}>Đang làm</Text>
+                <Text style={[styles.kpiBoxVal, { color: '#0284c7' }]}>{kpiStats.in_progress}</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={[styles.kpiBox, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => handleKPIPress('waiting_approval')}>
+                <Text style={[styles.kpiBoxLabel, { color: colors.tabIconDefault }]}>Chờ duyệt</Text>
+                <Text style={[styles.kpiBoxVal, { color: '#d97706' }]}>{kpiStats.waiting_approval}</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={[styles.kpiBox, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => handleKPIPress('revision_required')}>
+                <Text style={[styles.kpiBoxLabel, { color: colors.tabIconDefault }]}>Làm lại</Text>
+                <Text style={[styles.kpiBoxVal, { color: '#dc2626' }]}>{kpiStats.revision_required}</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={[styles.kpiBox, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => handleKPIPress('completed')}>
+                <Text style={[styles.kpiBoxLabel, { color: colors.tabIconDefault }]}>Hoàn thành</Text>
+                <Text style={[styles.kpiBoxVal, { color: '#059669' }]}>{kpiStats.completed}</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Quick Filters */}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.quickFilterBar} contentContainerStyle={{ gap: 8, paddingRight: 24 }}>
+            <TouchableOpacity 
+              style={[styles.quickFilterChip, quickFilter === 'all' && [styles.quickFilterChipActive, { backgroundColor: colors.tint }]]}
+              onPress={() => setQuickFilter('all')}
+            >
+              <Text style={{ fontSize: 12, fontWeight: '700', color: quickFilter === 'all' ? '#ffffff' : colors.text }}>Tất cả</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={[styles.quickFilterChip, quickFilter === 'my_tasks' && [styles.quickFilterChipActive, { backgroundColor: colors.tint }]]}
+              onPress={() => setQuickFilter('my_tasks')}
+            >
+              <Text style={{ fontSize: 12, fontWeight: '700', color: quickFilter === 'my_tasks' ? '#ffffff' : colors.text }}>Của tôi</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={[styles.quickFilterChip, quickFilter === 'assigned_to_me' && [styles.quickFilterChipActive, { backgroundColor: colors.tint }]]}
+              onPress={() => setQuickFilter('assigned_to_me')}
+            >
+              <Text style={{ fontSize: 12, fontWeight: '700', color: quickFilter === 'assigned_to_me' ? '#ffffff' : colors.text }}>Được giao</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={[styles.quickFilterChip, quickFilter === 'created_by_me' && [styles.quickFilterChipActive, { backgroundColor: colors.tint }]]}
+              onPress={() => setQuickFilter('created_by_me')}
+            >
+              <Text style={{ fontSize: 12, fontWeight: '700', color: quickFilter === 'created_by_me' ? '#ffffff' : colors.text }}>Tôi tạo</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={[styles.quickFilterChip, quickFilter === 'overdue' && [styles.quickFilterChipActive, { backgroundColor: colors.tint }]]}
+              onPress={() => setQuickFilter('overdue')}
+            >
+              <Text style={{ fontSize: 12, fontWeight: '700', color: quickFilter === 'overdue' ? '#ffffff' : colors.text }}>Quá hạn ⏳</Text>
+            </TouchableOpacity>
+          </ScrollView>
+
+          {/* Advanced Filters */}
+          <View style={styles.filtersBox}>
+            <TextInput
+              style={[styles.advancedSearchInput, { borderColor: colors.border, color: colors.text, backgroundColor: colors.card }]}
+              placeholder="🔍 Tìm theo tiêu đề hoặc mô tả..."
+              placeholderTextColor={colors.tabIconDefault}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+            />
+
+            <View style={styles.filtersRow}>
+              {/* Workspace filter */}
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+                <TouchableOpacity 
+                  style={[styles.filterSelectBtn, !selectedWorkspace && { borderColor: colors.tint }]}
+                  onPress={() => setSelectedWorkspace(null)}
+                >
+                  <Text style={{ fontSize: 11, color: !selectedWorkspace ? colors.tint : colors.text }}>Tất cả dự án</Text>
+                </TouchableOpacity>
+                {workspaces.map(ws => (
+                  <TouchableOpacity
+                    key={ws.id}
+                    style={[styles.filterSelectBtn, selectedWorkspace === ws.id && { borderColor: colors.tint }]}
+                    onPress={() => setSelectedWorkspace(ws.id)}
+                  >
+                    <Text style={{ fontSize: 11, color: selectedWorkspace === ws.id ? colors.tint : colors.text }}>
+                      {ws.name}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+                {/* Priority filter */}
+                <TouchableOpacity 
+                  style={[styles.filterSelectBtn, !selectedPriority && { borderColor: colors.tint }]}
+                  onPress={() => setSelectedPriority(null)}
+                >
+                  <Text style={{ fontSize: 11, color: !selectedPriority ? colors.tint : colors.text }}>Mức độ</Text>
+                </TouchableOpacity>
+                {['low', 'medium', 'high'].map(p => (
+                  <TouchableOpacity
+                    key={p}
+                    style={[styles.filterSelectBtn, selectedPriority === p && { borderColor: colors.tint }]}
+                    onPress={() => setSelectedPriority(p)}
+                  >
+                    <Text style={{ fontSize: 11, color: selectedPriority === p ? colors.tint : colors.text }}>
+                      {p === 'low' ? 'Thấp' : p === 'medium' ? 'Trung bình' : 'Cao'}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          </View>
+
+          {/* Accordion Lists */}
+          <Text style={[styles.sectionTitleHeader, { color: colors.text, marginTop: 16 }]}>Trạng thái công việc</Text>
+          <View style={{ paddingHorizontal: 16, gap: 12 }}>
+            {[
+              { id: 'all', label: 'Tổng việc', icon: 'folder-open-outline', color: '#2563eb' },
+              { id: 'not_started', label: 'Chưa bắt đầu', icon: 'ellipse-outline', color: '#4b5563' },
+              { id: 'in_progress', label: 'Đang làm', icon: 'sync-outline', color: '#0284c7' },
+              { id: 'waiting_approval', label: 'Chờ duyệt', icon: 'hourglass-outline', color: '#d97706' },
+              { id: 'revision_required', label: 'Làm lại', icon: 'refresh-circle-outline', color: '#dc2626' },
+              { id: 'completed', label: 'Hoàn thành', icon: 'checkmark-done-circle-outline', color: '#059669' },
+            ].map(accordion => {
+              const isExpanded = !!expandedAccordions[accordion.id];
+              const tasks = accordionTasks[accordion.id] || [];
+              const isLoading = !!accordionLoading[accordion.id];
+              const isHighlighted = highlightedAccordion === accordion.id;
+
+              return (
+                <View 
+                  key={accordion.id}
+                  onLayout={e => {
+                    accordionYRefs.current[accordion.id] = e.nativeEvent.layout.y;
+                  }}
+                  style={[
+                    styles.accordionBox, 
+                    { 
+                      backgroundColor: isHighlighted ? '#fffbeb' : colors.card,
+                      borderColor: isHighlighted ? '#f59e0b' : colors.border,
+                      borderWidth: isHighlighted ? 1.5 : 1
+                    }
+                  ]}
+                >
+                  {/* Accordion Header */}
+                  <TouchableOpacity
+                    style={styles.accordionHeader}
+                    onPress={() => handleToggleAccordion(accordion.id)}
+                    activeOpacity={0.8}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <Ionicons name={accordion.icon as any} size={18} color={accordion.color} style={{ marginRight: 8 }} />
+                      <Text style={[styles.accordionTitleText, { color: colors.text }]}>
+                        {accordion.label}
+                      </Text>
+                    </View>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      {isLoading && <ActivityIndicator size="small" color={colors.tint} style={{ marginRight: 10 }} />}
+                      <Ionicons 
+                        name={isExpanded ? 'chevron-down' : 'chevron-forward'} 
+                        size={16} 
+                        color={colors.tabIconDefault} 
+                      />
+                    </View>
+                  </TouchableOpacity>
+
+                  {/* Accordion Body (Lazy loaded) */}
+                  {isExpanded && (
+                    <View style={styles.accordionBody}>
+                      {isLoading && tasks.length === 0 ? (
+                        <View style={{ paddingVertical: 20 }}>
+                          <ActivityIndicator size="small" color={colors.tint} />
+                        </View>
+                      ) : tasks.length === 0 ? (
+                        <Text style={{ fontSize: 12.5, color: colors.tabIconDefault, fontStyle: 'italic', paddingVertical: 14, textAlign: 'center' }}>
+                          Không tìm thấy nhiệm vụ nào ở trạng thái này.
+                        </Text>
+                      ) : (
+                        <View style={{ gap: 8, marginTop: 8 }}>
+                          {tasks.map(t => (
+                            <TouchableOpacity
+                              key={t.id}
+                              style={[styles.accordionTaskCard, { borderColor: colors.border }]}
+                              onPress={() => handleTaskClickFromSummary(t)}
+                              activeOpacity={0.7}
+                            >
+                              <View style={{ flex: 1 }}>
+                                <Text style={[styles.accordionTaskTitle, { color: colors.text }]} numberOfLines={1}>
+                                  {t.title}
+                                </Text>
+                                <Text style={{ fontSize: 11, color: colors.tabIconDefault, marginTop: 2 }}>
+                                  👤 Giao cho: {t.assignee_name || (t.assignees && t.assignees.length > 0 ? t.assignees.map(a => a.name).join(', ') : 'Chưa gán')}
+                                </Text>
+                              </View>
+                              <Ionicons name="arrow-forward-outline" size={16} color={colors.tabIconDefault} />
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      )}
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+          </View>
         </ScrollView>
       )}
 
-      {/* 3. Modal: Thêm Trang và chọn người giao việc trong nội bộ (Workspace) */}
+      {/* Shared Task Detail Modal */}
+      <TaskDetailModal
+        visible={isDetailModalOpen}
+        onClose={() => {
+          setIsDetailModalOpen(false);
+          setSelectedTask(null);
+        }}
+        task={selectedTask}
+        onTaskUpdated={handleTaskUpdated}
+        onTaskDeleted={handleTaskDeleted}
+      />
+
+      {/* Modal: Thêm Trang */}
       <Modal
         visible={isWorkspaceModalOpen}
         animationType="slide"
@@ -380,11 +1074,10 @@ export default function WorkspaceScreen() {
           <View style={[styles.modalCard, { backgroundColor: colors.card }]}>
             <Text style={[styles.modalTitle, { color: colors.text }]}>Thêm trang mới</Text>
             
-            {/* Page Name Input */}
             <Text style={[styles.inputLabel, { color: colors.text }]}>Tên trang *</Text>
             <TextInput
               style={[styles.textInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.background }]}
-              placeholder="Ví dụ: PHÚC, PCB, BANNER..."
+              placeholder="Ví dụ: PHÚC, BANNER..."
               placeholderTextColor={colors.tabIconDefault}
               value={newWorkspaceName}
               onChangeText={setNewWorkspaceName}
@@ -392,12 +1085,11 @@ export default function WorkspaceScreen() {
               autoFocus
             />
 
-            {/* Internal Members Picker */}
-            <Text style={[styles.inputLabel, { color: colors.text, marginBottom: 8 }]}>Chọn thành viên tham gia nội bộ</Text>
+            <Text style={[styles.inputLabel, { color: colors.text, marginBottom: 8 }]}>Chọn thành viên tham gia</Text>
             {usersList.length === 0 ? (
-              <Text style={[styles.emptyUsersText, { color: colors.tabIconDefault }]}>Không tìm thấy thành viên khác.</Text>
+              <Text style={{ fontStyle: 'italic', fontSize: 12, color: colors.tabIconDefault, marginBottom: 20 }}>Không tìm thấy thành viên khác.</Text>
             ) : (
-              <ScrollView style={styles.membersGridScroll} contentContainerStyle={styles.membersGridContainer} showsVerticalScrollIndicator={true}>
+              <ScrollView style={styles.membersGridScroll} contentContainerStyle={styles.membersGridContainer}>
                 {usersList.map(u => {
                   const isSelected = selectedMembers.includes(u.id);
                   return (
@@ -410,7 +1102,7 @@ export default function WorkspaceScreen() {
                       onPress={() => handleToggleMember(u.id)}
                       activeOpacity={0.6}
                     >
-                      <View style={styles.avatarWrapper}>
+                      <View style={{ position: 'relative' }}>
                         <Image
                           source={{ uri: u.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=50&h=50&q=80' }}
                           style={styles.memberAvatar}
@@ -430,7 +1122,6 @@ export default function WorkspaceScreen() {
               </ScrollView>
             )}
 
-            {/* Buttons */}
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={[styles.btnCancel, { borderColor: colors.border }]}
@@ -440,7 +1131,7 @@ export default function WorkspaceScreen() {
                   setSelectedMembers([]);
                 }}
               >
-                <Text style={[styles.btnCancelText, { color: colors.text }]}>Hủy</Text>
+                <Text style={{ color: colors.text, fontWeight: '700', fontSize: 13.5 }}>Hủy</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -451,7 +1142,7 @@ export default function WorkspaceScreen() {
                 {creatingWorkspace ? (
                   <ActivityIndicator size="small" color="#ffffff" />
                 ) : (
-                  <Text style={styles.btnSubmitText}>
+                  <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 13.5 }}>
                     {selectedMembers.length >= 2 ? 'Tạo nhóm' : 'Tạo'}
                   </Text>
                 )}
@@ -461,7 +1152,7 @@ export default function WorkspaceScreen() {
         </View>
       </Modal>
 
-      {/* Modal: Sửa tên trang */}
+      {/* Modal: Sửa Trang */}
       <Modal
         visible={isEditModalOpen}
         animationType="slide"
@@ -477,11 +1168,10 @@ export default function WorkspaceScreen() {
           <View style={[styles.modalCard, { backgroundColor: colors.card }]}>
             <Text style={[styles.modalTitle, { color: colors.text }]}>Chỉnh sửa trang</Text>
             
-            {/* Page Name Input */}
             <Text style={[styles.inputLabel, { color: colors.text }]}>Tên trang *</Text>
             <TextInput
               style={[styles.textInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.background }]}
-              placeholder="Ví dụ: PHÚC, PCB, BANNER..."
+              placeholder="Ví dụ: PHÚC, BANNER..."
               placeholderTextColor={colors.tabIconDefault}
               value={editWorkspaceName}
               onChangeText={setEditWorkspaceName}
@@ -489,12 +1179,11 @@ export default function WorkspaceScreen() {
               autoFocus
             />
 
-            {/* Internal Members Picker */}
-            <Text style={[styles.inputLabel, { color: colors.text, marginTop: 14, marginBottom: 8 }]}>Chọn thành viên tham gia nội bộ</Text>
+            <Text style={[styles.inputLabel, { color: colors.text, marginTop: 14, marginBottom: 8 }]}>Chọn thành viên tham gia</Text>
             {usersList.length === 0 ? (
-              <Text style={[styles.emptyUsersText, { color: colors.tabIconDefault }]}>Không tìm thấy thành viên khác.</Text>
+              <Text style={{ fontStyle: 'italic', fontSize: 12, color: colors.tabIconDefault, marginBottom: 20 }}>Không tìm thấy thành viên khác.</Text>
             ) : (
-              <ScrollView style={styles.membersGridScroll} contentContainerStyle={styles.membersGridContainer} showsVerticalScrollIndicator={true}>
+              <ScrollView style={styles.membersGridScroll} contentContainerStyle={styles.membersGridContainer}>
                 {usersList.map(u => {
                   const isSelected = editSelectedMembers.includes(u.id);
                   return (
@@ -507,7 +1196,7 @@ export default function WorkspaceScreen() {
                       onPress={() => handleToggleEditMember(u.id)}
                       activeOpacity={0.6}
                     >
-                      <View style={styles.avatarWrapper}>
+                      <View style={{ position: 'relative' }}>
                         <Image
                           source={{ uri: u.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=50&h=50&q=80' }}
                           style={styles.memberAvatar}
@@ -527,7 +1216,6 @@ export default function WorkspaceScreen() {
               </ScrollView>
             )}
 
-            {/* Buttons */}
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={[styles.btnCancel, { borderColor: colors.border }]}
@@ -538,7 +1226,7 @@ export default function WorkspaceScreen() {
                   setEditSelectedMembers([]);
                 }}
               >
-                <Text style={[styles.btnCancelText, { color: colors.text }]}>Hủy</Text>
+                <Text style={{ color: colors.text, fontWeight: '700', fontSize: 13.5 }}>Hủy</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -549,7 +1237,7 @@ export default function WorkspaceScreen() {
                 {updatingWorkspace ? (
                   <ActivityIndicator size="small" color="#ffffff" />
                 ) : (
-                  <Text style={styles.btnSubmitText}>Lưu</Text>
+                  <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 13.5 }}>Lưu</Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -567,130 +1255,242 @@ const styles = StyleSheet.create({
     maxWidth: 768,
     alignSelf: 'center',
   },
-  header: {
+  mainTabsHeader: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    height: 48,
+  },
+  mainTabBtn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderBottomWidth: 3,
+    borderBottomColor: 'transparent',
+  },
+  mainTabBtnText: {
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  subToggleBar: {
+    flexDirection: 'row',
+    marginHorizontal: 16,
+    marginTop: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  subToggleBtn: {
+    flex: 1,
+    height: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  subToggleBtnActive: {
+    borderRadius: 0,
+  },
+  subToggleBtnText: {
+    fontSize: 12.5,
+    fontWeight: '700',
+  },
+  workspaceHeaderRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingVertical: 14,
+    paddingVertical: 12,
     borderBottomWidth: 1,
   },
-  headerTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  headerTitle: {
-    fontSize: 18,
+  workspaceSectionTitle: {
+    fontSize: 14,
     fontWeight: '800',
   },
   addWorkspaceBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 10,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.1,
-        shadowRadius: 3,
-      },
-      android: {
-        elevation: 1,
-      },
-    }),
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
   },
   addWorkspaceBtnText: {
     color: '#ffffff',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 13,
-  },
-  scroll: {
-    flex: 1,
-  },
-  scrollContent: {
-    padding: 16,
-    paddingBottom: 100,
-  },
-  emptyContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 80,
-    paddingHorizontal: 30,
-  },
-  emptyIconBox: {
-    width: 90,
-    height: 90,
-    borderRadius: 30,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 20,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 6,
-      },
-      android: {
-        elevation: 1,
-      },
-    }),
-  },
-  emptyTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  emptySubtitle: {
-    fontSize: 13,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-  listContainer: {
-    gap: 10,
-  },
-  workspaceItemCard: {
+  workspaceCard: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     borderWidth: 1,
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.03,
-        shadowRadius: 3,
-      },
-      android: {
-        elevation: 1,
-      },
-    }),
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
   },
-  workspaceItemLeft: {
+  workspaceNameText: {
+    fontSize: 14,
+    fontWeight: '700',
+    flex: 1,
+  },
+  searchBarContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    flex: 1,
+    marginHorizontal: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    height: 38,
   },
-  workspaceName: {
-    fontSize: 15,
-    fontWeight: '800',
+  searchBarInput: {
     flex: 1,
+    fontSize: 13,
+    padding: 0,
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingTop: 80,
+  },
+  taskCardItem: {
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 8,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  taskCardTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  taskCardMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  taskCardWorkspace: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  miniBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  sectionTitleHeader: {
+    fontSize: 13.5,
+    fontWeight: '800',
+    marginHorizontal: 16,
+    marginTop: 14,
+    marginBottom: 10,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  kpiGridContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginHorizontal: 16,
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  kpiBox: {
+    width: '31%',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 10,
+    alignItems: 'center',
+  },
+  kpiBoxLabel: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    marginBottom: 4,
+    textAlign: 'center',
+  },
+  kpiBoxVal: {
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  quickFilterBar: {
+    marginTop: 14,
+    paddingLeft: 16,
+    height: 32,
+  },
+  quickFilterChip: {
+    paddingHorizontal: 12,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  quickFilterChipActive: {
+    borderColor: 'transparent',
+  },
+  filtersBox: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 14,
+  },
+  advancedSearchInput: {
+    height: 36,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    fontSize: 12.5,
+    marginBottom: 10,
+  },
+  filtersRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  filterSelectBtn: {
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  accordionBox: {
+    borderWidth: 1,
+    borderRadius: 14,
+    overflow: 'hidden',
+  },
+  accordionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  accordionTitleText: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  accordionBody: {
+    paddingHorizontal: 14,
+    paddingBottom: 14,
+    borderTopWidth: 0.5,
+    borderTopColor: '#e5e7eb',
+  },
+  accordionTaskCard: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 10,
+    backgroundColor: '#ffffff',
+  },
+  accordionTaskTitle: {
+    fontSize: 13,
+    fontWeight: '700',
   },
   modalOverlay: {
     flex: 1,
@@ -704,17 +1504,6 @@ const styles = StyleSheet.create({
     maxWidth: 360,
     borderRadius: 20,
     padding: 20,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.15,
-        shadowRadius: 12,
-      },
-      android: {
-        elevation: 6,
-      },
-    }),
   },
   modalTitle: {
     fontSize: 16,
@@ -733,7 +1522,6 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 14,
     fontSize: 13.5,
-    fontWeight: '500',
     marginBottom: 16,
   },
   membersGridScroll: {
@@ -743,12 +1531,6 @@ const styles = StyleSheet.create({
   membersGridContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    justifyContent: 'flex-start',
-  },
-  emptyUsersText: {
-    fontSize: 12,
-    fontStyle: 'italic',
-    marginBottom: 20,
   },
   memberGridItem: {
     alignItems: 'center',
@@ -760,10 +1542,6 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     width: '25%',
     marginBottom: 8,
-  },
-  avatarWrapper: {
-    position: 'relative',
-    marginBottom: 6,
   },
   memberAvatar: {
     width: 38,
@@ -801,20 +1579,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  btnCancelText: {
-    fontSize: 13.5,
-    fontWeight: '700',
-  },
   btnSubmit: {
     flex: 1,
     height: 44,
     borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  btnSubmitText: {
-    color: '#ffffff',
-    fontSize: 13.5,
-    fontWeight: '700',
   },
 });

@@ -1,5 +1,4 @@
-// frontend/components/GroupInfoModal.tsx
-import React, { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   StyleSheet,
   Text,

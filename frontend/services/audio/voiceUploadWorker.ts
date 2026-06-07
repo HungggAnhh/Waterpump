@@ -57,6 +57,9 @@ class VoiceUploadWorker {
   }
 
   async loadQueueFromStorage() {
+    if (Platform.OS === 'web' && typeof window === 'undefined') {
+      return;
+    }
     try {
       const stored = await AsyncStorage.getItem(QUEUE_KEY);
       if (stored) {
@@ -69,6 +72,9 @@ class VoiceUploadWorker {
   }
 
   private async saveQueueToStorage() {
+    if (Platform.OS === 'web' && typeof window === 'undefined') {
+      return;
+    }
     try {
       await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(this.queue));
       this.notifyListeners();

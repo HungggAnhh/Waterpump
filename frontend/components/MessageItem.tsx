@@ -1,6 +1,6 @@
 // frontend/components/MessageItem.tsx
 import React from 'react';
-import { StyleSheet, Text, View, Image, TouchableOpacity, Platform, Alert } from 'react-native';
+import { StyleSheet, Text, View, Image, TouchableOpacity, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import VoiceMessage from './VoiceMessage';
 

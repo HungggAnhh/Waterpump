@@ -1,5 +1,5 @@
 // frontend/app/(tabs)/index.tsx
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import {
   StyleSheet,
   Text,
@@ -31,6 +31,7 @@ interface User {
 
 interface KPIStats {
   total: number;
+  pending: number;
   in_progress: number;
   waiting_approval: number;
   revision_required: number;
@@ -47,6 +48,7 @@ export default function HomeScreen() {
   const [onlineUsers, setOnlineUsers] = useState<User[]>([]);
   const [stats, setStats] = useState<KPIStats>({
     total: 0,
+    pending: 0,
     in_progress: 0,
     waiting_approval: 0,
     revision_required: 0,
@@ -79,7 +81,7 @@ export default function HomeScreen() {
       const res = await fetch(`${API_BASE_URL}/tasks/stats`);
       const result = await res.json();
       if (result.status === 'success') {
-        setStats(result.data || { total: 0, in_progress: 0, waiting_approval: 0, revision_required: 0, completed: 0, completion_rate: 0 });
+        setStats(result.data || { total: 0, pending: 0, in_progress: 0, waiting_approval: 0, revision_required: 0, completed: 0, completion_rate: 0 });
       }
     } catch (err) {
       console.error('⚠️ [Home] Lỗi lấy KPI thống kê:', err);
@@ -203,7 +205,7 @@ export default function HomeScreen() {
               {/* Card 1: Tổng công việc */}
               <TouchableOpacity 
                 style={[styles.kpiCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                onPress={() => router.push('/tasks')}
+                onPress={() => router.push({ pathname: '/tasks', params: { tab: 'summary', status: 'all' } })}
                 activeOpacity={0.7}
               >
                 <View style={[styles.kpiIconWrapper, { backgroundColor: '#eff6ff' }]}>
@@ -215,10 +217,25 @@ export default function HomeScreen() {
                 </View>
               </TouchableOpacity>
 
-              {/* Card 2: Đang thực hiện */}
+              {/* Card 2: Chưa bắt đầu */}
               <TouchableOpacity 
                 style={[styles.kpiCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                onPress={() => router.push('/tasks')}
+                onPress={() => router.push({ pathname: '/tasks', params: { tab: 'summary', status: 'not_started' } })}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.kpiIconWrapper, { backgroundColor: '#f3f4f6' }]}>
+                  <Ionicons name="ellipse-outline" size={18} color="#4b5563" />
+                </View>
+                <View style={styles.kpiInfo}>
+                  <Text style={[styles.kpiTitle, { color: colors.tabIconDefault }]}>Chưa làm</Text>
+                  <Text style={[styles.kpiNumber, { color: colors.text }]}>{stats.pending}</Text>
+                </View>
+              </TouchableOpacity>
+
+              {/* Card 3: Đang thực hiện */}
+              <TouchableOpacity 
+                style={[styles.kpiCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+                onPress={() => router.push({ pathname: '/tasks', params: { tab: 'summary', status: 'in_progress' } })}
                 activeOpacity={0.7}
               >
                 <View style={[styles.kpiIconWrapper, { backgroundColor: '#e0f2fe' }]}>
@@ -230,10 +247,10 @@ export default function HomeScreen() {
                 </View>
               </TouchableOpacity>
 
-              {/* Card 3: Chờ duyệt */}
+              {/* Card 4: Chờ duyệt */}
               <TouchableOpacity 
                 style={[styles.kpiCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                onPress={() => router.push('/tasks')}
+                onPress={() => router.push({ pathname: '/tasks', params: { tab: 'summary', status: 'waiting_approval' } })}
                 activeOpacity={0.7}
               >
                 <View style={[styles.kpiIconWrapper, { backgroundColor: '#fef3c7' }]}>
@@ -245,10 +262,10 @@ export default function HomeScreen() {
                 </View>
               </TouchableOpacity>
 
-              {/* Card 4: Cần làm lại */}
+              {/* Card 5: Cần làm lại */}
               <TouchableOpacity 
                 style={[styles.kpiCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                onPress={() => router.push('/tasks')}
+                onPress={() => router.push({ pathname: '/tasks', params: { tab: 'summary', status: 'revision_required' } })}
                 activeOpacity={0.7}
               >
                 <View style={[styles.kpiIconWrapper, { backgroundColor: '#fee2e2' }]}>
@@ -260,17 +277,17 @@ export default function HomeScreen() {
                 </View>
               </TouchableOpacity>
 
-              {/* Card 5: Hoàn thành */}
+              {/* Card 6: Hoàn thành */}
               <TouchableOpacity 
-                style={[styles.kpiCard, { backgroundColor: colors.card, borderColor: colors.border, width: '100%' }]}
-                onPress={() => router.push('/tasks')}
+                style={[styles.kpiCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+                onPress={() => router.push({ pathname: '/tasks', params: { tab: 'summary', status: 'completed' } })}
                 activeOpacity={0.7}
               >
                 <View style={[styles.kpiIconWrapper, { backgroundColor: '#d1fae5' }]}>
                   <Ionicons name="checkmark-done-circle" size={18} color="#059669" />
                 </View>
                 <View style={styles.kpiInfo}>
-                  <Text style={[styles.kpiTitle, { color: colors.tabIconDefault }]}>Hoàn thành (Đã duyệt)</Text>
+                  <Text style={[styles.kpiTitle, { color: colors.tabIconDefault }]}>Hoàn thành</Text>
                   <Text style={[styles.kpiNumber, { color: colors.text }]}>{stats.completed}</Text>
                 </View>
               </TouchableOpacity>
