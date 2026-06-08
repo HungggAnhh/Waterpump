@@ -18,6 +18,7 @@ import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useUser } from '../../context/UserContext';
 import { useSocket } from '../../context/SocketContext';
+import { useNotifications } from '../../context/NotificationContext';
 
 interface User {
   id: number;
@@ -37,6 +38,7 @@ interface KPIStats {
   revision_required: number;
   completed: number;
   completion_rate: number;
+  viewed?: number;
 }
 
 export default function HomeScreen() {
@@ -44,6 +46,7 @@ export default function HomeScreen() {
   const colors = Colors[colorScheme ?? 'light'];
   const { user } = useUser();
   const { socket } = useSocket();
+  const { unreadCount, openDrawer } = useNotifications();
 
   const [onlineUsers, setOnlineUsers] = useState<User[]>([]);
   const [stats, setStats] = useState<KPIStats>({
@@ -54,6 +57,7 @@ export default function HomeScreen() {
     revision_required: 0,
     completed: 0,
     completion_rate: 0,
+    viewed: 0,
   });
   const [statsLoading, setStatsLoading] = useState(true);
 
@@ -81,7 +85,7 @@ export default function HomeScreen() {
       const res = await fetch(`${API_BASE_URL}/tasks/stats`);
       const result = await res.json();
       if (result.status === 'success') {
-        setStats(result.data || { total: 0, pending: 0, in_progress: 0, waiting_approval: 0, revision_required: 0, completed: 0, completion_rate: 0 });
+        setStats(result.data || { total: 0, pending: 0, in_progress: 0, waiting_approval: 0, revision_required: 0, completed: 0, completion_rate: 0, viewed: 0 });
       }
     } catch (err) {
       console.error('⚠️ [Home] Lỗi lấy KPI thống kê:', err);
@@ -150,10 +154,31 @@ export default function HomeScreen() {
             <Text style={[styles.welcomeSubtitle, { color: colors.tabIconDefault }]}>Chào mừng trở lại,</Text>
             <Text style={[styles.welcomeTitle, { color: colors.text }]}>{user?.name || 'Thành viên'} 👋</Text>
           </View>
-          <Image
-            source={{ uri: user?.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150&q=80' }}
-            style={styles.headerAvatar}
-          />
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <TouchableOpacity onPress={openDrawer} style={{ position: 'relative', padding: 6 }} activeOpacity={0.7}>
+              <Ionicons name="notifications-outline" size={24} color={colors.text} />
+              {unreadCount > 0 && (
+                <View style={{
+                  position: 'absolute',
+                  top: 2,
+                  right: 2,
+                  backgroundColor: '#ef4444',
+                  borderRadius: 8,
+                  minWidth: 16,
+                  height: 16,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  paddingHorizontal: 4,
+                }}>
+                  <Text style={{ color: '#ffffff', fontSize: 9, fontWeight: '800' }}>{unreadCount}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+            <Image
+              source={{ uri: user?.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150&q=80' }}
+              style={styles.headerAvatar}
+            />
+          </View>
         </View>
 
         {/* 2. PREMIUM KPI STATS CARDS */}
@@ -198,6 +223,73 @@ export default function HomeScreen() {
                 <Text style={{ fontSize: 18, fontWeight: '900', color: '#059669' }}>
                   {stats.completion_rate}%
                 </Text>
+              </View>
+            </View>
+
+            {/* Task Statistics Progress Bars Card */}
+            <View 
+              style={{
+                width: '100%',
+                borderWidth: 1,
+                borderRadius: 18,
+                padding: 16,
+                backgroundColor: colors.card,
+                borderColor: colors.border,
+                ...Platform.select({
+                  ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.03, shadowRadius: 4 },
+                  android: { elevation: 1 }
+                })
+              }}
+            >
+              <Text style={{ fontSize: 11.5, fontWeight: '700', color: colors.tabIconDefault, marginBottom: 14, letterSpacing: 0.5 }}>
+                TIẾN ĐỘ NHIỆM VỤ CHI TIẾT
+              </Text>
+              
+              <View style={{ gap: 12 }}>
+                {/* 1. Đã xem */}
+                <View>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <Text style={{ fontSize: 13, fontWeight: '600', color: colors.text }}>
+                      👀 Đã xem
+                    </Text>
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#d97706' }}>
+                      {stats.viewed || 0}/{stats.total || 0}
+                    </Text>
+                  </View>
+                  <View style={{ height: 6, width: '100%', backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden' }}>
+                    <View style={{ height: '100%', width: `${stats.total > 0 ? Math.round(((stats.viewed || 0) / stats.total) * 100) : 0}%`, backgroundColor: '#eab308', borderRadius: 3 }} />
+                  </View>
+                </View>
+
+                {/* 2. Đang làm */}
+                <View>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <Text style={{ fontSize: 13, fontWeight: '600', color: colors.text }}>
+                      🟢 Đang làm
+                    </Text>
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#0284c7' }}>
+                      {stats.in_progress || 0}/{stats.total || 0}
+                    </Text>
+                  </View>
+                  <View style={{ height: 6, width: '100%', backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden' }}>
+                    <View style={{ height: '100%', width: `${stats.total > 0 ? Math.round(((stats.in_progress || 0) / stats.total) * 100) : 0}%`, backgroundColor: '#0284c7', borderRadius: 3 }} />
+                  </View>
+                </View>
+
+                {/* 3. Hoàn thành */}
+                <View>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <Text style={{ fontSize: 13, fontWeight: '600', color: colors.text }}>
+                      ✅ Hoàn thành
+                    </Text>
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#10b981' }}>
+                      {stats.completed || 0}/{stats.total || 0}
+                    </Text>
+                  </View>
+                  <View style={{ height: 6, width: '100%', backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden' }}>
+                    <View style={{ height: '100%', width: `${stats.total > 0 ? Math.round(((stats.completed || 0) / stats.total) * 100) : 0}%`, backgroundColor: '#10b981', borderRadius: 3 }} />
+                  </View>
+                </View>
               </View>
             </View>
 

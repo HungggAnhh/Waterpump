@@ -75,7 +75,7 @@ router.get('/', async (req, res) => {
       attachment_duration: msg.attachment_duration ? parseInt(msg.attachment_duration) : null,
       attachment_mime_type: msg.attachment_mime_type,
       client_message_id: msg.client_message_id,
-      created_at:      new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      created_at:      msg.created_at,
       raw_time:        msg.created_at,
       reply_to:        msg.reply_to ? parseInt(msg.reply_to) : null,
       edited:          !!msg.edited,
@@ -212,16 +212,19 @@ router.post('/', async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) 
        ON CONFLICT (client_message_id) WHERE client_message_id IS NOT NULL 
        DO NOTHING 
-       RETURNING id`,
+       RETURNING id, created_at`,
       [parseInt(conversation_id), parseInt(sender_id), message, type, file_url, reply_to ? parseInt(reply_to) : null, !!forwarded, attachment_url, attachment_duration ? parseInt(attachment_duration) : null, attachment_mime_type, client_message_id]
     );
 
     let msgId;
+    let dbCreatedAt;
     if (insertRes.rows.length > 0) {
       msgId = insertRes.rows[0].id;
+      dbCreatedAt = insertRes.rows[0].created_at;
     } else {
-      const existingRes = await query('SELECT id FROM messages WHERE client_message_id = $1 LIMIT 1', [client_message_id]);
+      const existingRes = await query('SELECT id, created_at FROM messages WHERE client_message_id = $1 LIMIT 1', [client_message_id]);
       msgId = existingRes.rows[0]?.id;
+      dbCreatedAt = existingRes.rows[0]?.created_at;
     }
 
     // Auto-restore logic for direct conversation
@@ -369,8 +372,8 @@ router.post('/', async (req, res) => {
         attachment_duration: attachment_duration ? parseInt(attachment_duration) : null,
         attachment_mime_type,
         client_message_id,
-        created_at:      new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        raw_time:        new Date().toISOString(),
+        created_at:      dbCreatedAt || new Date().toISOString(),
+        raw_time:        dbCreatedAt || new Date().toISOString(),
         reply_to:        reply_to ? parseInt(reply_to) : null,
         forwarded:       !!forwarded,
         reactions:       []

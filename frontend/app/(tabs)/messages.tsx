@@ -22,6 +22,7 @@ import { API_BASE_URL, endpoints } from '@/constants/Config';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useUser } from '../../context/UserContext';
 import { useConversationStore, ChatThread } from '../../store/useConversationStore';
+import { useNotifications } from '../../context/NotificationContext';
 import { useOnlineStore } from '../../store/useOnlineStore';
 import { RelativeTime } from '../../components/RelativeTime';
 import { useShallow } from 'zustand/shallow';
@@ -133,6 +134,7 @@ export default function MessagesScreen() {
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
   const { user } = useUser();
+  const { unreadCount, openDrawer } = useNotifications();
 
   const currentUser = user || {
     id: 1,
@@ -361,6 +363,25 @@ export default function MessagesScreen() {
       <View style={styles.inboxHeader}>
         <Text style={[styles.inboxTitle, { color: colors.text }]}>Hộp thư của bạn</Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          <TouchableOpacity onPress={openDrawer} style={{ position: 'relative', padding: 6 }} activeOpacity={0.7}>
+            <Ionicons name="notifications-outline" size={24} color={colors.text} />
+            {unreadCount > 0 && (
+              <View style={{
+                position: 'absolute',
+                top: 2,
+                right: 2,
+                backgroundColor: '#ef4444',
+                borderRadius: 8,
+                minWidth: 16,
+                height: 16,
+                alignItems: 'center',
+                justifyContent: 'center',
+                paddingHorizontal: 4,
+              }}>
+                <Text style={{ color: '#ffffff', fontSize: 9, fontWeight: '800' }}>{unreadCount}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
           {currentUser.role === 'admin' && (
             <TouchableOpacity style={styles.newChatBtn} onPress={handleOpenCreateGroup}>
               <Ionicons name="people-circle-outline" size={24} color={colors.tint} />

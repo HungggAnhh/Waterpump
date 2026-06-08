@@ -24,6 +24,7 @@ import { useUser } from '@/context/UserContext';
 import { useSocket } from '@/context/SocketContext';
 import { API_BASE_URL } from '@/constants/Config';
 import VoiceMicButton from '../../../../components/VoiceMicButton';
+import { sortTasksStable } from '@/utils/taskSort';
 
 interface Task {
   id: number;
@@ -58,6 +59,8 @@ interface Task {
   revision_count?: number;
   created_at: string;
   updated_at?: string;
+  total_assignees?: number;
+  viewed_assignees_count?: number;
 }
 
 interface UserListItem {
@@ -574,17 +577,19 @@ export default function PageTasksScreen() {
   const isAdmin = user?.role === 'admin';
 
   // Apply Views Filter & Dropdown Status Filter
-  const filteredTasks = tasks.filter(task => {
-    // 1. My tasks filter
-    if (viewFilter === 'my_tasks' && task.assigned_to !== user?.id) {
-      return false;
-    }
-    // 2. Status dropdown filter
-    if (statusFilter !== 'all' && task.status !== statusFilter) {
-      return false;
-    }
-    return true;
-  });
+  const filteredTasks = sortTasksStable(
+    tasks.filter(task => {
+      // 1. My tasks filter
+      if (viewFilter === 'my_tasks' && task.assigned_to !== user?.id) {
+        return false;
+      }
+      // 2. Status dropdown filter
+      if (statusFilter !== 'all' && task.status !== statusFilter) {
+        return false;
+      }
+      return true;
+    })
+  );
 
   const getStatusText = (status: string) => {
     switch (status) {
@@ -958,7 +963,7 @@ export default function PageTasksScreen() {
                 >
                   {/* Column 1: Tên nhiệm vụ */}
                   <TouchableOpacity
-                    style={[styles.colCell, styles.colTitle, { borderRightColor: colors.border }]}
+                    style={[styles.colCell, styles.colTitle, { borderRightColor: colors.border, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}
                     onPress={() => {
                       setSelectedTask(task);
                       setIsDetailModalOpen(true);
@@ -968,12 +973,19 @@ export default function PageTasksScreen() {
                     <Text
                       style={[
                         styles.taskTitleText,
-                        { color: colors.text, textDecorationLine: task.completed ? 'line-through' : 'none' }
+                        { color: colors.text, textDecorationLine: task.completed ? 'line-through' : 'none', flex: 1 }
                       ]}
                       numberOfLines={1}
                     >
                       {task.title}
                     </Text>
+                    {task.total_assignees !== undefined && task.total_assignees > 0 && (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.border + '30', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8, marginLeft: 8 }}>
+                        <Text style={{ fontSize: 10, color: colors.tabIconDefault, fontWeight: '600' }}>
+                          👀 {task.viewed_assignees_count || 0}/{task.total_assignees}
+                        </Text>
+                      </View>
+                    )}
                   </TouchableOpacity>
 
                   {/* Column 2: Trạng thái */}
@@ -1012,9 +1024,11 @@ export default function PageTasksScreen() {
 
                       // Dynamic Status based on in progress members
                       const inProgressAssignees = (task.assignees || []).filter((a: any) => a.status === 'in_progress');
-                      const sColor = getStatusColor(inProgressAssignees.length > 0 ? 'in_progress' : 'todo');
+                      const currentStatus = task.approval_status || task.status;
+                      const isTaskInProgress = currentStatus === 'in_progress' || inProgressAssignees.length > 0;
+                      const sColor = getStatusColor(isTaskInProgress ? 'in_progress' : 'todo');
 
-                      if (inProgressAssignees.length === 0) {
+                      if (!isTaskInProgress) {
                         return (
                           <TouchableOpacity
                             style={[styles.notionStatusBadge, { backgroundColor: sColor.bg, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12 }]}
@@ -1051,9 +1065,27 @@ export default function PageTasksScreen() {
                           activeOpacity={0.7}
                         >
                           <View style={{ gap: 4, width: '100%' }}>
-                            {inProgressAssignees.map((a: any, idx: number) => (
+                            {inProgressAssignees.length > 0 ? (
+                              inProgressAssignees.map((a: any, idx: number) => (
+                                <View 
+                                  key={a.user_id || idx} 
+                                  style={[
+                                    styles.notionStatusBadge, 
+                                    { 
+                                      backgroundColor: sColor.bg, 
+                                      paddingHorizontal: 10, 
+                                      paddingVertical: 4, 
+                                      borderRadius: 12 
+                                    }
+                                  ]}
+                                >
+                                  <Text style={[styles.notionStatusText, { color: sColor.text, fontSize: 11, fontWeight: '700', lineHeight: 14 }]} numberOfLines={1}>
+                                    🟢 {a.name} đang thực hiện
+                                  </Text>
+                                </View>
+                              ))
+                            ) : (
                               <View 
-                                key={a.user_id || idx} 
                                 style={[
                                   styles.notionStatusBadge, 
                                   { 
@@ -1065,10 +1097,10 @@ export default function PageTasksScreen() {
                                 ]}
                               >
                                 <Text style={[styles.notionStatusText, { color: sColor.text, fontSize: 11, fontWeight: '700', lineHeight: 14 }]} numberOfLines={1}>
-                                  🟢 {a.name} đang thực hiện
+                                  🟢 Đang thực hiện
                                 </Text>
                               </View>
-                            ))}
+                            )}
                           </View>
                         </TouchableOpacity>
                       );

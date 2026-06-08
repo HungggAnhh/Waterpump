@@ -21,6 +21,7 @@ import { API_BASE_URL } from '@/constants/Config';
 import { useUser } from '@/context/UserContext';
 import { useSocket } from '@/context/SocketContext';
 import * as DocumentPicker from 'expo-document-picker';
+import { formatDateTime } from '../../utils/dateTime';
 
 const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
 
@@ -59,6 +60,8 @@ interface Task {
   approved_at?: string | null;
   revision_note?: string | null;
   revision_count?: number;
+  total_assignees?: number;
+  viewed_assignees_count?: number;
 }
 
 interface Comment {
@@ -114,7 +117,7 @@ export default function TaskDetailModal({
 }: TaskDetailModalProps) {
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
-  const { user } = useUser();
+  const { user, token } = useUser();
   const { socket } = useSocket();
 
   const [task, setTask] = useState<Task | null>(initialTask);
@@ -143,14 +146,76 @@ export default function TaskDetailModal({
   const [isUrgeModalOpen, setIsUrgeModalOpen] = useState(false);
   const [submittingUrge, setSubmittingUrge] = useState(false);
 
+  // Recipient Tracking states
+  interface Recipient {
+    id: number;
+    name: string;
+    avatar: string | null;
+    viewed: boolean;
+    first_viewed_at: string | null;
+    last_viewed_at: string | null;
+    status: 'not_viewed' | 'viewed' | 'in_progress' | 'waiting_approval' | 'revision_required' | 'completed';
+  }
+
+  interface RecipientData {
+    total: number;
+    viewed: number;
+    not_viewed: number;
+    in_progress: number;
+    waiting_approval: number;
+    completed: number;
+    users: Recipient[];
+  }
+
+  const [recipientsData, setRecipientsData] = useState<RecipientData | null>(null);
+  const [loadingRecipients, setLoadingRecipients] = useState(false);
+  const [isRecipientsDrawerOpen, setIsRecipientsDrawerOpen] = useState(false);
+  const [urgeTarget, setUrgeTarget] = useState<'all' | 'not_viewed' | 'not_started' | 'waiting_approval'>('not_viewed');
+
+  async function fetchRecipients(taskId: number) {
+    try {
+      setLoadingRecipients(true);
+      const res = await fetch(`${API_BASE_URL}/tasks/tasks/${taskId}/recipients`);
+      const result = await res.json();
+      if (result.success) {
+        setRecipientsData(result.data);
+      }
+    } catch (err) {
+      console.error('Error fetching recipients:', err);
+    } finally {
+      setLoadingRecipients(false);
+    }
+  }
+
   useEffect(() => {
     setTask(initialTask);
     if (initialTask) {
       fetchComments(initialTask.id);
       fetchAttachments(initialTask.id);
       fetchActivities(initialTask.id);
+      fetchRecipients(initialTask.id);
     }
   }, [initialTask]);
+
+  // Log task view on modal open
+  useEffect(() => {
+    if (visible && task && user) {
+      (async () => {
+        try {
+          await fetch(`${API_BASE_URL}/tasks/tasks/${task.id}/view`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token || ''}`
+            },
+            body: JSON.stringify({ user_id: user.id })
+          });
+        } catch (err) {
+          console.error('Error logging task view:', err);
+        }
+      })();
+    }
+  }, [visible, task?.id]);
 
   // Socket setup
   useEffect(() => {
@@ -160,6 +225,7 @@ export default function TaskDetailModal({
       if (updated.id === task.id) {
         setTask(prev => ({ ...prev, ...updated }));
         fetchActivities(task.id);
+        fetchRecipients(task.id);
       }
     };
 
@@ -169,6 +235,7 @@ export default function TaskDetailModal({
           if (prev.some(c => c.id === data.comment.id)) return prev;
           return [...prev, data.comment];
         });
+        fetchActivities(task.id);
       }
     };
 
@@ -178,17 +245,27 @@ export default function TaskDetailModal({
           if (prev.some(a => a.id === data.attachment.id)) return prev;
           return [...prev, data.attachment];
         });
+        fetchActivities(task.id);
+      }
+    };
+
+    const handleTaskViewed = (data: { taskId: number; userId: number }) => {
+      if (data.taskId === task.id) {
+        fetchRecipients(task.id);
+        fetchActivities(task.id);
       }
     };
 
     socket.on('task_updated', handleTaskUpdated);
     socket.on('task_comment_created', handleCommentCreated);
     socket.on('task_attachment_created', handleAttachmentCreated);
+    socket.on('task_viewed', handleTaskViewed);
 
     return () => {
       socket.off('task_updated', handleTaskUpdated);
       socket.off('task_comment_created', handleCommentCreated);
       socket.off('task_attachment_created', handleAttachmentCreated);
+      socket.off('task_viewed', handleTaskViewed);
     };
   }, [socket, task]);
 
@@ -252,8 +329,9 @@ export default function TaskDetailModal({
       const result = await res.json();
       if (result.status === 'success') {
         const updated = result.data;
-        setTask(updated);
-        onTaskUpdated(updated);
+        const merged = { ...task, ...updated };
+        setTask(merged);
+        onTaskUpdated(merged);
       } else {
         alert(result.message || 'Lỗi khi bắt đầu thực hiện.');
       }
@@ -272,8 +350,9 @@ export default function TaskDetailModal({
       const result = await res.json();
       if (result.status === 'success') {
         const updated = result.data;
-        setTask(updated);
-        onTaskUpdated(updated);
+        const merged = { ...task, ...updated };
+        setTask(merged);
+        onTaskUpdated(merged);
       } else {
         alert(result.message || 'Lỗi khi gửi duyệt.');
       }
@@ -292,8 +371,9 @@ export default function TaskDetailModal({
       const result = await res.json();
       if (result.status === 'success') {
         const updated = result.data;
-        setTask(updated);
-        onTaskUpdated(updated);
+        const merged = { ...task, ...updated };
+        setTask(merged);
+        onTaskUpdated(merged);
       } else {
         alert(result.message || 'Lỗi khi duyệt công việc.');
       }
@@ -315,8 +395,9 @@ export default function TaskDetailModal({
       const result = await res.json();
       if (result.status === 'success') {
         const updated = result.data;
-        setTask(updated);
-        onTaskUpdated(updated);
+        const merged = { ...task, ...updated };
+        setTask(merged);
+        onTaskUpdated(merged);
         setIsRejectModalOpen(false);
         setRejectReason('');
       } else {
@@ -336,7 +417,7 @@ export default function TaskDetailModal({
       const res = await fetch(`${API_BASE_URL}/tasks/tasks/${task.id}/urge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ interval }),
+        body: JSON.stringify({ interval, target: urgeTarget }),
       });
       const result = await res.json();
       if (result.status === 'success') {
@@ -537,6 +618,8 @@ export default function TaskDetailModal({
       case 'priority_changed': return 'options-outline';
       case 'reviewed': return 'checkmark-done-circle-outline';
       case 'file_attached': return 'document-attach-outline';
+      case 'viewed': return 'eye-outline';
+      case 'commented': return 'chatbubble-ellipses-outline';
       default: return 'create-outline';
     }
   };
@@ -549,6 +632,8 @@ export default function TaskDetailModal({
       case 'priority_changed': return '#d97706';
       case 'reviewed': return '#10b981';
       case 'file_attached': return '#059669';
+      case 'viewed': return '#ca8a04';
+      case 'commented': return '#2563eb';
       default: return colors.tabIconDefault;
     }
   };
@@ -575,21 +660,16 @@ export default function TaskDetailModal({
         return act.new_value === 'true'
           ? `${actor} ${roleText} đã duyệt hoàn tất nhiệm vụ này ✔️`
           : `${actor} ${roleText} đã bỏ duyệt nhiệm vụ này`;
+      case 'viewed':
+        return `${actor} ${roleText} đã xem nhiệm vụ`;
+      case 'commented':
+        return `${actor} ${roleText} đã bình luận`;
       default:
         return `${actor} ${roleText} đã chỉnh sửa nhiệm vụ`;
     }
   };
 
-  const formatDateTime = (dateStr?: string) => {
-    if (!dateStr) return '';
-    const date = new Date(dateStr);
-    const day = String(date.getDate()).padStart(2, '0');
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const year = date.getFullYear();
-    const hours = String(date.getHours()).padStart(2, '0');
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-    return `${day}/${month}/${year} ${hours}:${minutes}`;
-  };
+
 
   const statusColor = getStatusColor(task.approval_status || task.status);
   const priorityColor = getPriorityColor(task.priority);
@@ -673,7 +753,11 @@ export default function TaskDetailModal({
 
               <View style={styles.metaItem}>
                 <Text style={[styles.metaLabel, { color: colors.tabIconDefault }]}>NGƯỜI NHẬN VIỆC</Text>
-                <View style={styles.avatarRow}>
+                <TouchableOpacity 
+                  style={styles.avatarRow} 
+                  onPress={() => setIsRecipientsDrawerOpen(true)}
+                  activeOpacity={0.7}
+                >
                   {task.assignees && task.assignees.length > 0 ? (
                     <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                       {task.assignees.map((as, index) => (
@@ -689,8 +773,8 @@ export default function TaskDetailModal({
                           )}
                         </View>
                       ))}
-                      <Text style={[styles.metaValue, { color: colors.text, marginLeft: 8 }]}>
-                        {task.assignees.length} người
+                      <Text style={[styles.metaValue, { color: colors.tint, marginLeft: 8, fontWeight: '700' }]}>
+                        {task.assignees.length} người &gt;
                       </Text>
                     </View>
                   ) : (
@@ -698,9 +782,43 @@ export default function TaskDetailModal({
                       Chưa gán ai
                     </Text>
                   )}
-                </View>
+                </TouchableOpacity>
               </View>
             </View>
+
+            {/* Recipient seen summary grid */}
+            {recipientsData && (
+              <View style={{ marginHorizontal: 16, marginBottom: 16, padding: 12, backgroundColor: colors.border + '15', borderRadius: 12, gap: 6 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: colors.text }}>
+                    Tiến độ người nhận ({recipientsData.total})
+                  </Text>
+                  <TouchableOpacity onPress={() => setIsRecipientsDrawerOpen(true)}>
+                    <Text style={{ fontSize: 13, color: colors.tint, fontWeight: '700' }}>
+                      Xem tất cả người nhận
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+                
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 4 }}>
+                  <Text style={{ fontSize: 12, color: colors.text }}>
+                    👀 Đã xem: <Text style={{ fontWeight: 'bold' }}>{recipientsData.viewed}/{recipientsData.total}</Text>
+                  </Text>
+                  <Text style={{ fontSize: 12, color: '#16a34a' }}>
+                    🟢 Đang làm: <Text style={{ fontWeight: 'bold' }}>{recipientsData.in_progress}</Text>
+                  </Text>
+                  <Text style={{ fontSize: 12, color: '#2563eb' }}>
+                    🔵 Chờ duyệt: <Text style={{ fontWeight: 'bold' }}>{recipientsData.waiting_approval}</Text>
+                  </Text>
+                  <Text style={{ fontSize: 12, color: '#059669' }}>
+                    ✅ Hoàn thành: <Text style={{ fontWeight: 'bold' }}>{recipientsData.completed}</Text>
+                  </Text>
+                  <Text style={{ fontSize: 12, color: colors.tabIconDefault }}>
+                    ⚪ Chưa xem: <Text style={{ fontWeight: 'bold' }}>{recipientsData.not_viewed}</Text>
+                  </Text>
+                </View>
+              </View>
+            )}
 
             {/* Timestamps */}
             <View style={styles.metaBox}>
@@ -984,7 +1102,7 @@ export default function TaskDetailModal({
           </ScrollView>
 
           {/* Admin Control Bar */}
-          {selectedTaskBar(isAdmin, task, colors, handleUrgeTask, setIsUrgeModalOpen, handleDeleteTask)}
+          {selectedTaskBar(isAdmin || (task.created_by !== null && task.created_by === user?.id), isAdmin, task, colors, handleUrgeTask, setIsUrgeModalOpen, handleDeleteTask)}
         </View>
       </View>
 
@@ -1046,8 +1164,66 @@ export default function TaskDetailModal({
               </TouchableOpacity>
             </View>
             <Text style={[styles.urgeModalSubtitle, { color: colors.tabIconDefault }]}>
-              Chọn phương thức để đôn đốc nhân viên hoàn thành nhiệm vụ này gấp.
+              Chọn đối tượng và phương thức để đôn đốc nhân viên hoàn thành nhiệm vụ này gấp.
             </Text>
+
+            {/* Target selection Choices */}
+            <View style={{ marginBottom: 16 }}>
+              <Text style={{ fontSize: 12.5, fontWeight: '700', color: colors.text, marginBottom: 8 }}>
+                Chọn đối tượng hối thúc:
+              </Text>
+              <View style={{ gap: 6 }}>
+                {[
+                  { id: 'all', label: 'Hối thúc tất cả', count: recipientsData?.total || 0 },
+                  { id: 'not_viewed', label: 'Hối thúc người chưa xem', count: recipientsData?.not_viewed || 0 },
+                  { id: 'not_started', label: 'Hối thúc người chưa bắt đầu', count: recipientsData ? recipientsData.users.filter(u => u.status === 'not_viewed' || u.status === 'viewed').length : 0 },
+                  { id: 'waiting_approval', label: 'Hối thúc người chờ duyệt', count: recipientsData?.waiting_approval || 0 },
+                ].map(opt => (
+                  <TouchableOpacity
+                    key={opt.id}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      padding: 8,
+                      borderRadius: 8,
+                      borderWidth: 1.5,
+                      borderColor: urgeTarget === opt.id ? colors.tint : colors.border,
+                      backgroundColor: urgeTarget === opt.id ? colors.tint + '10' : colors.card,
+                    }}
+                    onPress={() => setUrgeTarget(opt.id as any)}
+                  >
+                    <View style={{
+                      height: 14,
+                      width: 14,
+                      borderRadius: 7,
+                      borderWidth: 1.5,
+                      borderColor: urgeTarget === opt.id ? colors.tint : colors.tabIconDefault,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      marginRight: 8
+                    }}>
+                      {urgeTarget === opt.id && (
+                        <View style={{
+                          height: 6,
+                          width: 6,
+                          borderRadius: 3,
+                          backgroundColor: colors.tint,
+                        }} />
+                      )}
+                    </View>
+                    <Text style={{ fontSize: 12, color: colors.text, flex: 1, fontWeight: urgeTarget === opt.id ? '700' : '500' }}>
+                      {opt.label}
+                    </Text>
+                    <View style={{ backgroundColor: colors.border + '50', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 6 }}>
+                      <Text style={{ fontSize: 10, fontWeight: '700', color: colors.tabIconDefault }}>
+                        {opt.count}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
             {submittingUrge ? (
               <ActivityIndicator size="large" color="#d97706" style={{ marginVertical: 20 }} />
             ) : (
@@ -1102,11 +1278,101 @@ export default function TaskDetailModal({
           </View>
         </View>
       </Modal>
+
+      {/* Recipients List Drawer / Modal */}
+      <Modal
+        visible={isRecipientsDrawerOpen}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setIsRecipientsDrawerOpen(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.recipientsDrawer, { backgroundColor: colors.card }]}>
+            <View style={styles.drawerHeader}>
+              <Text style={[styles.drawerTitle, { color: colors.text }]}>
+                Người nhận ({recipientsData?.total || 0})
+              </Text>
+              <TouchableOpacity onPress={() => setIsRecipientsDrawerOpen(false)}>
+                <Ionicons name="close" size={24} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView contentContainerStyle={{ paddingBottom: 20 }}>
+              {recipientsData?.users.map(recipient => {
+                let statusText = 'Chưa xem';
+                let statusIcon = '⚪';
+                let statusColor = colors.tabIconDefault;
+
+                if (recipient.status === 'completed') {
+                  statusText = 'Hoàn thành';
+                  statusIcon = '✅';
+                  statusColor = '#059669';
+                } else if (recipient.status === 'waiting_approval') {
+                  statusText = 'Chờ duyệt';
+                  statusIcon = '🔵';
+                  statusColor = '#2563eb';
+                } else if (recipient.status === 'revision_required') {
+                  statusText = 'Cần chỉnh sửa';
+                  statusIcon = '🟠';
+                  statusColor = '#ea580c';
+                } else if (recipient.status === 'in_progress') {
+                  statusText = 'Đang thực hiện';
+                  statusIcon = '🟢';
+                  statusColor = '#16a34a';
+                } else if (recipient.status === 'viewed') {
+                  statusText = 'Đã xem';
+                  statusIcon = '🟡';
+                  statusColor = '#ca8a04';
+                }
+
+                return (
+                  <View 
+                    key={recipient.id} 
+                    style={{ 
+                      flexDirection: 'row', 
+                      alignItems: 'center', 
+                      paddingVertical: 12, 
+                      borderBottomWidth: 1, 
+                      borderBottomColor: colors.border 
+                    }}
+                  >
+                    {recipient.avatar ? (
+                      <Image source={{ uri: recipient.avatar }} style={{ width: 36, height: 36, borderRadius: 18, marginRight: 12 }} />
+                    ) : (
+                      <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: colors.border, alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
+                        <Text style={{ fontSize: 14, fontWeight: 'bold', color: colors.text }}>
+                          {recipient.name.charAt(0).toUpperCase()}
+                        </Text>
+                      </View>
+                    )}
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 14, fontWeight: '600', color: colors.text }}>
+                        {recipient.name}
+                      </Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
+                        <Text style={{ fontSize: 12, fontWeight: '700', color: statusColor, marginRight: 8 }}>
+                          {statusIcon} {statusText}
+                        </Text>
+                        {recipient.last_viewed_at && (
+                          <Text style={{ fontSize: 11, color: colors.tabIconDefault }}>
+                            Đã xem lúc {formatDateTime(recipient.last_viewed_at)}
+                          </Text>
+                        )}
+                      </View>
+                    </View>
+                  </View>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </Modal>
   );
 }
 
 function selectedTaskBar(
+  canUrge: boolean,
   isAdmin: boolean,
   task: Task,
   colors: any,
@@ -1114,11 +1380,11 @@ function selectedTaskBar(
   setIsUrgeModalOpen: (open: boolean) => void,
   handleDeleteTask: () => void
 ) {
-  if (!isAdmin) return null;
+  if (!canUrge && !isAdmin) return null;
 
   return (
     <View style={[styles.adminBar, { borderTopColor: colors.border }]}>
-      {!task.completed && (
+      {!task.completed && canUrge && (
         <TouchableOpacity
           style={[styles.urgeTriggerBtn, { backgroundColor: '#fee2e2' }]}
           onPress={() => setIsUrgeModalOpen(true)}
@@ -1130,15 +1396,17 @@ function selectedTaskBar(
         </TouchableOpacity>
       )}
 
-      <TouchableOpacity
-        style={[styles.deleteBtn, { borderColor: '#ef4444' }]}
-        onPress={handleDeleteTask}
-      >
-        <Ionicons name="trash-outline" size={16} color="#ef4444" />
-        <Text style={{ color: '#ef4444', fontWeight: '700', fontSize: 12.5, marginLeft: 4 }}>
-          Xóa task
-        </Text>
-      </TouchableOpacity>
+      {isAdmin && (
+        <TouchableOpacity
+          style={[styles.deleteBtn, { borderColor: '#ef4444' }]}
+          onPress={handleDeleteTask}
+        >
+          <Ionicons name="trash-outline" size={16} color="#ef4444" />
+          <Text style={{ color: '#ef4444', fontWeight: '700', fontSize: 12.5, marginLeft: 4 }}>
+            Xóa task
+          </Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
@@ -1576,5 +1844,29 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: 10,
     borderWidth: 1,
+  },
+  recipientsDrawer: {
+    width: '100%',
+    maxWidth: 340,
+    maxHeight: '80%',
+    borderRadius: 18,
+    padding: 16,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 10 },
+      android: { elevation: 6 },
+    }),
+  },
+  drawerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+  },
+  drawerTitle: {
+    fontSize: 16,
+    fontWeight: '800',
   },
 });

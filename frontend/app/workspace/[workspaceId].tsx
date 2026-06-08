@@ -25,6 +25,8 @@ import { useSocket } from '@/context/SocketContext';
 import { API_BASE_URL } from '@/constants/Config';
 import VoiceMicButton from '../../components/VoiceMicButton';
 import TaskDetailModal from '@/components/tasks/TaskDetailModal';
+import { sortTasksStable } from '@/utils/taskSort';
+import { useNotifications } from '@/context/NotificationContext';
 
 interface Task {
   id: number;
@@ -60,17 +62,23 @@ interface Task {
   approved_at?: string | null;
   revision_note?: string | null;
   revision_count?: number;
+  total_assignees?: number;
+  viewed_assignees_count?: number;
 }
 
 
 
 export default function PageTasksScreen() {
   const { width: windowWidth } = useWindowDimensions();
-  const { workspaceId } = useLocalSearchParams();
+  const { workspaceId, taskId } = useLocalSearchParams();
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
   const { user } = useUser();
   const { socket } = useSocket();
+  const { unreadCount, openDrawer } = useNotifications();
+
+  const [highlightedTaskId, setHighlightedTaskId] = useState<number | null>(null);
+  const taskYRefs = useRef<{[key: number]: number}>({});
 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
@@ -323,6 +331,30 @@ export default function PageTasksScreen() {
     fetchUsers();
     fetchWorkspaceMembers();
   }, [workspaceId, user]);
+
+  useEffect(() => {
+    if (taskId && tasks.length > 0) {
+      const targetId = parseInt(taskId as string);
+      const targetTask = tasks.find(t => t.id === targetId);
+      if (targetTask) {
+        setSelectedTask(targetTask);
+        setIsDetailModalOpen(true);
+        setHighlightedTaskId(targetId);
+        
+        setTimeout(() => {
+          const y = taskYRefs.current[targetId];
+          if (y !== undefined) {
+            verticalScrollViewRef.current?.scrollTo({ y: y - 20, animated: true });
+          }
+        }, 400);
+
+        const timer = setTimeout(() => {
+          setHighlightedTaskId(null);
+        }, 3000);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [taskId, tasks]);
 
   // Realtime Socket Sync
   useEffect(() => {
@@ -794,20 +826,22 @@ export default function PageTasksScreen() {
   const isAdmin = user?.role === 'admin';
 
   // Apply Filters
-  const filteredTasks = tasks.filter(task => {
-    if (viewFilter === 'my_tasks' && task.assigned_to !== user?.id) {
-      return false;
-    }
-    const currentStatus = task.approval_status || task.status;
-    if (statusFilter !== 'all' && currentStatus !== statusFilter) {
-      return false;
-    }
-    return true;
-  }).sort((a, b) => {
-    if (a.is_reviewed && !b.is_reviewed) return 1;
-    if (!a.is_reviewed && b.is_reviewed) return -1;
-    return 0;
-  });
+  const filteredTasks = sortTasksStable(
+    tasks.filter(task => {
+      if (viewFilter === 'my_tasks' && task.assigned_to !== user?.id) {
+        return false;
+      }
+      const currentStatus = task.approval_status || task.status;
+      if (statusFilter !== 'all' && currentStatus !== statusFilter) {
+        return false;
+      }
+      return true;
+    }).sort((a, b) => {
+      if (a.is_reviewed && !b.is_reviewed) return 1;
+      if (!a.is_reviewed && b.is_reviewed) return -1;
+      return 0;
+    })
+  );
 
   const getStatusText = (status: string) => {
     switch (status) {
@@ -1077,6 +1111,25 @@ export default function PageTasksScreen() {
         </View>
 
         <View style={styles.headerRightMenu}>
+          <TouchableOpacity onPress={openDrawer} style={{ position: 'relative', padding: 6, marginRight: 12, justifyContent: 'center' }} activeOpacity={0.7}>
+            <Ionicons name="notifications-outline" size={20} color={colors.text} />
+            {unreadCount > 0 && (
+              <View style={{
+                position: 'absolute',
+                top: 2,
+                right: 2,
+                backgroundColor: '#ef4444',
+                borderRadius: 8,
+                minWidth: 14,
+                height: 14,
+                alignItems: 'center',
+                justifyContent: 'center',
+                paddingHorizontal: 3,
+              }}>
+                <Text style={{ color: '#ffffff', fontSize: 8, fontWeight: '800' }}>{unreadCount}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
           <Text style={[styles.lastEditedText, { color: colors.tabIconDefault }]}>Đã chỉnh sửa 3 phút trước</Text>
           <TouchableOpacity 
             style={[styles.shareBtn, { borderColor: colors.border, marginRight: 8 }]}
@@ -1214,22 +1267,30 @@ export default function PageTasksScreen() {
               const priorityColor = getPriorityColor(task.priority);
               const isAssignedToMe = task.assigned_to === user?.id;
               const canEditStatus = isAdmin; // Chỉ Admin được đổi trực tiếp, User phải dùng workflow modal
+              const canUrge = isAdmin || (task.created_by !== null && task.created_by === user?.id);
 
               return (
                 <View
                   key={task.id}
+                  onLayout={e => {
+                    taskYRefs.current[task.id] = e.nativeEvent.layout.y;
+                  }}
                   style={[
                     styles.tableRow,
                     { 
-                      backgroundColor: colors.card, 
-                      borderBottomColor: colors.border,
+                      backgroundColor: task.id === highlightedTaskId ? '#fef08a' : colors.card, 
+                      borderBottomColor: task.id === highlightedTaskId ? '#eab308' : colors.border,
                       opacity: task.is_reviewed ? 0.4 : 1,
+                      ...(task.id === highlightedTaskId && {
+                        borderColor: '#eab308',
+                        borderWidth: 1.5,
+                      })
                     }
                   ]}
                 >
                   <View style={[styles.colCell, styles.colTitle, { borderRightColor: colors.border }]}>
                     <TouchableOpacity
-                      style={{ flex: 1 }}
+                      style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
                       onPress={() => {
                         setSelectedTask(task);
                         setIsDetailModalOpen(true);
@@ -1239,12 +1300,19 @@ export default function PageTasksScreen() {
                       <Text
                         style={[
                           styles.taskTitleText,
-                          { color: colors.text, textDecorationLine: task.completed ? 'line-through' : 'none' }
+                          { color: colors.text, textDecorationLine: task.completed ? 'line-through' : 'none', flex: 1 }
                         ]}
                         numberOfLines={1}
                       >
                         {task.title}
                       </Text>
+                      {task.total_assignees !== undefined && task.total_assignees > 0 && (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.border + '30', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8, marginLeft: 8 }}>
+                          <Text style={{ fontSize: 10, color: colors.tabIconDefault, fontWeight: '600' }}>
+                            👀 {task.viewed_assignees_count || 0}/{task.total_assignees}
+                          </Text>
+                        </View>
+                      )}
                     </TouchableOpacity>
                   </View>
 
@@ -1284,9 +1352,11 @@ export default function PageTasksScreen() {
 
                       // Dynamic Status based on in progress members
                       const inProgressAssignees = (task.assignees || []).filter((a: any) => a.status === 'in_progress');
-                      const sColor = getStatusColor(inProgressAssignees.length > 0 ? 'in_progress' : 'todo');
+                      const currentStatus = task.approval_status || task.status;
+                      const isTaskInProgress = currentStatus === 'in_progress' || inProgressAssignees.length > 0;
+                      const sColor = getStatusColor(isTaskInProgress ? 'in_progress' : 'todo');
 
-                      if (inProgressAssignees.length === 0) {
+                      if (!isTaskInProgress) {
                         return (
                           <TouchableOpacity
                             style={[styles.notionStatusBadge, { backgroundColor: sColor.bg, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12 }]}
@@ -1323,9 +1393,27 @@ export default function PageTasksScreen() {
                           activeOpacity={0.7}
                         >
                           <View style={{ gap: 4, width: '100%' }}>
-                            {inProgressAssignees.map((a: any, idx: number) => (
+                            {inProgressAssignees.length > 0 ? (
+                              inProgressAssignees.map((a: any, idx: number) => (
+                                <View 
+                                  key={a.user_id || idx} 
+                                  style={[
+                                    styles.notionStatusBadge, 
+                                    { 
+                                      backgroundColor: sColor.bg, 
+                                      paddingHorizontal: 10, 
+                                      paddingVertical: 4, 
+                                      borderRadius: 12 
+                                    }
+                                  ]}
+                                >
+                                  <Text style={[styles.notionStatusText, { color: sColor.text, fontSize: 11, fontWeight: '700', lineHeight: 14 }]} numberOfLines={1}>
+                                    🟢 {a.name} đang thực hiện
+                                  </Text>
+                                </View>
+                              ))
+                            ) : (
                               <View 
-                                key={a.user_id || idx} 
                                 style={[
                                   styles.notionStatusBadge, 
                                   { 
@@ -1337,10 +1425,10 @@ export default function PageTasksScreen() {
                                 ]}
                               >
                                 <Text style={[styles.notionStatusText, { color: sColor.text, fontSize: 11, fontWeight: '700', lineHeight: 14 }]} numberOfLines={1}>
-                                  🟢 {a.name} đang thực hiện
+                                  🟢 Đang thực hiện
                                 </Text>
                               </View>
-                            ))}
+                            )}
                           </View>
                         </TouchableOpacity>
                       );
@@ -1430,7 +1518,7 @@ export default function PageTasksScreen() {
                   {/* Column 4.5: Hối thúc */}
                   <View style={[styles.colCell, styles.colUrge, { borderRightColor: colors.border, alignItems: 'center', justifyContent: 'center' }]}>
                     {!task.completed ? (
-                      isAdmin ? (
+                      canUrge ? (
                         <TouchableOpacity
                           style={{
                             flexDirection: 'row',
@@ -2037,6 +2125,91 @@ export default function PageTasksScreen() {
         </View>
       </Modal>
 
+      {/* Urge Modal */}
+      <Modal
+        visible={isUrgeModalOpen}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setIsUrgeModalOpen(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setIsUrgeModalOpen(false)}
+        >
+          <View style={[styles.urgeModalCard, { backgroundColor: colors.card }]} onStartShouldSetResponder={() => true}>
+            <View style={styles.urgeModalHeader}>
+              <Text style={[styles.urgeModalTitle, { color: colors.text }]}>⚡ Thiết lập hối thúc</Text>
+              <TouchableOpacity onPress={() => setIsUrgeModalOpen(false)}>
+                <Ionicons name="close" size={20} color={colors.tabIconDefault} />
+              </TouchableOpacity>
+            </View>
+            <Text style={[styles.urgeModalSubtitle, { color: colors.tabIconDefault }]}>
+              Chọn phương thức để đôn đốc nhân viên hoàn thành nhiệm vụ này gấp.
+            </Text>
+            {submittingUrge ? (
+              <ActivityIndicator size="large" color="#d97706" style={{ marginVertical: 20 }} />
+            ) : (
+              <View style={styles.urgeOptionsList}>
+                <TouchableOpacity
+                  style={[styles.urgeOptionBtn, { backgroundColor: '#fee2e2', borderColor: '#ef4444' }]}
+                  onPress={() => handleUrgeTask('now')}
+                >
+                  <View style={styles.urgeOptionIconBox}>
+                    <Ionicons name="flash" size={18} color="#dc2626" />
+                  </View>
+                  <View style={styles.urgeOptionTextBox}>
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#b91c1c' }}>Hối thúc ngay</Text>
+                    <Text style={{ fontSize: 10.5, color: '#991b1b' }}>Gửi 1 thông báo đẩy khẩn cấp ngay</Text>
+                  </View>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.urgeOptionBtn, { backgroundColor: '#fef3c7', borderColor: '#f59e0b' }]}
+                  onPress={() => handleUrgeTask('hourly')}
+                >
+                  <View style={styles.urgeOptionIconBox}>
+                    <Ionicons name="alarm" size={18} color="#d97706" />
+                  </View>
+                  <View style={styles.urgeOptionTextBox}>
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#92400e' }}>Nhắc nhở mỗi giờ</Text>
+                    <Text style={{ fontSize: 10.5, color: '#b45309' }}>Gửi thông báo đẩy lặp lại mỗi 60 phút</Text>
+                  </View>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.urgeOptionBtn, { backgroundColor: '#e0f2fe', borderColor: '#0284c7' }]}
+                  onPress={() => handleUrgeTask('daily')}
+                >
+                  <View style={styles.urgeOptionIconBox}>
+                    <Ionicons name="calendar" size={18} color="#0284c7" />
+                  </View>
+                  <View style={styles.urgeOptionTextBox}>
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#0369a1' }}>Nhắc nhở mỗi ngày</Text>
+                    <Text style={{ fontSize: 10.5, color: '#0369a1' }}>Gửi thông báo đẩy lặp lại mỗi ngày</Text>
+                  </View>
+                </TouchableOpacity>
+
+                {selectedTask && selectedTask.reminder_interval && (
+                  <TouchableOpacity
+                    style={[styles.urgeOptionBtn, { backgroundColor: '#f3f4f6', borderColor: '#9ca3af' }]}
+                    onPress={() => handleUrgeTask('off')}
+                  >
+                    <View style={styles.urgeOptionIconBox}>
+                      <Ionicons name="notifications-off-outline" size={18} color="#4b5563" />
+                    </View>
+                    <View style={styles.urgeOptionTextBox}>
+                      <Text style={{ fontSize: 13, fontWeight: '700', color: '#374151' }}>Tắt hối thúc</Text>
+                      <Text style={{ fontSize: 10.5, color: '#4b5563' }}>Dừng nhắc nhở công việc này</Text>
+                    </View>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
       {/* 7. Shared Task Detail Modal */}
       <TaskDetailModal
         visible={isDetailModalOpen}
@@ -2046,8 +2219,8 @@ export default function PageTasksScreen() {
         }}
         task={selectedTask}
         onTaskUpdated={(updated) => {
-          setTasks(prev => prev.map(t => t.id === updated.id ? updated : t));
-          setSelectedTask(updated);
+          setTasks(prev => prev.map(t => t.id === updated.id ? { ...t, ...updated } : t));
+          setSelectedTask(prev => prev ? { ...prev, ...updated } : updated);
         }}
         onTaskDeleted={(taskId) => {
           setTasks(prev => prev.filter(t => t.id !== taskId));

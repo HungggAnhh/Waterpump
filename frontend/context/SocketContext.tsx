@@ -99,6 +99,11 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       Alert.alert('Nhiệm vụ mới 📋', data.message || 'Bạn vừa được giao nhiệm vụ mới');
     });
 
+    socket.on('task_urged', (data: { task: any, message: string }) => {
+      console.log('📡 [SOCKET:TASK_URGED] Received urge notification:', data);
+      Alert.alert('Hối thúc công việc ⚡', data.message || 'Sếp đang hối thúc bạn thực hiện nhiệm vụ gấp');
+    });
+
     socket.on('update_online_users', (onlineUsers: any[]) => {
       const onlineUserIds = onlineUsers.map(ou => ou.id);
       useOnlineStore.getState().setOnlineUsers(onlineUserIds);
@@ -279,6 +284,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       socket.off('update_online_users');
       socket.off('user_updated');
       socket.off('task_assigned_notification');
+      socket.off('task_urged');
       socket.off('conversation_seen');
       socket.off('receive_message');
       socket.off('group_added_notify');

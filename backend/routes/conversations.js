@@ -87,7 +87,7 @@ router.get('/', async (req, res) => {
         type:            conv.type,
         lastMessage:     conv.lastmessage     || '',
         lastMessageType: conv.lastmessagetype || 'text',
-        time:            conv.lastmessagetime ? new Date(conv.lastmessagetime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
+        time:            conv.lastmessagetime ? new Date(conv.lastmessagetime).toISOString() : '',
         rawTime:         conv.lastmessagetime || conv.created_at,
         updated_at:      conv.lastmessagetime || conv.created_at,
         unreadCount:     conv.unread_count || 0,

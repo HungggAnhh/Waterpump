@@ -1,5 +1,5 @@
 // frontend/app/(tabs)/tasks.tsx
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   StyleSheet,
   Text,
@@ -24,6 +24,8 @@ import { useSocket } from '@/context/SocketContext';
 import { API_BASE_URL } from '@/constants/Config';
 import { router, useLocalSearchParams } from 'expo-router';
 import TaskDetailModal from '@/components/tasks/TaskDetailModal';
+import { sortTasksStable } from '@/utils/taskSort';
+import { useNotifications } from '@/context/NotificationContext';
 
 const { width: windowWidth } = Dimensions.get('window');
 
@@ -75,6 +77,8 @@ interface Task {
   approved_at?: string | null;
   revision_note?: string | null;
   revision_count?: number;
+  total_assignees?: number;
+  viewed_assignees_count?: number;
 }
 
 interface KPIStats {
@@ -169,6 +173,11 @@ const TaskItem = React.memo(({
               📅 {new Date(task.deadline).toLocaleDateString('vi-VN')}
             </Text>
           )}
+          {task.total_assignees !== undefined && task.total_assignees > 0 && (
+            <Text style={{ fontSize: 11, color: colors.tabIconDefault, marginLeft: 8 }}>
+              👀 {task.viewed_assignees_count || 0}/{task.total_assignees}
+            </Text>
+          )}
         </View>
       </View>
       <View style={{ alignItems: 'flex-end', gap: 6 }}>
@@ -192,7 +201,8 @@ export default function WorkspaceScreen() {
   const colors = Colors[colorScheme ?? 'light'];
   const { user } = useUser();
   const { socket } = useSocket();
-  const params = useLocalSearchParams<{ tab?: string; status?: string }>();
+  const params = useLocalSearchParams<{ tab?: string; status?: string; taskId?: string }>();
+  const { unreadCount, openDrawer } = useNotifications();
 
   // Tabs states
   const [activeTab, setActiveTab] = useState<'tasks' | 'summary'>('tasks');
@@ -221,6 +231,7 @@ export default function WorkspaceScreen() {
     completed: 0,
   });
   const [kpiLoading, setKpiLoading] = useState(true);
+  const [allTasksForSearch, setAllTasksForSearch] = useState<Task[]>([]);
 
   // Advanced filters (Tab 2)
   const [searchQuery, setSearchQuery] = useState('');
@@ -263,7 +274,7 @@ export default function WorkspaceScreen() {
   useEffect(() => {
     const handler = setTimeout(() => {
       setDebouncedSearch(searchQuery);
-    }, 400);
+    }, 300);
     return () => clearTimeout(handler);
   }, [searchQuery]);
 
@@ -298,6 +309,37 @@ export default function WorkspaceScreen() {
       }
     }
   }, [params.tab, params.status]);
+
+  // Handle taskId parameter redirect loading
+  useEffect(() => {
+    if (params.taskId) {
+      setActiveTab('tasks');
+      setActiveSubView('all_tasks');
+    }
+  }, [params.taskId]);
+
+  useEffect(() => {
+    if (params.taskId && tab1Tasks.length > 0) {
+      const targetId = parseInt(params.taskId);
+      const index = tab1Tasks.findIndex(t => t.id === targetId);
+      if (index !== -1) {
+        setHighlightedTaskId(targetId);
+        const clickedTask = tab1Tasks[index];
+        setSelectedTask(clickedTask);
+        setIsDetailModalOpen(true);
+        setActiveTab('tasks');
+        setActiveSubView('all_tasks');
+
+        setTimeout(() => {
+          flatListRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.5 });
+        }, 300);
+
+        setTimeout(() => {
+          setHighlightedTaskId(null);
+        }, 3000);
+      }
+    }
+  }, [params.taskId, tab1Tasks]);
 
   // Fetch workspaces & users list
   const fetchWorkspaces = async () => {
@@ -342,7 +384,7 @@ export default function WorkspaceScreen() {
       const res = await fetch(url);
       const result = await res.json();
       if (result.status === 'success') {
-        setTab1Tasks(result.data || []);
+        setTab1Tasks(sortTasksStable(result.data || []));
       }
     } catch (err) {
       console.error('Error loading Tab 1 tasks:', err);
@@ -368,7 +410,7 @@ export default function WorkspaceScreen() {
       const res = await fetch(url);
       const result = await res.json();
       if (result.status === 'success') {
-        setAccordionTasks(prev => ({ ...prev, [status]: result.data || [] }));
+        setAccordionTasks(prev => ({ ...prev, [status]: sortTasksStable(result.data || []) }));
       }
     } catch (err) {
       console.error(`Error loading tasks for status ${status}:`, err);
@@ -393,6 +435,114 @@ export default function WorkspaceScreen() {
     }
   };
 
+  const fetchAllTasksForSearch = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/tasks`);
+      const result = await res.json();
+      if (result.status === 'success') {
+        setAllTasksForSearch(result.data || []);
+      }
+    } catch (err) {
+      console.error('Error loading tasks for search:', err);
+    }
+  };
+
+  const getTaskAccordionId = (task: Task): string => {
+    const status = task.approval_status || task.status;
+    if (status === 'waiting_approval') return 'waiting_approval';
+    if (status === 'revision_required') return 'revision_required';
+    if (status === 'completed') return 'completed';
+    if (status === 'in_progress') return 'in_progress';
+    return 'not_started';
+  };
+
+  const getTaskStatusLabel = (task: Task): string => {
+    const status = task.approval_status || task.status;
+    if (status === 'waiting_approval') return '🟡 Chờ duyệt';
+    if (status === 'revision_required') return '🔴 Làm lại';
+    if (status === 'completed') return '✅ Hoàn thành';
+    if (status === 'in_progress') return '🟢 Đang thực hiện';
+    return '⚪ Chưa bắt đầu';
+  };
+
+  const getSearchScore = (task: Task, query: string): number => {
+    const title = (task.title || '').toLowerCase().trim();
+    const desc = (task.description || '').toLowerCase().trim();
+    const assigneeName = (task.assignee_name || '').toLowerCase().trim();
+    const assigneesNames = (task.assignees || []).map(a => a.name.toLowerCase()).join(' ');
+    const workspaceName = (task.workspace_name || '').toLowerCase().trim();
+    const creatorName = (task.creator_name || '').toLowerCase().trim();
+
+    if (title === query) return 100;
+    if (title.startsWith(query)) return 80;
+    if (title.includes(query)) return 60;
+    if (desc.includes(query)) return 40;
+    if (assigneeName.includes(query) || assigneesNames.includes(query)) return 20;
+    if (workspaceName.includes(query) || creatorName.includes(query)) return 10;
+    return 0;
+  };
+
+  const renderHighlightedText = (text: string, query: string, highlightStyle: any, defaultStyle: any) => {
+    if (!query.trim() || !text) {
+      return <Text style={defaultStyle}>{text}</Text>;
+    }
+    const escapedQuery = query.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+    const regex = new RegExp(`(${escapedQuery})`, 'gi');
+    const parts = text.split(regex);
+    return (
+      <Text style={defaultStyle}>
+        {parts.map((part, index) => {
+          const isMatch = part.toLowerCase() === query.toLowerCase();
+          return (
+            <Text key={index} style={isMatch ? highlightStyle : defaultStyle}>
+              {isMatch ? `[${part}]` : part}
+            </Text>
+          );
+        })}
+      </Text>
+    );
+  };
+
+  const filteredSearchResults = useMemo(() => {
+    if (!debouncedSearch.trim()) return [];
+    const query = debouncedSearch.toLowerCase().trim();
+    
+    const scoredTasks = allTasksForSearch
+      .map(task => {
+        const score = getSearchScore(task, query);
+        return { task, score };
+      })
+      .filter(item => {
+        const { task } = item;
+        if (selectedWorkspace && task.workspace_id !== selectedWorkspace) return false;
+        if (selectedPriority && task.priority !== selectedPriority) return false;
+        if (quickFilter && quickFilter !== 'all') {
+          if (quickFilter === 'my_tasks') {
+            const isMine = task.assigned_to === user?.id || task.created_by === user?.id || task.assignees?.some(a => a.user_id === user?.id);
+            if (!isMine) return false;
+          } else if (quickFilter === 'assigned_to_me') {
+            const isAssigned = task.assigned_to === user?.id || task.assignees?.some(a => a.user_id === user?.id);
+            if (!isAssigned) return false;
+          } else if (quickFilter === 'created_by_me') {
+            if (task.created_by !== user?.id) return false;
+          } else if (quickFilter === 'overdue') {
+            const isOverdue = task.deadline && new Date(task.deadline).getTime() < Date.now() && !task.completed;
+            if (!isOverdue) return false;
+          }
+        }
+        return item.score > 0;
+      });
+
+    scoredTasks.sort((a, b) => {
+      if (b.score !== a.score) {
+        return b.score - a.score;
+      }
+      return (a.task.title || '').localeCompare(b.task.title || '');
+    });
+    
+    return scoredTasks.map(item => item.task);
+  }, [allTasksForSearch, debouncedSearch, selectedWorkspace, selectedPriority, quickFilter, user]);
+
   // Re-fetch when dependencies change
   useEffect(() => {
     fetchWorkspaces();
@@ -408,6 +558,7 @@ export default function WorkspaceScreen() {
   useEffect(() => {
     if (activeTab === 'summary') {
       fetchKPIStats();
+      fetchAllTasksForSearch();
       // Re-fetch all currently expanded accordions
       Object.keys(expandedAccordions).forEach(status => {
         if (expandedAccordions[status]) {
@@ -434,6 +585,7 @@ export default function WorkspaceScreen() {
     const handleTaskCreated = () => {
       if (activeTab === 'summary') {
         fetchKPIStats();
+        fetchAllTasksForSearch();
         Object.keys(expandedAccordions).forEach(status => {
           if (expandedAccordions[status]) fetchAccordionTasks(status);
         });
@@ -643,10 +795,40 @@ export default function WorkspaceScreen() {
     }, 150);
   }, []);
 
+  const handleSearchResultClick = (task: Task) => {
+    const accordionId = getTaskAccordionId(task);
+    
+    // 1. Expand accordion
+    setExpandedAccordions(prev => ({ ...prev, [accordionId]: true }));
+    fetchAccordionTasks(accordionId);
+    
+    // 2. Clear search text so the results disappear and accordions show
+    setSearchQuery('');
+    
+    // 3. Set highlight task ID & accordion ID
+    setHighlightedTaskId(task.id);
+    setHighlightedAccordion(accordionId);
+    
+    // 4. Scroll to accordion
+    setTimeout(() => {
+      const y = accordionYRefs.current[accordionId];
+      if (y !== undefined) {
+        scrollContainerRefTab2.current?.scrollTo({ y: y - 10, animated: true });
+      }
+      
+      // Clear highlight after 3 seconds
+      setTimeout(() => {
+        setHighlightedTaskId(null);
+        setHighlightedAccordion(null);
+      }, 3000);
+    }, 200);
+  };
+
   const handleTaskUpdated = useCallback((updated: Task) => {
     // Refresh both views
     fetchKPIStats();
     fetchTab1Tasks();
+    fetchAllTasksForSearch();
     Object.keys(expandedAccordions).forEach(status => {
       if (expandedAccordions[status]) fetchAccordionTasks(status);
     });
@@ -662,22 +844,43 @@ export default function WorkspaceScreen() {
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
       {/* Main Tabs Header */}
       <View style={[styles.mainTabsHeader, { borderBottomColor: colors.border }]}>
-        <TouchableOpacity 
-          style={[styles.mainTabBtn, activeTab === 'tasks' && { borderBottomColor: colors.tint }]}
-          onPress={() => setActiveTab('tasks')}
-        >
-          <Text style={[styles.mainTabBtnText, { color: activeTab === 'tasks' ? colors.tint : colors.tabIconDefault }]}>
-            Công việc
-          </Text>
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', flex: 1 }}>
+          <TouchableOpacity 
+            style={[styles.mainTabBtn, activeTab === 'tasks' && { borderBottomColor: colors.tint }]}
+            onPress={() => setActiveTab('tasks')}
+          >
+            <Text style={[styles.mainTabBtnText, { color: activeTab === 'tasks' ? colors.tint : colors.tabIconDefault }]}>
+              Công việc
+            </Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity 
-          style={[styles.mainTabBtn, activeTab === 'summary' && { borderBottomColor: colors.tint }]}
-          onPress={() => setActiveTab('summary')}
-        >
-          <Text style={[styles.mainTabBtnText, { color: activeTab === 'summary' ? colors.tint : colors.tabIconDefault }]}>
-            Tổng hợp
-          </Text>
+          <TouchableOpacity 
+            style={[styles.mainTabBtn, activeTab === 'summary' && { borderBottomColor: colors.tint }]}
+            onPress={() => setActiveTab('summary')}
+          >
+            <Text style={[styles.mainTabBtnText, { color: activeTab === 'summary' ? colors.tint : colors.tabIconDefault }]}>
+              Tổng hợp
+            </Text>
+          </TouchableOpacity>
+        </View>
+        <TouchableOpacity onPress={openDrawer} style={{ paddingHorizontal: 16, justifyContent: 'center', position: 'relative' }} activeOpacity={0.7}>
+          <Ionicons name="notifications-outline" size={22} color={colors.text} />
+          {unreadCount > 0 && (
+            <View style={{
+              position: 'absolute',
+              top: 8,
+              right: 8,
+              backgroundColor: '#ef4444',
+              borderRadius: 8,
+              minWidth: 16,
+              height: 16,
+              alignItems: 'center',
+              justifyContent: 'center',
+              paddingHorizontal: 4,
+            }}>
+              <Text style={{ color: '#ffffff', fontSize: 9, fontWeight: '800' }}>{unreadCount}</Text>
+            </View>
+          )}
         </TouchableOpacity>
       </View>
 
@@ -952,98 +1155,184 @@ export default function WorkspaceScreen() {
             </View>
           </View>
 
-          {/* Accordion Lists */}
-          <Text style={[styles.sectionTitleHeader, { color: colors.text, marginTop: 16 }]}>Trạng thái công việc</Text>
-          <View style={{ paddingHorizontal: 16, gap: 12 }}>
-            {[
-              { id: 'all', label: 'Tổng việc', icon: 'folder-open-outline', color: '#2563eb' },
-              { id: 'not_started', label: 'Chưa bắt đầu', icon: 'ellipse-outline', color: '#4b5563' },
-              { id: 'in_progress', label: 'Đang làm', icon: 'sync-outline', color: '#0284c7' },
-              { id: 'waiting_approval', label: 'Chờ duyệt', icon: 'hourglass-outline', color: '#d97706' },
-              { id: 'revision_required', label: 'Làm lại', icon: 'refresh-circle-outline', color: '#dc2626' },
-              { id: 'completed', label: 'Hoàn thành', icon: 'checkmark-done-circle-outline', color: '#059669' },
-            ].map(accordion => {
-              const isExpanded = !!expandedAccordions[accordion.id];
-              const tasks = accordionTasks[accordion.id] || [];
-              const isLoading = !!accordionLoading[accordion.id];
-              const isHighlighted = highlightedAccordion === accordion.id;
-
-              return (
-                <View 
-                  key={accordion.id}
-                  onLayout={e => {
-                    accordionYRefs.current[accordion.id] = e.nativeEvent.layout.y;
-                  }}
-                  style={[
-                    styles.accordionBox, 
-                    { 
-                      backgroundColor: isHighlighted ? '#fffbeb' : colors.card,
-                      borderColor: isHighlighted ? '#f59e0b' : colors.border,
-                      borderWidth: isHighlighted ? 1.5 : 1
-                    }
-                  ]}
-                >
-                  {/* Accordion Header */}
-                  <TouchableOpacity
-                    style={styles.accordionHeader}
-                    onPress={() => handleToggleAccordion(accordion.id)}
-                    activeOpacity={0.8}
-                  >
-                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                      <Ionicons name={accordion.icon as any} size={18} color={accordion.color} style={{ marginRight: 8 }} />
-                      <Text style={[styles.accordionTitleText, { color: colors.text }]}>
-                        {accordion.label}
-                      </Text>
-                    </View>
-                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                      {isLoading && <ActivityIndicator size="small" color={colors.tint} style={{ marginRight: 10 }} />}
-                      <Ionicons 
-                        name={isExpanded ? 'chevron-down' : 'chevron-forward'} 
-                        size={16} 
-                        color={colors.tabIconDefault} 
-                      />
-                    </View>
-                  </TouchableOpacity>
-
-                  {/* Accordion Body (Lazy loaded) */}
-                  {isExpanded && (
-                    <View style={styles.accordionBody}>
-                      {isLoading && tasks.length === 0 ? (
-                        <View style={{ paddingVertical: 20 }}>
-                          <ActivityIndicator size="small" color={colors.tint} />
+          {/* Accordion Lists or Search Results */}
+          {searchQuery.trim() !== '' ? (
+            <View style={{ marginTop: 16 }}>
+              <Text style={[styles.sectionTitleHeader, { color: colors.text }]}>
+                🔍 Tìm thấy {filteredSearchResults.length} nhiệm vụ
+              </Text>
+              
+              {filteredSearchResults.length === 0 ? (
+                <View style={styles.centerContainerSearch}>
+                  <Ionicons name="search-outline" size={48} color={colors.tabIconDefault} style={{ marginBottom: 12 }} />
+                  <Text style={{ color: colors.tabIconDefault, fontSize: 13.5, fontStyle: 'italic' }}>
+                    Không tìm thấy nhiệm vụ phù hợp
+                  </Text>
+                </View>
+              ) : (
+                <View style={{ paddingHorizontal: 16, gap: 10, marginBottom: 20 }}>
+                  {filteredSearchResults.map((t: Task) => {
+                    const statusLabel = getTaskStatusLabel(t);
+                    return (
+                      <TouchableOpacity
+                        key={t.id}
+                        style={[styles.searchResultCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+                        onPress={() => handleSearchResultClick(t)}
+                        activeOpacity={0.7}
+                      >
+                        <View style={{ flex: 1, gap: 6 }}>
+                          {/* Title with Highlight */}
+                          {renderHighlightedText(
+                            t.title,
+                            searchQuery,
+                            { fontWeight: '800', color: colors.tint },
+                            [styles.searchResultTitle, { color: colors.text }]
+                          )}
+                          
+                          {/* Status Label */}
+                          <Text style={[styles.searchResultStatus, { color: colors.text }]}>
+                            {statusLabel}
+                          </Text>
+                          
+                          {/* Metadata */}
+                          <View style={{ gap: 4, marginTop: 4 }}>
+                            <Text style={{ fontSize: 11.5, color: colors.textSecondary }}>
+                              👤 {t.assignee_name || (t.assignees && t.assignees.length > 0 ? t.assignees.map((a: any) => a.name).join(', ') : 'Chưa gán')}
+                            </Text>
+                            {t.workspace_name && (
+                              <Text style={{ fontSize: 11.5, color: colors.textSecondary }}>
+                                📁 {t.workspace_name}
+                              </Text>
+                            )}
+                            {t.deadline && (
+                              <Text style={{ fontSize: 11.5, color: colors.textSecondary }}>
+                                📅 {new Date(t.deadline).toLocaleDateString('vi-VN')}
+                              </Text>
+                            )}
+                          </View>
                         </View>
-                      ) : tasks.length === 0 ? (
-                        <Text style={{ fontSize: 12.5, color: colors.tabIconDefault, fontStyle: 'italic', paddingVertical: 14, textAlign: 'center' }}>
-                          Không tìm thấy nhiệm vụ nào ở trạng thái này.
-                        </Text>
-                      ) : (
-                        <View style={{ gap: 8, marginTop: 8 }}>
-                          {tasks.map(t => (
-                            <TouchableOpacity
-                              key={t.id}
-                              style={[styles.accordionTaskCard, { borderColor: colors.border }]}
-                              onPress={() => handleTaskClickFromSummary(t)}
-                              activeOpacity={0.7}
-                            >
-                              <View style={{ flex: 1 }}>
-                                <Text style={[styles.accordionTaskTitle, { color: colors.text }]} numberOfLines={1}>
-                                  {t.title}
-                                </Text>
-                                <Text style={{ fontSize: 11, color: colors.tabIconDefault, marginTop: 2 }}>
-                                  👤 Giao cho: {t.assignee_name || (t.assignees && t.assignees.length > 0 ? t.assignees.map(a => a.name).join(', ') : 'Chưa gán')}
-                                </Text>
-                              </View>
-                              <Ionicons name="arrow-forward-outline" size={16} color={colors.tabIconDefault} />
-                            </TouchableOpacity>
-                          ))}
+                        
+                        {/* Eye icon/detail trigger */}
+                        <TouchableOpacity
+                          style={styles.searchDetailBtn}
+                          onPress={() => {
+                            setSelectedTask(t);
+                            setIsDetailModalOpen(true);
+                          }}
+                        >
+                          <Ionicons name="eye-outline" size={20} color={colors.tint} />
+                        </TouchableOpacity>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+            </View>
+          ) : (
+            <>
+              <Text style={[styles.sectionTitleHeader, { color: colors.text, marginTop: 16 }]}>Trạng thái công việc</Text>
+              <View style={{ paddingHorizontal: 16, gap: 12 }}>
+                {[
+                  { id: 'all', label: 'Tổng việc', icon: 'folder-open-outline', color: '#2563eb' },
+                  { id: 'not_started', label: 'Chưa bắt đầu', icon: 'ellipse-outline', color: '#4b5563' },
+                  { id: 'in_progress', label: 'Đang làm', icon: 'sync-outline', color: '#0284c7' },
+                  { id: 'waiting_approval', label: 'Chờ duyệt', icon: 'hourglass-outline', color: '#d97706' },
+                  { id: 'revision_required', label: 'Làm lại', icon: 'refresh-circle-outline', color: '#dc2626' },
+                  { id: 'completed', label: 'Hoàn thành', icon: 'checkmark-done-circle-outline', color: '#059669' },
+                ].map(accordion => {
+                  const isExpanded = !!expandedAccordions[accordion.id];
+                  const tasks = accordionTasks[accordion.id] || [];
+                  const isLoading = !!accordionLoading[accordion.id];
+                  const isHighlighted = highlightedAccordion === accordion.id;
+
+                  return (
+                    <View 
+                      key={accordion.id}
+                      onLayout={e => {
+                        accordionYRefs.current[accordion.id] = e.nativeEvent.layout.y;
+                      }}
+                      style={[
+                        styles.accordionBox, 
+                        { 
+                          backgroundColor: isHighlighted ? '#fffbeb' : colors.card,
+                          borderColor: isHighlighted ? '#f59e0b' : colors.border,
+                          borderWidth: isHighlighted ? 1.5 : 1
+                        }
+                      ]}
+                    >
+                      {/* Accordion Header */}
+                      <TouchableOpacity
+                        style={styles.accordionHeader}
+                        onPress={() => handleToggleAccordion(accordion.id)}
+                        activeOpacity={0.8}
+                      >
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          <Ionicons name={accordion.icon as any} size={18} color={accordion.color} style={{ marginRight: 8 }} />
+                          <Text style={[styles.accordionTitleText, { color: colors.text }]}>
+                            {accordion.label}
+                          </Text>
+                        </View>
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          {isLoading && <ActivityIndicator size="small" color={colors.tint} style={{ marginRight: 10 }} />}
+                          <Ionicons 
+                            name={isExpanded ? 'chevron-down' : 'chevron-forward'} 
+                            size={16} 
+                            color={colors.tabIconDefault} 
+                          />
+                        </View>
+                      </TouchableOpacity>
+
+                      {/* Accordion Body (Lazy loaded) */}
+                      {isExpanded && (
+                        <View style={styles.accordionBody}>
+                          {isLoading && tasks.length === 0 ? (
+                            <View style={{ paddingVertical: 20 }}>
+                              <ActivityIndicator size="small" color={colors.tint} />
+                            </View>
+                          ) : tasks.length === 0 ? (
+                            <Text style={{ fontSize: 12.5, color: colors.tabIconDefault, fontStyle: 'italic', paddingVertical: 14, textAlign: 'center' }}>
+                              Không tìm thấy nhiệm vụ nào ở trạng thái này.
+                            </Text>
+                          ) : (
+                            <View style={{ gap: 8, marginTop: 8 }}>
+                              {tasks.map(t => (
+                                <TouchableOpacity
+                                  key={t.id}
+                                  style={[
+                                    styles.accordionTaskCard, 
+                                    { 
+                                      borderColor: t.id === highlightedTaskId ? '#eab308' : colors.border,
+                                      backgroundColor: t.id === highlightedTaskId ? '#fef08a' : colors.card,
+                                      borderWidth: t.id === highlightedTaskId ? 1.5 : 1
+                                    }
+                                  ]}
+                                  onPress={() => {
+                                    setSelectedTask(t);
+                                    setIsDetailModalOpen(true);
+                                  }}
+                                  activeOpacity={0.7}
+                                >
+                                  <View style={{ flex: 1 }}>
+                                    <Text style={[styles.accordionTaskTitle, { color: colors.text }]} numberOfLines={1}>
+                                      {t.title}
+                                    </Text>
+                                    <Text style={{ fontSize: 11, color: colors.tabIconDefault, marginTop: 2 }}>
+                                      👤 Giao cho: {t.assignee_name || (t.assignees && t.assignees.length > 0 ? t.assignees.map(a => a.name).join(', ') : 'Chưa gán')}
+                                    </Text>
+                                  </View>
+                                  <Ionicons name="arrow-forward-outline" size={16} color={colors.tabIconDefault} />
+                                </TouchableOpacity>
+                              ))}
+                            </View>
+                          )}
                         </View>
                       )}
                     </View>
-                  )}
-                </View>
-              );
-            })}
-          </View>
+                  );
+                })}
+              </View>
+            </>
+          )}
         </ScrollView>
       )}
 
@@ -1585,5 +1874,32 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  searchResultCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 14,
+  },
+  searchResultTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  searchResultStatus: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  searchDetailBtn: {
+    padding: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  centerContainerSearch: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 40,
   },
 });

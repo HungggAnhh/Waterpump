@@ -41,6 +41,7 @@ import voiceUploadWorker from '../../services/audio/voiceUploadWorker';
 import VoiceActionSheet from '../../components/VoiceActionSheet';
 import * as Haptics from 'expo-haptics';
 import { VoicePlayer } from '../../services/audio/player';
+import { getMessageDayLabel, formatDateTime } from '../../utils/dateTime';
 
 export default function ChatRoomScreen() {
   const { id, messageId } = useLocalSearchParams();
@@ -155,7 +156,7 @@ export default function ChatRoomScreen() {
               attachment_url: q.localUri,
               attachment_duration: q.duration,
               attachment_mime_type: 'audio/m4a',
-              created_at: new Date(q.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              created_at: new Date(q.createdAt).toISOString(),
               status: q.status,
               uploadProgress: q.uploadProgress,
               client_message_id: q.client_message_id
@@ -1526,27 +1527,41 @@ export default function ChatRoomScreen() {
                 </View>
               ) : null
             }
-            renderItem={({ item }) => {
+            renderItem={({ item, index }) => {
               const isLastMyMsg = item.id === lastMyMessageId;
+              const currentDay = getMessageDayLabel(item.created_at);
+              const previousMessage = messages[index + 1];
+              const previousDay = previousMessage ? getMessageDayLabel(previousMessage.created_at) : null;
+              const showDateSeparator = currentDay !== previousDay;
+
               return (
-                <MessageItem
-                  item={item}
-                  isMine={item.sender_id === currentUser.id}
-                  colors={colors}
-                  onPressImage={handlePressImage}
-                  onLongPress={handleOpenActionMenu}
-                  onDoubleTap={handleDoubleTapMessage}
-                  onPressQuote={handlePressQuote}
-                  onPressReactions={handlePressReactions}
-                  currentUserName={currentUser.name}
-                  isHighlighted={item.id === highlightedMessageId}
-                  onRecallPress={handleRecallMessage}
-                  readBy={isLastMyMsg ? readByMembers : undefined}
-                  currentUserId={currentUser.id}
-                  onUpdateTaskStatus={handleUpdateTaskStatus}
-                  onResendVoice={handleResendVoiceMessage}
-                  onDeleteVoice={handleDeleteVoiceMessage}
-                />
+                <View style={{ width: '100%' }}>
+                  {showDateSeparator && (
+                    <View style={styles.dateSeparator}>
+                      <View style={[styles.dateSeparatorLine, { backgroundColor: colors.border }]} />
+                      <Text style={[styles.dateSeparatorText, { color: colors.textSecondary }]}>{currentDay}</Text>
+                      <View style={[styles.dateSeparatorLine, { backgroundColor: colors.border }]} />
+                    </View>
+                  )}
+                  <MessageItem
+                    item={item}
+                    isMine={item.sender_id === currentUser.id}
+                    colors={colors}
+                    onPressImage={handlePressImage}
+                    onLongPress={handleOpenActionMenu}
+                    onDoubleTap={handleDoubleTapMessage}
+                    onPressQuote={handlePressQuote}
+                    onPressReactions={handlePressReactions}
+                    currentUserName={currentUser.name}
+                    isHighlighted={item.id === highlightedMessageId}
+                    onRecallPress={handleRecallMessage}
+                    readBy={isLastMyMsg ? readByMembers : undefined}
+                    currentUserId={currentUser.id}
+                    onUpdateTaskStatus={handleUpdateTaskStatus}
+                    onResendVoice={handleResendVoiceMessage}
+                    onDeleteVoice={handleDeleteVoiceMessage}
+                  />
+                </View>
               );
             }}
           />
@@ -2239,7 +2254,7 @@ export default function ChatRoomScreen() {
                   <View style={styles.infoDetailRow}>
                     <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>Thời gian gửi:</Text>
                     <Text style={[styles.infoVal, { color: colors.text }]}>
-                      {new Date(selectedInfoMessage.raw_time || selectedInfoMessage.created_at).toLocaleString()}
+                      {formatDateTime(selectedInfoMessage.raw_time || selectedInfoMessage.created_at)}
                     </Text>
                   </View>
 
@@ -2324,6 +2339,23 @@ export default function ChatRoomScreen() {
 }
 
 const styles = StyleSheet.create({
+  dateSeparator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 16,
+    paddingHorizontal: 20,
+  },
+  dateSeparatorLine: {
+    flex: 1,
+    height: 1,
+  },
+  dateSeparatorText: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginHorizontal: 10,
+    backgroundColor: 'transparent',
+  },
   safeArea: {
     flex: 1,
   },

@@ -3,6 +3,7 @@ import React from 'react';
 import { StyleSheet, Text, View, Image, TouchableOpacity, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import VoiceMessage from './VoiceMessage';
+import { formatMessageTime } from '../utils/dateTime';
 
 export interface Message {
   id: number | string; // support string client-side optimistic IDs
@@ -658,17 +659,6 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
       )}
     </View>
   );
-};
-
-const formatMessageTime = (timeInput: string | Date | null | undefined): string => {
-  if (!timeInput) return '';
-  const date = typeof timeInput === 'string' ? new Date(timeInput) : timeInput;
-  if (isNaN(date.getTime())) {
-    return String(timeInput);
-  }
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  return `${hours}:${minutes}`;
 };
 
 export const MessageItem = React.memo(MessageItemComponent, (prevProps, nextProps) => {
