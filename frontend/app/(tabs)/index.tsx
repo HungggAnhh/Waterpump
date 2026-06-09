@@ -331,6 +331,46 @@ export default function HomeScreen() {
               <Text style={{ fontSize: 13, fontWeight: '700', color: colors.tint }}>Xem tất cả</Text>
             </TouchableOpacity>
           </View>
+          
+          {(() => {
+            const assignedTotal = stats.assigned_to_me?.total || 0;
+            const assignedCompleted = stats.assigned_to_me?.completed || 0;
+            const assignedRate = assignedTotal > 0 ? Math.round((assignedCompleted / assignedTotal) * 100) : 0;
+            
+            return (
+              <View 
+                style={{
+                  borderWidth: 1,
+                  borderRadius: 14,
+                  padding: 12,
+                  backgroundColor: colors.background,
+                  borderColor: colors.border,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  marginBottom: 12,
+                  marginHorizontal: 12
+                }}
+              >
+                <View style={{ flex: 1, marginRight: 16 }}>
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: colors.tabIconDefault, marginBottom: 6, letterSpacing: 0.5 }}>
+                    TỶ LỆ HOÀN THÀNH NHIỆM VỤ ĐƯỢC GIAO
+                  </Text>
+                  <View style={{ height: 6, width: '100%', backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden' }}>
+                    <View style={{ height: '100%', width: `${assignedRate}%`, backgroundColor: '#10b981', borderRadius: 3 }} />
+                  </View>
+                  <Text style={{ fontSize: 11, color: colors.tabIconDefault, fontWeight: '600', marginTop: 6 }}>
+                    {assignedCompleted} trên tổng số {assignedTotal} nhiệm vụ đã hoàn thành.
+                  </Text>
+                </View>
+                <View style={{ alignItems: 'center', justifyContent: 'center', backgroundColor: '#ecfdf5', borderRadius: 10, width: 44, height: 44, borderWidth: 1, borderColor: '#10b981' }}>
+                  <Text style={{ fontSize: 14, fontWeight: '900', color: '#059669' }}>
+                    {assignedRate}%
+                  </Text>
+                </View>
+              </View>
+            );
+          })()}
 
           <View style={styles.widgetGrid}>
             {/* 1. Tổng việc */}
@@ -559,374 +599,71 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* 2. PREMIUM KPI STATS CARDS */}
-        <Text style={[styles.sectionTitle, { color: colors.text }]}>Số liệu công việc {user?.role === 'admin' ? '(Toàn cục)' : '(Được giao)'}</Text>
-        {statsLoading ? (
-          <View style={styles.statsLoader}>
-            <ActivityIndicator size="small" color={colors.tint} />
-            <Text style={[styles.statsLoaderText, { color: colors.tabIconDefault }]}>Đang tính toán thống kê...</Text>
-          </View>
-        ) : (
-          <View style={{ gap: 14, marginBottom: 24 }}>
-            {/* Completion Rate Glassmorphic Card */}
-            <View 
-              style={{
-                width: '100%',
-                borderWidth: 1,
-                borderRadius: 18,
-                padding: 16,
-                backgroundColor: colors.card,
-                borderColor: colors.border,
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                ...Platform.select({
-                  ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.03, shadowRadius: 4 },
-                  android: { elevation: 1 }
-                })
-              }}
-            >
-              <View style={{ flex: 1, marginRight: 16 }}>
-                <Text style={{ fontSize: 11.5, fontWeight: '700', color: colors.tabIconDefault, marginBottom: 8, letterSpacing: 0.5 }}>
-                  TỶ LỆ HOÀN THÀNH DOANH NGHIỆP
-                </Text>
-                <View style={{ height: 8, width: '100%', backgroundColor: colors.border, borderRadius: 4, overflow: 'hidden' }}>
-                  <View style={{ height: '100%', width: `${stats.completion_rate}%`, backgroundColor: '#10b981', borderRadius: 4 }} />
+        {/* Admin-only: Realtime User Account Stats card */}
+        {user?.role === 'admin' && (
+          <View 
+            style={{
+              width: '100%',
+              borderWidth: 1,
+              borderRadius: 18,
+              padding: 16,
+              backgroundColor: colors.card,
+              borderColor: colors.border,
+              marginBottom: 16,
+              ...Platform.select({
+                ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.03, shadowRadius: 4 },
+                android: { elevation: 1 }
+              })
+            }}
+          >
+            <Text style={{ fontSize: 11.5, fontWeight: '700', color: colors.tint, marginBottom: 12, letterSpacing: 0.5 }}>
+              📊 THỐNG KÊ TÀI KHOẢN HỆ THỐNG (ADMIN)
+            </Text>
+            
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: 10 }}>
+              {/* Tổng số tài khoản */}
+              <View style={{ width: '47%', padding: 10, backgroundColor: colors.background, borderRadius: 10, borderWidth: 1, borderColor: colors.border, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <View style={{ width: 28, height: 28, borderRadius: 8, backgroundColor: '#eff6ff', justifyContent: 'center', alignItems: 'center' }}>
+                  <Ionicons name="people" size={14} color="#2563eb" />
                 </View>
-                <Text style={{ fontSize: 12, color: colors.tabIconDefault, fontWeight: '600', marginTop: 8 }}>
-                  {stats.completed} trên tổng số {stats.total} nhiệm vụ đã được duyệt hoàn thành.
-                </Text>
+                <View>
+                  <Text style={{ fontSize: 10, color: colors.tabIconDefault, fontWeight: '700' }}>Tổng tài khoản</Text>
+                  <Text style={{ fontSize: 14, fontWeight: '800', color: colors.text, marginTop: 2 }}>{totalAccounts}</Text>
+                </View>
               </View>
-              <View style={{ alignItems: 'center', justifyContent: 'center', backgroundColor: '#ecfdf5', borderRadius: 16, width: 60, height: 60, borderWidth: 1, borderColor: '#10b981' }}>
-                <Text style={{ fontSize: 18, fontWeight: '900', color: '#059669' }}>
-                  {stats.completion_rate}%
-                </Text>
+
+              {/* Hoạt động */}
+              <View style={{ width: '47%', padding: 10, backgroundColor: colors.background, borderRadius: 10, borderWidth: 1, borderColor: colors.border, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <View style={{ width: 28, height: 28, borderRadius: 8, backgroundColor: '#ecfdf5', justifyContent: 'center', alignItems: 'center' }}>
+                  <Ionicons name="checkmark-circle" size={14} color="#10b981" />
+                </View>
+                <View>
+                  <Text style={{ fontSize: 10, color: colors.tabIconDefault, fontWeight: '700' }}>Hoạt động</Text>
+                  <Text style={{ fontSize: 14, fontWeight: '800', color: colors.text, marginTop: 2 }}>{activeCount}</Text>
+                </View>
               </View>
-            </View>
 
-            {/* Task Statistics Progress Bars Card */}
-            <View 
-              style={{
-                width: '100%',
-                borderWidth: 1,
-                borderRadius: 18,
-                padding: 16,
-                backgroundColor: colors.card,
-                borderColor: colors.border,
-                ...Platform.select({
-                  ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.03, shadowRadius: 4 },
-                  android: { elevation: 1 }
-                })
-              }}
-            >
-              <Text style={{ fontSize: 11.5, fontWeight: '700', color: colors.tabIconDefault, marginBottom: 14, letterSpacing: 0.5 }}>
-                TIẾN ĐỘ NHIỆM VỤ CHI TIẾT
-              </Text>
-              
-              <View style={{ gap: 12 }}>
-                {/* 1. Đã xem */}
-                <View>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <Text style={{ fontSize: 13, fontWeight: '600', color: colors.text }}>
-                      👀 Đã xem
-                    </Text>
-                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#d97706' }}>
-                      {stats.viewed || 0}/{stats.total || 0}
-                    </Text>
-                  </View>
-                  <View style={{ height: 6, width: '100%', backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden' }}>
-                    <View style={{ height: '100%', width: `${stats.total > 0 ? Math.round(((stats.viewed || 0) / stats.total) * 100) : 0}%`, backgroundColor: '#eab308', borderRadius: 3 }} />
-                  </View>
-                </View>
+              {/* Admins */}
+              <View style={{ width: '31%', padding: 8, backgroundColor: colors.background, borderRadius: 10, borderWidth: 1, borderColor: colors.border, alignItems: 'center' }}>
+                <Ionicons name="key" size={14} color="#dc2626" style={{ marginBottom: 4 }} />
+                <Text style={{ fontSize: 9, color: colors.tabIconDefault, fontWeight: '700' }}>Admin</Text>
+                <Text style={{ fontSize: 13, fontWeight: '800', color: colors.text, marginTop: 2 }}>{adminCount}</Text>
+              </View>
 
-                {/* 2. Đang làm */}
-                <View>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <Text style={{ fontSize: 13, fontWeight: '600', color: colors.text }}>
-                      🟢 Đang làm
-                    </Text>
-                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#0284c7' }}>
-                      {stats.in_progress || 0}/{stats.total || 0}
-                    </Text>
-                  </View>
-                  <View style={{ height: 6, width: '100%', backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden' }}>
-                    <View style={{ height: '100%', width: `${stats.total > 0 ? Math.round(((stats.in_progress || 0) / stats.total) * 100) : 0}%`, backgroundColor: '#0284c7', borderRadius: 3 }} />
-                  </View>
-                </View>
+              {/* Users */}
+              <View style={{ width: '31%', padding: 8, backgroundColor: colors.background, borderRadius: 10, borderWidth: 1, borderColor: colors.border, alignItems: 'center' }}>
+                <Ionicons name="person" size={14} color="#0284c7" style={{ marginBottom: 4 }} />
+                <Text style={{ fontSize: 9, color: colors.tabIconDefault, fontWeight: '700' }}>User</Text>
+                <Text style={{ fontSize: 13, fontWeight: '800', color: colors.text, marginTop: 2 }}>{userCount}</Text>
+              </View>
 
-                {/* 3. Hoàn thành */}
-                <View>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <Text style={{ fontSize: 13, fontWeight: '600', color: colors.text }}>
-                      ✅ Hoàn thành
-                    </Text>
-                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#10b981' }}>
-                      {stats.completed || 0}/{stats.total || 0}
-                    </Text>
-                  </View>
-                  <View style={{ height: 6, width: '100%', backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden' }}>
-                    <View style={{ height: '100%', width: `${stats.total > 0 ? Math.round(((stats.completed || 0) / stats.total) * 100) : 0}%`, backgroundColor: '#10b981', borderRadius: 3 }} />
-                  </View>
-                </View>
+              {/* Bị khóa */}
+              <View style={{ width: '31%', padding: 8, backgroundColor: colors.background, borderRadius: 10, borderWidth: 1, borderColor: colors.border, alignItems: 'center' }}>
+                <Ionicons name="lock-closed" size={14} color="#4b5563" style={{ marginBottom: 4 }} />
+                <Text style={{ fontSize: 9, color: colors.tabIconDefault, fontWeight: '700' }}>Bị khóa</Text>
+                <Text style={{ fontSize: 13, fontWeight: '800', color: colors.text, marginTop: 2 }}>{lockedCount}</Text>
               </View>
             </View>
-
-            {/* Group Assignment Progress Card */}
-            <View 
-              style={{
-                width: '100%',
-                borderWidth: 1,
-                borderRadius: 18,
-                padding: 16,
-                backgroundColor: colors.card,
-                borderColor: colors.border,
-                marginTop: 16,
-                ...Platform.select({
-                  ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.03, shadowRadius: 4 },
-                  android: { elevation: 1 }
-                })
-              }}
-            >
-              <Text style={{ fontSize: 11.5, fontWeight: '700', color: colors.tabIconDefault, marginBottom: 14, letterSpacing: 0.5 }}>
-                TIẾN ĐỘ NHÓM
-              </Text>
-              
-              <View style={{ gap: 12 }}>
-                {/* 1. Đã xem */}
-                <View>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <Text style={{ fontSize: 13, fontWeight: '600', color: colors.text }}>
-                      👀 Đã xem
-                    </Text>
-                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#d97706' }}>
-                      {stats.viewed_assignments || 0}/{stats.total_assignments || 0}
-                    </Text>
-                  </View>
-                  <View style={{ height: 6, width: '100%', backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden' }}>
-                    <View style={{ height: '100%', width: `${(stats.total_assignments || 0) > 0 ? Math.round(((stats.viewed_assignments || 0) / (stats.total_assignments || 1)) * 100) : 0}%`, backgroundColor: '#eab308', borderRadius: 3 }} />
-                  </View>
-                </View>
-
-                {/* 2. Đã báo cáo */}
-                <View>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <Text style={{ fontSize: 13, fontWeight: '600', color: colors.text }}>
-                      📝 Đã báo cáo
-                    </Text>
-                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#4f46e5' }}>
-                      {stats.reported_assignments || 0}/{stats.total_assignments || 0}
-                    </Text>
-                  </View>
-                  <View style={{ height: 6, width: '100%', backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden' }}>
-                    <View style={{ height: '100%', width: `${(stats.total_assignments || 0) > 0 ? Math.round(((stats.reported_assignments || 0) / (stats.total_assignments || 1)) * 100) : 0}%`, backgroundColor: '#6366f1', borderRadius: 3 }} />
-                  </View>
-                </View>
-
-                {/* 3. Chưa báo cáo */}
-                <View>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <Text style={{ fontSize: 13, fontWeight: '600', color: colors.text }}>
-                      ⚪ Chưa báo cáo
-                    </Text>
-                    <Text style={{ fontSize: 13, fontWeight: '700', color: colors.tabIconDefault }}>
-                      {stats.unreported_assignments || 0}/{stats.total_assignments || 0}
-                    </Text>
-                  </View>
-                  <View style={{ height: 6, width: '100%', backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden' }}>
-                    <View style={{ height: '100%', width: `${(stats.total_assignments || 0) > 0 ? Math.round(((stats.unreported_assignments || 0) / (stats.total_assignments || 1)) * 100) : 0}%`, backgroundColor: '#94a3b8', borderRadius: 3 }} />
-                  </View>
-                </View>
-
-                {/* 4. Đang làm */}
-                <View>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <Text style={{ fontSize: 13, fontWeight: '600', color: colors.text }}>
-                      🟢 Đang làm
-                    </Text>
-                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#0284c7' }}>
-                      {stats.in_progress_assignments || 0}/{stats.total_assignments || 0}
-                    </Text>
-                  </View>
-                  <View style={{ height: 6, width: '100%', backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden' }}>
-                    <View style={{ height: '100%', width: `${(stats.total_assignments || 0) > 0 ? Math.round(((stats.in_progress_assignments || 0) / (stats.total_assignments || 1)) * 100) : 0}%`, backgroundColor: '#0284c7', borderRadius: 3 }} />
-                  </View>
-                </View>
-
-                {/* 5. Hoàn thành */}
-                <View>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <Text style={{ fontSize: 13, fontWeight: '600', color: colors.text }}>
-                      ✅ Hoàn thành
-                    </Text>
-                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#10b981' }}>
-                      {stats.completed_assignments || 0}/{stats.total_assignments || 0}
-                    </Text>
-                  </View>
-                  <View style={{ height: 6, width: '100%', backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden' }}>
-                    <View style={{ height: '100%', width: `${(stats.total_assignments || 0) > 0 ? Math.round(((stats.completed_assignments || 0) / (stats.total_assignments || 1)) * 100) : 0}%`, backgroundColor: '#10b981', borderRadius: 3 }} />
-                  </View>
-                </View>
-              </View>
-            </View>
-
-            <View style={styles.kpiGrid}>
-              {/* Card 1: Tổng công việc */}
-              <TouchableOpacity 
-                style={[styles.kpiCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                onPress={() => router.push({ pathname: '/tasks', params: { tab: 'summary', status: 'all' } })}
-                activeOpacity={0.7}
-              >
-                <View style={[styles.kpiIconWrapper, { backgroundColor: '#eff6ff' }]}>
-                  <Ionicons name="folder-open" size={18} color="#2563eb" />
-                </View>
-                <View style={styles.kpiInfo}>
-                  <Text style={[styles.kpiTitle, { color: colors.tabIconDefault }]}>Tổng việc</Text>
-                  <Text style={[styles.kpiNumber, { color: colors.text }]}>{stats.total}</Text>
-                </View>
-              </TouchableOpacity>
-
-              {/* Card 2: Chưa bắt đầu */}
-              <TouchableOpacity 
-                style={[styles.kpiCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                onPress={() => router.push({ pathname: '/tasks', params: { tab: 'summary', status: 'not_started' } })}
-                activeOpacity={0.7}
-              >
-                <View style={[styles.kpiIconWrapper, { backgroundColor: '#f3f4f6' }]}>
-                  <Ionicons name="ellipse-outline" size={18} color="#4b5563" />
-                </View>
-                <View style={styles.kpiInfo}>
-                  <Text style={[styles.kpiTitle, { color: colors.tabIconDefault }]}>Chưa làm</Text>
-                  <Text style={[styles.kpiNumber, { color: colors.text }]}>{stats.pending}</Text>
-                </View>
-              </TouchableOpacity>
-
-              {/* Card 3: Đang thực hiện */}
-              <TouchableOpacity 
-                style={[styles.kpiCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                onPress={() => router.push({ pathname: '/tasks', params: { tab: 'summary', status: 'in_progress' } })}
-                activeOpacity={0.7}
-              >
-                <View style={[styles.kpiIconWrapper, { backgroundColor: '#e0f2fe' }]}>
-                  <Ionicons name="sync" size={18} color="#0284c7" />
-                </View>
-                <View style={styles.kpiInfo}>
-                  <Text style={[styles.kpiTitle, { color: colors.tabIconDefault }]}>Đang làm</Text>
-                  <Text style={[styles.kpiNumber, { color: colors.text }]}>{stats.in_progress}</Text>
-                </View>
-              </TouchableOpacity>
-
-              {/* Card 4: Chờ duyệt */}
-              <TouchableOpacity 
-                style={[styles.kpiCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                onPress={() => router.push({ pathname: '/tasks', params: { tab: 'summary', status: 'waiting_approval' } })}
-                activeOpacity={0.7}
-              >
-                <View style={[styles.kpiIconWrapper, { backgroundColor: '#fef3c7' }]}>
-                  <Ionicons name="hourglass" size={18} color="#d97706" />
-                </View>
-                <View style={styles.kpiInfo}>
-                  <Text style={[styles.kpiTitle, { color: colors.tabIconDefault }]}>Chờ duyệt</Text>
-                  <Text style={[styles.kpiNumber, { color: colors.text }]}>{stats.waiting_approval}</Text>
-                </View>
-              </TouchableOpacity>
-
-              {/* Card 5: Cần làm lại */}
-              <TouchableOpacity 
-                style={[styles.kpiCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                onPress={() => router.push({ pathname: '/tasks', params: { tab: 'summary', status: 'revision_required' } })}
-                activeOpacity={0.7}
-              >
-                <View style={[styles.kpiIconWrapper, { backgroundColor: '#fee2e2' }]}>
-                  <Ionicons name="refresh-circle" size={18} color="#dc2626" />
-                </View>
-                <View style={styles.kpiInfo}>
-                  <Text style={[styles.kpiTitle, { color: colors.tabIconDefault }]}>Làm lại</Text>
-                  <Text style={[styles.kpiNumber, { color: colors.text }]}>{stats.revision_required}</Text>
-                </View>
-              </TouchableOpacity>
-
-              {/* Card 6: Hoàn thành */}
-              <TouchableOpacity 
-                style={[styles.kpiCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                onPress={() => router.push({ pathname: '/tasks', params: { tab: 'summary', status: 'completed' } })}
-                activeOpacity={0.7}
-              >
-                <View style={[styles.kpiIconWrapper, { backgroundColor: '#d1fae5' }]}>
-                  <Ionicons name="checkmark-done-circle" size={18} color="#059669" />
-                </View>
-                <View style={styles.kpiInfo}>
-                  <Text style={[styles.kpiTitle, { color: colors.tabIconDefault }]}>Hoàn thành</Text>
-                  <Text style={[styles.kpiNumber, { color: colors.text }]}>{stats.completed}</Text>
-                </View>
-              </TouchableOpacity>
-            </View>
-
-            {/* Admin-only: Realtime User Account Stats card */}
-            {user?.role === 'admin' && (
-              <View 
-                style={{
-                  width: '100%',
-                  borderWidth: 1,
-                  borderRadius: 18,
-                  padding: 16,
-                  backgroundColor: colors.card,
-                  borderColor: colors.border,
-                  ...Platform.select({
-                    ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.03, shadowRadius: 4 },
-                    android: { elevation: 1 }
-                  })
-                }}
-              >
-                <Text style={{ fontSize: 11.5, fontWeight: '700', color: colors.tint, marginBottom: 12, letterSpacing: 0.5 }}>
-                  📊 THỐNG KÊ TÀI KHOẢN HỆ THỐNG (ADMIN)
-                </Text>
-                
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: 10 }}>
-                  {/* Tổng số tài khoản */}
-                  <View style={{ width: '47%', padding: 10, backgroundColor: colors.background, borderRadius: 10, borderWidth: 1, borderColor: colors.border, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                    <View style={{ width: 28, height: 28, borderRadius: 8, backgroundColor: '#eff6ff', justifyContent: 'center', alignItems: 'center' }}>
-                      <Ionicons name="people" size={14} color="#2563eb" />
-                    </View>
-                    <View>
-                      <Text style={{ fontSize: 10, color: colors.tabIconDefault, fontWeight: '700' }}>Tổng tài khoản</Text>
-                      <Text style={{ fontSize: 14, fontWeight: '800', color: colors.text, marginTop: 2 }}>{totalAccounts}</Text>
-                    </View>
-                  </View>
-
-                  {/* Hoạt động */}
-                  <View style={{ width: '47%', padding: 10, backgroundColor: colors.background, borderRadius: 10, borderWidth: 1, borderColor: colors.border, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                    <View style={{ width: 28, height: 28, borderRadius: 8, backgroundColor: '#ecfdf5', justifyContent: 'center', alignItems: 'center' }}>
-                      <Ionicons name="checkmark-circle" size={14} color="#10b981" />
-                    </View>
-                    <View>
-                      <Text style={{ fontSize: 10, color: colors.tabIconDefault, fontWeight: '700' }}>Hoạt động</Text>
-                      <Text style={{ fontSize: 14, fontWeight: '800', color: colors.text, marginTop: 2 }}>{activeCount}</Text>
-                    </View>
-                  </View>
-
-                  {/* Admins */}
-                  <View style={{ width: '31%', padding: 8, backgroundColor: colors.background, borderRadius: 10, borderWidth: 1, borderColor: colors.border, alignItems: 'center' }}>
-                    <Ionicons name="key" size={14} color="#dc2626" style={{ marginBottom: 4 }} />
-                    <Text style={{ fontSize: 9, color: colors.tabIconDefault, fontWeight: '700' }}>Admin</Text>
-                    <Text style={{ fontSize: 13, fontWeight: '800', color: colors.text, marginTop: 2 }}>{adminCount}</Text>
-                  </View>
-
-                  {/* Users */}
-                  <View style={{ width: '31%', padding: 8, backgroundColor: colors.background, borderRadius: 10, borderWidth: 1, borderColor: colors.border, alignItems: 'center' }}>
-                    <Ionicons name="person" size={14} color="#0284c7" style={{ marginBottom: 4 }} />
-                    <Text style={{ fontSize: 9, color: colors.tabIconDefault, fontWeight: '700' }}>User</Text>
-                    <Text style={{ fontSize: 13, fontWeight: '800', color: colors.text, marginTop: 2 }}>{userCount}</Text>
-                  </View>
-
-                  {/* Bị khóa */}
-                  <View style={{ width: '31%', padding: 8, backgroundColor: colors.background, borderRadius: 10, borderWidth: 1, borderColor: colors.border, alignItems: 'center' }}>
-                    <Ionicons name="lock-closed" size={14} color="#4b5563" style={{ marginBottom: 4 }} />
-                    <Text style={{ fontSize: 9, color: colors.tabIconDefault, fontWeight: '700' }}>Bị khóa</Text>
-                    <Text style={{ fontSize: 13, fontWeight: '800', color: colors.text, marginTop: 2 }}>{lockedCount}</Text>
-                  </View>
-                </View>
-              </View>
-            )}
           </View>
         )}
 

@@ -1300,9 +1300,7 @@ export default function PageTasksScreen() {
               const canUrge = isAdmin || (task.created_by !== null && task.created_by === user?.id);
               const rowBg = task.id === highlightedTaskId 
                 ? '#fef08a' 
-                : (isAssignedToMe 
-                    ? (colorScheme === 'dark' ? '#1E293B' : '#EFF6FF') 
-                    : colors.card);
+                : colors.card;
 
               return (
                 <View
@@ -1316,8 +1314,8 @@ export default function PageTasksScreen() {
                       backgroundColor: rowBg, 
                       borderBottomColor: task.id === highlightedTaskId ? '#eab308' : colors.border,
                       opacity: task.is_reviewed ? 0.4 : 1,
-                      borderLeftWidth: isAssignedToMe ? 4 : 0,
-                      borderLeftColor: isAssignedToMe ? '#2563EB' : 'transparent',
+                      borderLeftWidth: 0,
+                      borderLeftColor: 'transparent',
                       ...(task.id === highlightedTaskId && {
                         borderColor: '#eab308',
                         borderWidth: 1.5,
@@ -1343,46 +1341,6 @@ export default function PageTasksScreen() {
                       >
                         {task.title}
                       </Text>
-                      {/* Priority Badge */}
-                      {(() => {
-                        let label = '';
-                        let bg = '';
-                        let textCol = '';
-                        if (task.priority === 'high') {
-                          label = '🔴 Cao';
-                          bg = '#fee2e2';
-                          textCol = '#dc2626';
-                        } else if (task.priority === 'medium') {
-                          label = '🟡 Trung bình';
-                          bg = '#fffbeb';
-                          textCol = '#d97706';
-                        } else {
-                          label = '🟢 Thấp';
-                          bg = '#d1fae5';
-                          textCol = '#065f46';
-                        }
-                        return (
-                          <View style={{
-                            backgroundColor: bg,
-                            paddingHorizontal: 6,
-                            paddingVertical: 1.5,
-                            borderRadius: 4,
-                          }}>
-                            <Text style={{ fontSize: 9.5, fontWeight: '700', color: textCol }}>{label}</Text>
-                          </View>
-                        );
-                      })()}
-                      {/* Giao cho tôi Badge */}
-                      {isAssignedToMe && (
-                        <View style={{
-                          backgroundColor: '#DBEAFE',
-                          paddingHorizontal: 8,
-                          paddingVertical: 2,
-                          borderRadius: 9999,
-                        }}>
-                          <Text style={{ fontSize: 9.5, color: '#2563EB', fontWeight: '600' }}>🎯 Giao cho tôi</Text>
-                        </View>
-                      )}
                     </TouchableOpacity>
                     {task.total_assignees !== undefined && task.total_assignees > 0 && (
                       <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.border + '30', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8, marginLeft: 8, gap: 6 }}>

@@ -147,12 +147,8 @@ const TaskItem = React.memo(({
 
   const cardBg = isHighlighted 
     ? '#fef08a' 
-    : (isAssignedToMe 
-        ? (colorScheme === 'dark' ? '#1E293B' : '#EFF6FF') 
-        : colors.card);
+    : colors.card;
   const cardBorderColor = isHighlighted ? '#eab308' : colors.border;
-  const cardBorderLeftWidth = isAssignedToMe ? 4 : 1;
-  const cardBorderLeftColor = isAssignedToMe ? '#2563EB' : cardBorderColor;
 
   return (
     <TouchableOpacity
@@ -162,8 +158,6 @@ const TaskItem = React.memo(({
           backgroundColor: cardBg, 
           borderColor: cardBorderColor,
           borderWidth: isHighlighted ? 1.5 : 1,
-          borderLeftWidth: cardBorderLeftWidth,
-          borderLeftColor: cardBorderLeftColor,
         }
       ]}
       onPress={onPress}
@@ -174,46 +168,6 @@ const TaskItem = React.memo(({
           <Text style={[styles.taskCardTitle, { color: colors.text, marginBottom: 0, flexShrink: 1 }]} numberOfLines={1}>
             {task.title}
           </Text>
-          {/* Priority Badge */}
-          {(() => {
-            let label = '';
-            let bg = '';
-            let textCol = '';
-            if (task.priority === 'high') {
-              label = '🔴 Cao';
-              bg = '#fee2e2';
-              textCol = '#dc2626';
-            } else if (task.priority === 'medium') {
-              label = '🟡 Trung bình';
-              bg = '#fffbeb';
-              textCol = '#d97706';
-            } else {
-              label = '🟢 Thấp';
-              bg = '#d1fae5';
-              textCol = '#065f46';
-            }
-            return (
-              <View style={{
-                backgroundColor: bg,
-                paddingHorizontal: 6,
-                paddingVertical: 1.5,
-                borderRadius: 4,
-              }}>
-                <Text style={{ fontSize: 9.5, fontWeight: '700', color: textCol }}>{label}</Text>
-              </View>
-            );
-          })()}
-          {/* Giao cho tôi Badge */}
-          {isAssignedToMe && (
-            <View style={{
-              backgroundColor: '#DBEAFE',
-              paddingHorizontal: 8,
-              paddingVertical: 2,
-              borderRadius: 9999,
-            }}>
-              <Text style={{ fontSize: 9.5, color: '#2563EB', fontWeight: '600' }}>🎯 Giao cho tôi</Text>
-            </View>
-          )}
         </View>
 
         <View style={styles.taskCardMetaRow}>
