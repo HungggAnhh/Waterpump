@@ -39,6 +39,12 @@ interface KPIStats {
   completed: number;
   completion_rate: number;
   viewed?: number;
+  total_assignments?: number;
+  viewed_assignments?: number;
+  reported_assignments?: number;
+  unreported_assignments?: number;
+  in_progress_assignments?: number;
+  completed_assignments?: number;
 }
 
 export default function HomeScreen() {
@@ -58,6 +64,12 @@ export default function HomeScreen() {
     completed: 0,
     completion_rate: 0,
     viewed: 0,
+    total_assignments: 0,
+    viewed_assignments: 0,
+    reported_assignments: 0,
+    unreported_assignments: 0,
+    in_progress_assignments: 0,
+    completed_assignments: 0,
   });
   const [statsLoading, setStatsLoading] = useState(true);
 
@@ -288,6 +300,104 @@ export default function HomeScreen() {
                   </View>
                   <View style={{ height: 6, width: '100%', backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden' }}>
                     <View style={{ height: '100%', width: `${stats.total > 0 ? Math.round(((stats.completed || 0) / stats.total) * 100) : 0}%`, backgroundColor: '#10b981', borderRadius: 3 }} />
+                  </View>
+                </View>
+              </View>
+            </View>
+
+            {/* Group Assignment Progress Card */}
+            <View 
+              style={{
+                width: '100%',
+                borderWidth: 1,
+                borderRadius: 18,
+                padding: 16,
+                backgroundColor: colors.card,
+                borderColor: colors.border,
+                marginTop: 16,
+                ...Platform.select({
+                  ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.03, shadowRadius: 4 },
+                  android: { elevation: 1 }
+                })
+              }}
+            >
+              <Text style={{ fontSize: 11.5, fontWeight: '700', color: colors.tabIconDefault, marginBottom: 14, letterSpacing: 0.5 }}>
+                TIẾN ĐỘ NHÓM
+              </Text>
+              
+              <View style={{ gap: 12 }}>
+                {/* 1. Đã xem */}
+                <View>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <Text style={{ fontSize: 13, fontWeight: '600', color: colors.text }}>
+                      👀 Đã xem
+                    </Text>
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#d97706' }}>
+                      {stats.viewed_assignments || 0}/{stats.total_assignments || 0}
+                    </Text>
+                  </View>
+                  <View style={{ height: 6, width: '100%', backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden' }}>
+                    <View style={{ height: '100%', width: `${(stats.total_assignments || 0) > 0 ? Math.round(((stats.viewed_assignments || 0) / (stats.total_assignments || 1)) * 100) : 0}%`, backgroundColor: '#eab308', borderRadius: 3 }} />
+                  </View>
+                </View>
+
+                {/* 2. Đã báo cáo */}
+                <View>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <Text style={{ fontSize: 13, fontWeight: '600', color: colors.text }}>
+                      📝 Đã báo cáo
+                    </Text>
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#4f46e5' }}>
+                      {stats.reported_assignments || 0}/{stats.total_assignments || 0}
+                    </Text>
+                  </View>
+                  <View style={{ height: 6, width: '100%', backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden' }}>
+                    <View style={{ height: '100%', width: `${(stats.total_assignments || 0) > 0 ? Math.round(((stats.reported_assignments || 0) / (stats.total_assignments || 1)) * 100) : 0}%`, backgroundColor: '#6366f1', borderRadius: 3 }} />
+                  </View>
+                </View>
+
+                {/* 3. Chưa báo cáo */}
+                <View>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <Text style={{ fontSize: 13, fontWeight: '600', color: colors.text }}>
+                      ⚪ Chưa báo cáo
+                    </Text>
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: colors.tabIconDefault }}>
+                      {stats.unreported_assignments || 0}/{stats.total_assignments || 0}
+                    </Text>
+                  </View>
+                  <View style={{ height: 6, width: '100%', backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden' }}>
+                    <View style={{ height: '100%', width: `${(stats.total_assignments || 0) > 0 ? Math.round(((stats.unreported_assignments || 0) / (stats.total_assignments || 1)) * 100) : 0}%`, backgroundColor: '#94a3b8', borderRadius: 3 }} />
+                  </View>
+                </View>
+
+                {/* 4. Đang làm */}
+                <View>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <Text style={{ fontSize: 13, fontWeight: '600', color: colors.text }}>
+                      🟢 Đang làm
+                    </Text>
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#0284c7' }}>
+                      {stats.in_progress_assignments || 0}/{stats.total_assignments || 0}
+                    </Text>
+                  </View>
+                  <View style={{ height: 6, width: '100%', backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden' }}>
+                    <View style={{ height: '100%', width: `${(stats.total_assignments || 0) > 0 ? Math.round(((stats.in_progress_assignments || 0) / (stats.total_assignments || 1)) * 100) : 0}%`, backgroundColor: '#0284c7', borderRadius: 3 }} />
+                  </View>
+                </View>
+
+                {/* 5. Hoàn thành */}
+                <View>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <Text style={{ fontSize: 13, fontWeight: '600', color: colors.text }}>
+                      ✅ Hoàn thành
+                    </Text>
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#10b981' }}>
+                      {stats.completed_assignments || 0}/{stats.total_assignments || 0}
+                    </Text>
+                  </View>
+                  <View style={{ height: 6, width: '100%', backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden' }}>
+                    <View style={{ height: '100%', width: `${(stats.total_assignments || 0) > 0 ? Math.round(((stats.completed_assignments || 0) / (stats.total_assignments || 1)) * 100) : 0}%`, backgroundColor: '#10b981', borderRadius: 3 }} />
                   </View>
                 </View>
               </View>

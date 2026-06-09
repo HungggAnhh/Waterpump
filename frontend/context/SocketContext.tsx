@@ -11,6 +11,9 @@ import { useCallStore } from '../store/useCallStore';
 import { IncomingCallModal } from '../components/IncomingCallModal';
 import { CallScreen } from '../components/CallScreen';
 import { playRingtone } from '../utils/webrtcShim';
+import { useVoiceSettings } from './VoiceSettingsContext';
+import { voiceNotification } from '../services/voiceNotification';
+import { activeDetailTaskId } from '../components/tasks/TaskDetailModal';
 
 interface SocketContextType {
   socket: Socket | null;
@@ -25,6 +28,12 @@ const SocketContext = createContext<SocketContextType>({
 
 export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, updateUserInContext } = useUser();
+  const { settings } = useVoiceSettings();
+  const settingsRef = useRef(settings);
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+
   const [isConnected, setIsConnected] = useState(false);
   const socketRef = useRef<Socket | null>(null);
 
@@ -94,14 +103,38 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
     });
 
+    const pendingMsgAlerts = new Map<string, { count: number; timer: any }>();
+
     socket.on('task_assigned_notification', (data: { task: any, message: string }) => {
       console.log('📡 [SOCKET:TASK_ASSIGNED] Received assignment notification:', data);
       Alert.alert('Nhiệm vụ mới 📋', data.message || 'Bạn vừa được giao nhiệm vụ mới');
+      
+      const currentSettings = settingsRef.current;
+      if (currentSettings.enabled && currentSettings.readTaskAssigned) {
+        const satisfyFocus = !currentSettings.onlyWhenHidden || (typeof document !== 'undefined' && document.hidden);
+        if (satisfyFocus) {
+          const taskTitle = data.task?.title || 'nhiệm vụ mới';
+          voiceNotification.speakTaskAssigned(taskTitle);
+        }
+      }
     });
 
-    socket.on('task_urged', (data: { task: any, message: string }) => {
+    socket.on('task_urged', (data: { task: any, message: string, urged_by_name?: string }) => {
       console.log('📡 [SOCKET:TASK_URGED] Received urge notification:', data);
       Alert.alert('Hối thúc công việc ⚡', data.message || 'Sếp đang hối thúc bạn thực hiện nhiệm vụ gấp');
+
+      const currentSettings = settingsRef.current;
+      if (currentSettings.enabled && currentSettings.readTaskUrged) {
+        const isMyAction = data.urged_by_name === user.name;
+        const isDetailOpen = Number(activeDetailTaskId) === Number(data.task?.id);
+        
+        if (!isMyAction && !isDetailOpen) {
+          const satisfyFocus = !currentSettings.onlyWhenHidden || (typeof document !== 'undefined' && document.hidden);
+          if (satisfyFocus) {
+            voiceNotification.speakTaskUrged(data.urged_by_name || 'Quản lý', data.task?.title || 'nhiệm vụ');
+          }
+        }
+      }
     });
 
     socket.on('update_online_users', (onlineUsers: any[]) => {
@@ -127,6 +160,38 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             }
           })
           .catch(e => console.error("Lỗi sync conversation:", e));
+      }
+
+      // Voice Alert for Message
+      const currentSettings = settingsRef.current;
+      const isMyMessage = Number(msg.user_id) === Number(user.id);
+      
+      if (currentSettings.enabled && currentSettings.readMessages && !isMyMessage) {
+        // Smart Context Rule: Do not speak if the active conversation is currently open
+        const isChatOpen = String(activeConversationId) === String(msg.conversation_id);
+        const shouldAlert = !isChatOpen;
+        
+        // Focus check
+        const isHidden = typeof document !== 'undefined' && document.hidden;
+        const satisfyFocus = !currentSettings.onlyWhenHidden || isHidden;
+
+        if (shouldAlert && satisfyFocus) {
+          const senderName = msg.user_name || 'Thành viên';
+          const existing = pendingMsgAlerts.get(senderName);
+          
+          let currentCount = 1;
+          if (existing) {
+            clearTimeout(existing.timer);
+            currentCount = existing.count + 1;
+          }
+
+          const timer = setTimeout(() => {
+            pendingMsgAlerts.delete(senderName);
+            voiceNotification.speakMessage(senderName, currentCount);
+          }, 2000); // 2 seconds debounce to group messages
+
+          pendingMsgAlerts.set(senderName, { count: currentCount, timer });
+        }
       }
     });
 
@@ -274,8 +339,145 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       socket.emit('join', user);
     });
 
+    // Voice notification task status and reporting listeners
+    const handleTaskViewed = (data: { taskId: number; userId: number; userName: string }) => {
+      const currentSettings = settingsRef.current;
+      const isMyAction = Number(data.userId) === Number(user.id);
+      const isDetailOpen = Number(activeDetailTaskId) === Number(data.taskId);
+
+      const satisfiesMonitoring = currentSettings.monitoringMode && (user.role === 'admin' || user.role === 'Project Manager');
+      const shouldSpeak = (currentSettings.readTaskViewed || satisfiesMonitoring) && !isMyAction && !isDetailOpen;
+
+      if (currentSettings.enabled && shouldSpeak) {
+        const satisfyFocus = !currentSettings.onlyWhenHidden || (typeof document !== 'undefined' && document.hidden);
+        if (satisfyFocus) {
+          voiceNotification.speakTaskViewed(data.userName || 'Thành viên');
+        }
+      }
+    };
+
+    const handleTaskStarted = (data: { taskId: number; user_id: number; userName: string; title: string }) => {
+      const currentSettings = settingsRef.current;
+      const isMyAction = Number(data.user_id) === Number(user.id);
+      const isDetailOpen = Number(activeDetailTaskId) === Number(data.taskId);
+
+      const satisfiesMonitoring = currentSettings.monitoringMode && (user.role === 'admin' || user.role === 'Project Manager');
+      const shouldSpeak = (currentSettings.readTaskReports || satisfiesMonitoring) && !isMyAction && !isDetailOpen;
+
+      if (currentSettings.enabled && shouldSpeak) {
+        const satisfyFocus = !currentSettings.onlyWhenHidden || (typeof document !== 'undefined' && document.hidden);
+        if (satisfyFocus) {
+          voiceNotification.speakTaskStarted(data.userName || 'Thành viên');
+        }
+      }
+    };
+
+    const handleTaskReportCreated = (data: { taskId: number; report: any; user_id: number; userName: string }) => {
+      const currentSettings = settingsRef.current;
+      const isMyAction = Number(data.user_id) === Number(user.id);
+      const isDetailOpen = Number(activeDetailTaskId) === Number(data.taskId);
+
+      const satisfiesMonitoring = currentSettings.monitoringMode && (user.role === 'admin' || user.role === 'Project Manager');
+      const shouldSpeak = (currentSettings.readTaskReports || satisfiesMonitoring) && !isMyAction && !isDetailOpen;
+
+      if (currentSettings.enabled && shouldSpeak) {
+        const satisfyFocus = !currentSettings.onlyWhenHidden || (typeof document !== 'undefined' && document.hidden);
+        if (satisfyFocus) {
+          const progress = data.report?.progress_percent || 0;
+          voiceNotification.speakTaskReport(data.userName || data.report?.user_name || 'Thành viên', progress);
+        }
+      }
+    };
+
+    const handleTaskCompleted = (data: { id: number; completed_by_name?: string }) => {
+      const currentSettings = settingsRef.current;
+      const isMyAction = data.completed_by_name === user.name;
+      const isDetailOpen = Number(activeDetailTaskId) === Number(data.id);
+
+      const satisfiesMonitoring = currentSettings.monitoringMode && (user.role === 'admin' || user.role === 'Project Manager');
+      const shouldSpeak = (currentSettings.readTaskCompleted || satisfiesMonitoring) && !isMyAction && !isDetailOpen;
+
+      if (currentSettings.enabled && shouldSpeak) {
+        const satisfyFocus = !currentSettings.onlyWhenHidden || (typeof document !== 'undefined' && document.hidden);
+        if (satisfyFocus) {
+          voiceNotification.speakTaskCompleted(data.completed_by_name || 'Thành viên');
+        }
+      }
+    };
+
+    const handleTaskRejected = (data: { id: number; rejected_by_name?: string }) => {
+      const currentSettings = settingsRef.current;
+      const isMyAction = data.rejected_by_name === user.name;
+      const isDetailOpen = Number(activeDetailTaskId) === Number(data.id);
+
+      const satisfiesMonitoring = currentSettings.monitoringMode && (user.role === 'admin' || user.role === 'Project Manager');
+      const shouldSpeak = (currentSettings.readTaskReports || satisfiesMonitoring) && !isMyAction && !isDetailOpen;
+
+      if (currentSettings.enabled && shouldSpeak) {
+        const satisfyFocus = !currentSettings.onlyWhenHidden || (typeof document !== 'undefined' && document.hidden);
+        if (satisfyFocus) {
+          voiceNotification.speakTaskRejected();
+        }
+      }
+    };
+
+    const handleTaskApproved = (data: { id: number; approved_by_name?: string }) => {
+      const currentSettings = settingsRef.current;
+      const isMyAction = data.approved_by_name === user.name;
+      const isDetailOpen = Number(activeDetailTaskId) === Number(data.id);
+
+      const satisfiesMonitoring = currentSettings.monitoringMode && (user.role === 'admin' || user.role === 'Project Manager');
+      const shouldSpeak = (currentSettings.readTaskCompleted || satisfiesMonitoring) && !isMyAction && !isDetailOpen;
+
+      if (currentSettings.enabled && shouldSpeak) {
+        const satisfyFocus = !currentSettings.onlyWhenHidden || (typeof document !== 'undefined' && document.hidden);
+        if (satisfyFocus) {
+          voiceNotification.speakTaskApproved();
+        }
+      }
+    };
+
+    socket.on('task_viewed', handleTaskViewed);
+    socket.on('task_started', handleTaskStarted);
+    socket.on('task_report_created', handleTaskReportCreated);
+    socket.on('task_completed', handleTaskCompleted);
+    socket.on('task_rejected', handleTaskRejected);
+    socket.on('task_approved', handleTaskApproved);
+
+    // Overdue tasks check on load
+    const checkOverdueTasks = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/tasks?user_id=${user.id}`);
+        const result = await res.json();
+        if (result.status === 'success' && Array.isArray(result.data)) {
+          const now = new Date();
+          const overdue = result.data.filter((t: any) => {
+            if (t.status === 'completed' || t.completed) return false;
+            if (!t.deadline) return false;
+            return new Date(t.deadline) < now;
+          });
+          if (overdue.length > 0) {
+            const currentSettings = settingsRef.current;
+            if (currentSettings.enabled && currentSettings.readOverdueTasks) {
+              voiceNotification.speakOverdueTasks(overdue.length);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Error checking overdue tasks:', err);
+      }
+    };
+    const overdueTimer = setTimeout(checkOverdueTasks, 3000);
+
     return () => {
       console.log('🧹 [GLOBAL_SOCKET:CLEANUP] Dọn dẹp kết nối socket toàn cục');
+      clearTimeout(overdueTimer);
+      socket.off('task_viewed', handleTaskViewed);
+      socket.off('task_started', handleTaskStarted);
+      socket.off('task_report_created', handleTaskReportCreated);
+      socket.off('task_completed', handleTaskCompleted);
+      socket.off('task_rejected', handleTaskRejected);
+      socket.off('task_approved', handleTaskApproved);
       socket.off('connect');
       socket.off('disconnect');
       socket.off('connect_error');

@@ -20,6 +20,7 @@ import { useColorScheme } from '@/components/useColorScheme';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useUser } from '../../context/UserContext';
 import { useSocket } from '../../context/SocketContext';
+import { useVoiceSettings } from '../../context/VoiceSettingsContext';
 import { endpoints, API_BASE_URL } from '@/constants/Config';
 import * as ImagePicker from 'expo-image-picker';
 import { AvatarUploader } from '@/components/AvatarUploader';
@@ -29,6 +30,7 @@ export default function SettingsScreen() {
   const colors = Colors[colorScheme ?? 'light'];
   const { user, logout, updateUserInContext } = useUser();
   const { socket } = useSocket();
+  const { settings, updateSettings } = useVoiceSettings();
   
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [darkModeEnabled, setDarkModeEnabled] = useState(colorScheme === 'dark');
@@ -553,6 +555,115 @@ export default function SettingsScreen() {
             />
           )}
           {renderSettingItem('language-outline', 'Ngôn ngữ', 'Tiếng Việt (Vietnamese)', null, () => {})}
+        </View>
+
+        {/* Voice Assistant Settings Group */}
+        <Text style={[styles.groupTitle, { color: colors.text, marginTop: 8 }]}>🔊 TRỢ LÝ GIỌNG NÓI</Text>
+        <View style={[styles.settingsGroup, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          {renderSettingItem(
+            'volume-medium-outline',
+            'Bật trợ lý giọng nói',
+            'Tự động đọc các thông báo realtime bằng tiếng Việt',
+            <Switch
+              value={settings.enabled}
+              onValueChange={(val) => updateSettings({ enabled: val })}
+              trackColor={{ false: '#767577', true: colors.tint }}
+            />
+          )}
+          {settings.enabled && (
+            <>
+              {renderSettingItem(
+                'chatbubble-ellipses-outline',
+                'Đọc tin nhắn',
+                'Phát âm khi nhận tin nhắn trò chuyện mới',
+                <Switch
+                  value={settings.readMessages}
+                  onValueChange={(val) => updateSettings({ readMessages: val })}
+                  trackColor={{ false: '#767577', true: colors.tint }}
+                />
+              )}
+              {renderSettingItem(
+                'briefcase-outline',
+                'Đọc giao việc',
+                'Thông báo khi có nhiệm vụ mới được giao cho bạn',
+                <Switch
+                  value={settings.readTaskAssigned}
+                  onValueChange={(val) => updateSettings({ readTaskAssigned: val })}
+                  trackColor={{ false: '#767577', true: colors.tint }}
+                />
+              )}
+              {renderSettingItem(
+                'eye-outline',
+                'Đọc xem nhiệm vụ',
+                'Phát âm khi có thành viên xem nhiệm vụ',
+                <Switch
+                  value={settings.readTaskViewed}
+                  onValueChange={(val) => updateSettings({ readTaskViewed: val })}
+                  trackColor={{ false: '#767577', true: colors.tint }}
+                />
+              )}
+              {renderSettingItem(
+                'trending-up-outline',
+                'Đọc báo cáo tiến độ',
+                'Phát âm khi có báo cáo tiến độ hoặc sự cố mới',
+                <Switch
+                  value={settings.readTaskReports}
+                  onValueChange={(val) => updateSettings({ readTaskReports: val })}
+                  trackColor={{ false: '#767577', true: colors.tint }}
+                />
+              )}
+              {renderSettingItem(
+                'checkmark-done-circle-outline',
+                'Đọc hoàn thành',
+                'Thông báo khi nhiệm vụ hoàn thành hoặc phê duyệt',
+                <Switch
+                  value={settings.readTaskCompleted}
+                  onValueChange={(val) => updateSettings({ readTaskCompleted: val })}
+                  trackColor={{ false: '#767577', true: colors.tint }}
+                />
+              )}
+              {renderSettingItem(
+                'alert-circle-outline',
+                'Đọc hối thúc',
+                'Cảnh báo khi người quản lý hối thúc tiến độ',
+                <Switch
+                  value={settings.readTaskUrged}
+                  onValueChange={(val) => updateSettings({ readTaskUrged: val })}
+                  trackColor={{ false: '#767577', true: colors.tint }}
+                />
+              )}
+              {renderSettingItem(
+                'time-outline',
+                'Đọc nhiệm vụ quá hạn',
+                'Tự động kiểm tra và đọc số lượng nhiệm vụ đã trễ hạn',
+                <Switch
+                  value={settings.readOverdueTasks}
+                  onValueChange={(val) => updateSettings({ readOverdueTasks: val })}
+                  trackColor={{ false: '#767577', true: colors.tint }}
+                />
+              )}
+              {renderSettingItem(
+                'contrast-outline',
+                'Chỉ đọc khi tab bị ẩn',
+                'Chỉ phát âm khi bạn đang chuyển sang ứng dụng khác',
+                <Switch
+                  value={settings.onlyWhenHidden}
+                  onValueChange={(val) => updateSettings({ onlyWhenHidden: val })}
+                  trackColor={{ false: '#767577', true: colors.tint }}
+                />
+              )}
+              {(user?.role === 'admin' || user?.role === 'Project Manager') && renderSettingItem(
+                'glasses-outline',
+                'Trợ lý giám sát công việc',
+                '🎧 Tự động đọc tất cả báo cáo và lượt xem của nhân viên',
+                <Switch
+                  value={settings.monitoringMode}
+                  onValueChange={(val) => updateSettings({ monitoringMode: val })}
+                  trackColor={{ false: '#767577', true: colors.tint }}
+                />
+              )}
+            </>
+          )}
         </View>
 
         {/* 4. Support Group */}

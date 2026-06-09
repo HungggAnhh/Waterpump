@@ -24,6 +24,7 @@ SplashScreen.preventAutoHideAsync();
 import { UserProvider, useUser } from '../context/UserContext';
 import { SocketProvider } from '../context/SocketContext';
 import { NotificationProvider } from '../context/NotificationContext';
+import { VoiceSettingsProvider } from '../context/VoiceSettingsContext';
 import LoginScreen from '../components/LoginScreen';
 import NameOnboardingScreen from '../components/NameOnboardingScreen';
 import { requestAndRegisterFCM } from '../utils/fcmHelper';
@@ -78,11 +79,13 @@ function RootLayoutContent() {
   }
 
   return (
-    <SocketProvider>
-      <NotificationProvider>
-        <RootLayoutNav />
-      </NotificationProvider>
-    </SocketProvider>
+    <VoiceSettingsProvider>
+      <SocketProvider>
+        <NotificationProvider>
+          <RootLayoutNav />
+        </NotificationProvider>
+      </SocketProvider>
+    </VoiceSettingsProvider>
   );
 }
 

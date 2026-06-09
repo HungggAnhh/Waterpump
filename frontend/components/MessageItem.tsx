@@ -87,6 +87,17 @@ interface MessageItemProps {
   onDeleteVoice?: (clientMessageId: string) => void;
 }
 
+const breakLongWords = (str: string): string => {
+  if (!str) return str;
+  return str.replace(/[^\s]{25,}/g, (match) => {
+    let result = '';
+    for (let i = 0; i < match.length; i += 20) {
+      result += match.slice(i, i + 20) + '\u200B';
+    }
+    return result;
+  });
+};
+
 const renderMessageText = (text: string, isMine: boolean, colors: any, isMentioned: boolean, isHighlighted: boolean) => {
   if (!text) return null;
   
@@ -118,7 +129,7 @@ const renderMessageText = (text: string, isMine: boolean, colors: any, isMention
             </Text>
           );
         }
-        return part;
+        return breakLongWords(part);
       })}
     </Text>
   );
@@ -156,6 +167,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
 
   const isMentioned = !!(!isMine && item.message && item.message.includes(`@${currentUserName}`));
   const [isHovered, setIsHovered] = React.useState(false);
+  const usesInnerFooter = !item.deleted && !item.deleted_for_me && !item.recalled && item.type !== 'image' && item.type !== 'task' && item.type !== 'voice';
 
   // Double-tap detector
   const lastTapRef = React.useRef(0);
@@ -210,7 +222,10 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
         </TouchableOpacity>
       )}
 
-      <View style={styles.messageContentWrapper}>
+      <View style={[
+        styles.messageContentWrapper,
+        isMine ? styles.myMessageContentWrapper : styles.otherMessageContentWrapper
+      ]}>
         {/* Sender Name */}
         {!isMine && (
           <Text style={styles.messageSenderName}>{item.sender_name}</Text>
@@ -225,7 +240,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
         )}
 
         {/* Reply Quote Bubble */}
-        {item.reply_to_message && (
+        {!usesInnerFooter && item.reply_to_message && (
           <TouchableOpacity
             activeOpacity={0.8}
             onPress={() => onPressQuote && onPressQuote(item.reply_to_message!.id)}
@@ -242,7 +257,8 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
             </Text>
             <Text 
               style={[styles.quoteText, { color: isMine ? 'rgba(255, 255, 255, 0.85)' : colors.textSecondary }]}
-              numberOfLines={1}
+              numberOfLines={2}
+              ellipsizeMode="tail"
             >
               {item.reply_to_message.recalled 
                 ? "Tin nhắn đã được thu hồi" 
@@ -250,7 +266,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                   ? "📷 [Hình ảnh]" 
                   : item.reply_to_message.type === 'file' 
                     ? "📁 [Video]" 
-                    : item.reply_to_message.message}
+                    : breakLongWords(item.reply_to_message.message)}
             </Text>
           </TouchableOpacity>
         )}
@@ -503,6 +519,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
             delayLongPress={400}
             style={[
               styles.messageBubble,
+              usesInnerFooter && { minWidth: 130 },
               isHighlighted
                 ? { backgroundColor: '#fef3c7', borderColor: '#f59e0b', borderWidth: 2 }
                 : isMine
@@ -512,46 +529,99 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                     : { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1 }
             ]}
           >
-            {item.type === 'call' ? (
-              <View style={{ flexDirection: 'row', alignItems: 'center', minWidth: 160, paddingVertical: 2 }}>
-                <Ionicons
-                  name={item.message.includes('video') ? 'videocam' : 'call'}
-                  size={20}
-                  color={isMine ? '#fff' : colors.tint}
-                  style={{ marginRight: 10 }}
+            {/* Reply Quote Bubble inside message bubble */}
+            {usesInnerFooter && item.reply_to_message && (
+              <TouchableOpacity
+                activeOpacity={0.8}
+                onPress={() => onPressQuote && onPressQuote(item.reply_to_message!.id)}
+                style={styles.quoteBubbleInside}
+              >
+                <View style={[styles.quoteBorderLineInside, { backgroundColor: colors.tint }]} />
+                <View style={styles.quoteContentInside}>
+                  <Text style={[styles.quoteSenderNameInside, { color: colors.tint }]} numberOfLines={1}>
+                    {item.reply_to_message.sender_name}
+                  </Text>
+                  <Text 
+                    style={styles.quoteTextInside}
+                    numberOfLines={2}
+                    ellipsizeMode="tail"
+                  >
+                    {item.reply_to_message.recalled 
+                      ? "Tin nhắn đã được thu hồi" 
+                      : item.reply_to_message.type === 'image' 
+                        ? "📷 [Hình ảnh]" 
+                        : item.reply_to_message.type === 'file' 
+                          ? "📁 [Video]" 
+                          : breakLongWords(item.reply_to_message.message)}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            )}
+
+            <View style={styles.messageContentBody}>
+              {item.type === 'call' ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', minWidth: 160, paddingVertical: 2 }}>
+                  <Ionicons
+                    name={item.message.includes('video') ? 'videocam' : 'call'}
+                    size={20}
+                    color={isMine ? '#fff' : colors.tint}
+                    style={{ marginRight: 10 }}
+                  />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: isMine ? '#fff' : colors.text }}>
+                      {item.message}
+                    </Text>
+                    <Text style={{ fontSize: 10, color: isMine ? 'rgba(255, 255, 255, 0.75)' : colors.textSecondary, marginTop: 2 }}>
+                      Lịch sử cuộc gọi
+                    </Text>
+                  </View>
+                </View>
+              ) : item.type === 'voice' && item.attachment_url ? (
+                <VoiceMessage
+                  messageId={item.id}
+                  attachmentUrl={item.attachment_url}
+                  duration={item.attachment_duration || 0}
+                  currentUserId={currentUserId}
+                  isMine={isMine}
+                  colors={colors}
                 />
-                <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 13, fontWeight: '700', color: isMine ? '#fff' : colors.text }}>
-                    {item.message}
-                  </Text>
-                  <Text style={{ fontSize: 10, color: isMine ? 'rgba(255, 255, 255, 0.75)' : colors.textSecondary, marginTop: 2 }}>
-                    Lịch sử cuộc gọi
-                  </Text>
+              ) : item.type === 'file' && item.file_url ? (
+                <View style={styles.videoAttachmentCard}>
+                  <Ionicons name="play-circle-outline" size={32} color={(isMine && !isHighlighted) ? '#fff' : colors.tint} />
+                  <View style={{ marginLeft: 8 }}>
+                    <Text style={[styles.videoAttachmentText, { color: (isMine && !isHighlighted) ? '#fff' : colors.text }]}>
+                      Tệp Đính Kèm Video
+                    </Text>
+                    <Text style={[styles.videoAttachmentSub, { color: (isMine && !isHighlighted) ? 'rgba(255,255,255,0.7)' : colors.textSecondary }]}>
+                      Nhấn để phát video clip
+                    </Text>
+                  </View>
                 </View>
+              ) : (
+                renderMessageText(item.message, isMine, colors, isMentioned, isHighlighted)
+              )}
+            </View>
+
+            {/* Footer inside the bubble */}
+            {usesInnerFooter && (
+              <View style={styles.bubbleFooter}>
+                <Text style={[styles.messageTimeInside, { color: isMine ? 'rgba(255,255,255,0.7)' : colors.textSecondary }]}>
+                  {formatMessageTime(item.created_at)}
+                  {item.edited && !item.recalled && <Text style={styles.editedTextInside}> (đã sửa)</Text>}
+                </Text>
+                {isMine && (
+                  <View style={styles.statusContainer}>
+                    <Ionicons 
+                      name={readBy && readBy.length > 0 ? "checkmark-done" : "checkmark"} 
+                      size={13} 
+                      color={isMine ? 'rgba(255,255,255,0.9)' : colors.tint} 
+                    />
+                    <Text style={[styles.statusText, { color: isMine ? 'rgba(255,255,255,0.9)' : colors.textSecondary }]}>
+                      {readBy && readBy.length > 0 ? 'Đã xem' : 'Đã gửi'}
+                    </Text>
+                  </View>
+                )}
               </View>
-            ) : item.type === 'voice' && item.attachment_url ? (
-              <VoiceMessage
-                messageId={item.id}
-                attachmentUrl={item.attachment_url}
-                duration={item.attachment_duration || 0}
-                currentUserId={currentUserId}
-                isMine={isMine}
-                colors={colors}
-              />
-            ) : item.type === 'file' && item.file_url ? (
-              <View style={styles.videoAttachmentCard}>
-                <Ionicons name="play-circle-outline" size={32} color={(isMine && !isHighlighted) ? '#fff' : colors.tint} />
-                <View style={{ marginLeft: 8 }}>
-                  <Text style={[styles.videoAttachmentText, { color: (isMine && !isHighlighted) ? '#fff' : colors.text }]}>
-                    Tệp Đính Kèm Video
-                  </Text>
-                  <Text style={[styles.videoAttachmentSub, { color: (isMine && !isHighlighted) ? 'rgba(255,255,255,0.7)' : colors.textSecondary }]}>
-                    Nhấn để phát video clip
-                  </Text>
-                </View>
-              </View>
-            ) : (
-              renderMessageText(item.message, isMine, colors, isMentioned, isHighlighted)
             )}
           </TouchableOpacity>
         )}
@@ -580,61 +650,63 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
           </TouchableOpacity>
         )}
 
-        <View style={styles.messageMeta}>
-          {item.type === 'voice' && item.status && item.status !== 'sent' ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              {item.status === 'uploading' && (
-                <Text style={[styles.messageTime, { color: colors.textSecondary }]}>
-                  ⏳ Đang tải lên... {item.uploadProgress || 0}%
+        {!usesInnerFooter && (
+          <View style={styles.messageMeta}>
+            {item.type === 'voice' && item.status && item.status !== 'sent' ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                {item.status === 'uploading' && (
+                  <Text style={[styles.messageTime, { color: colors.textSecondary }]}>
+                    ⏳ Đang tải lên... {item.uploadProgress || 0}%
+                  </Text>
+                )}
+                {item.status === 'pending' && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                    <Text style={[styles.messageTime, { color: '#f59e0b' }]}>
+                      ⏳ Đang chờ gửi
+                    </Text>
+                    {onResendVoice && item.client_message_id && (
+                      <TouchableOpacity onPress={() => onResendVoice(item.client_message_id!)}>
+                        <Text style={{ fontSize: 10, color: colors.tint, fontWeight: '700' }}>Gửi lại</Text>
+                      </TouchableOpacity>
+                    )}
+                    {onDeleteVoice && item.client_message_id && (
+                      <TouchableOpacity onPress={() => onDeleteVoice(item.client_message_id!)}>
+                        <Text style={{ fontSize: 10, color: '#ef4444', fontWeight: '700', marginLeft: 4 }}>Xóa</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
+                {item.status === 'failed' && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                    <Text style={[styles.messageTime, { color: '#ef4444' }]}>
+                      ❌ Lỗi tải lên
+                    </Text>
+                    {onResendVoice && item.client_message_id && (
+                      <TouchableOpacity onPress={() => onResendVoice(item.client_message_id!)}>
+                        <Text style={{ fontSize: 10, color: colors.tint, fontWeight: '700' }}>Thử lại</Text>
+                      </TouchableOpacity>
+                    )}
+                    {onDeleteVoice && item.client_message_id && (
+                      <TouchableOpacity onPress={() => onDeleteVoice(item.client_message_id!)}>
+                        <Text style={{ fontSize: 10, color: '#ef4444', fontWeight: '700', marginLeft: 4 }}>Xóa</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
+              </View>
+            ) : (
+              <>
+                <Text style={styles.messageTime}>
+                  {formatMessageTime(item.created_at)}
+                  {item.edited && !item.recalled && <Text style={styles.editedText}> (đã chỉnh sửa)</Text>}
                 </Text>
-              )}
-              {item.status === 'pending' && (
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                  <Text style={[styles.messageTime, { color: '#f59e0b' }]}>
-                    ⏳ Đang chờ gửi
-                  </Text>
-                  {onResendVoice && item.client_message_id && (
-                    <TouchableOpacity onPress={() => onResendVoice(item.client_message_id!)}>
-                      <Text style={{ fontSize: 10, color: colors.tint, fontWeight: '700' }}>Gửi lại</Text>
-                    </TouchableOpacity>
-                  )}
-                  {onDeleteVoice && item.client_message_id && (
-                    <TouchableOpacity onPress={() => onDeleteVoice(item.client_message_id!)}>
-                      <Text style={{ fontSize: 10, color: '#ef4444', fontWeight: '700', marginLeft: 4 }}>Xóa</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              )}
-              {item.status === 'failed' && (
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                  <Text style={[styles.messageTime, { color: '#ef4444' }]}>
-                    ❌ Lỗi tải lên
-                  </Text>
-                  {onResendVoice && item.client_message_id && (
-                    <TouchableOpacity onPress={() => onResendVoice(item.client_message_id!)}>
-                      <Text style={{ fontSize: 10, color: colors.tint, fontWeight: '700' }}>Thử lại</Text>
-                    </TouchableOpacity>
-                  )}
-                  {onDeleteVoice && item.client_message_id && (
-                    <TouchableOpacity onPress={() => onDeleteVoice(item.client_message_id!)}>
-                      <Text style={{ fontSize: 10, color: '#ef4444', fontWeight: '700', marginLeft: 4 }}>Xóa</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              )}
-            </View>
-          ) : (
-            <>
-              <Text style={styles.messageTime}>
-                {formatMessageTime(item.created_at)}
-                {item.edited && !item.recalled && <Text style={styles.editedText}> (đã chỉnh sửa)</Text>}
-              </Text>
-              {isMine && !item.status && (
-                <Ionicons name="checkmark-done" size={14} color={colors.tint} style={{ marginLeft: 4 }} />
-              )}
-            </>
-          )}
-        </View>
+                {isMine && !item.status && (
+                  <Ionicons name="checkmark-done" size={14} color={colors.tint} style={{ marginLeft: 4 }} />
+                )}
+              </>
+            )}
+          </View>
+        )}
 
         {/* Danh sách người đã đọc (Read receipts) */}
         {readBy && readBy.length > 0 && (
@@ -685,6 +757,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: 4,
+    flexWrap: 'wrap',
+    maxWidth: '100%',
   },
   myReadReceipts: {
     justifyContent: 'flex-end',
@@ -696,6 +770,7 @@ const styles = StyleSheet.create({
   readReceiptText: {
     fontSize: 11,
     fontWeight: '500',
+    flexShrink: 1,
   },
   messageRow: {
     flexDirection: 'row',
@@ -718,6 +793,13 @@ const styles = StyleSheet.create({
   messageContentWrapper: {
     gap: 4,
     position: 'relative',
+    flexShrink: 1,
+  },
+  myMessageContentWrapper: {
+    alignItems: 'flex-end',
+  },
+  otherMessageContentWrapper: {
+    alignItems: 'flex-start',
   },
   messageSenderName: {
     fontSize: 10,
@@ -730,10 +812,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 10,
     overflow: 'hidden',
+    maxWidth: Platform.OS === 'web' ? 500 : '75%',
+    minWidth: 60,
+    flexShrink: 1,
   },
   messageText: {
     fontSize: 14,
     lineHeight: 20,
+    flexShrink: 1,
+    flexWrap: 'wrap',
+    ...(Platform.OS === 'web' ? { wordBreak: 'break-word' } as any : {}),
   },
   messageMeta: {
     flexDirection: 'row',
@@ -776,7 +864,9 @@ const styles = StyleSheet.create({
     borderLeftWidth: 3,
     borderRadius: 8,
     marginBottom: 4,
-    maxWidth: 240,
+    maxWidth: Platform.OS === 'web' ? 500 : '100%',
+    width: '100%',
+    overflow: 'hidden',
   },
   quoteSenderName: {
     fontSize: 11,
@@ -785,6 +875,8 @@ const styles = StyleSheet.create({
   },
   quoteText: {
     fontSize: 12,
+    flexShrink: 1,
+    flexWrap: 'wrap',
   },
   forwardedBadge: {
     flexDirection: 'row',
@@ -878,6 +970,8 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontWeight: '600',
     lineHeight: 16,
+    flexShrink: 1,
+    flexWrap: 'wrap',
   },
   taskCard: {
     padding: 12,
@@ -987,5 +1081,59 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 13,
     fontWeight: '700',
+  },
+  quoteBubbleInside: {
+    flexDirection: 'row',
+    backgroundColor: '#EAF3FF',
+    borderRadius: 8,
+    overflow: 'hidden',
+    marginBottom: 8,
+    width: '100%',
+  },
+  quoteBorderLineInside: {
+    width: 4,
+  },
+  quoteContentInside: {
+    flex: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  quoteSenderNameInside: {
+    fontSize: 12,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  quoteTextInside: {
+    fontSize: 12,
+    color: '#4a5568',
+    flexShrink: 1,
+    flexWrap: 'wrap',
+  },
+  messageContentBody: {
+    width: '100%',
+  },
+  bubbleFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 8,
+    width: '100%',
+    gap: 16,
+  },
+  messageTimeInside: {
+    fontSize: 10.5,
+  },
+  statusContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  statusText: {
+    fontSize: 10.5,
+    fontWeight: '600',
+  },
+  editedTextInside: {
+    fontSize: 9.5,
+    fontStyle: 'italic',
   },
 });

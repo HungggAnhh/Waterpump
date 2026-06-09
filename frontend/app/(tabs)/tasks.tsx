@@ -24,6 +24,7 @@ import { useSocket } from '@/context/SocketContext';
 import { API_BASE_URL } from '@/constants/Config';
 import { router, useLocalSearchParams } from 'expo-router';
 import TaskDetailModal from '@/components/tasks/TaskDetailModal';
+import TaskViewsModal from '@/components/tasks/TaskViewsModal';
 import { sortTasksStable } from '@/utils/taskSort';
 import { useNotifications } from '@/context/NotificationContext';
 
@@ -79,6 +80,8 @@ interface Task {
   revision_count?: number;
   total_assignees?: number;
   viewed_assignees_count?: number;
+  completed_assignees_count?: number;
+  total_reports_count?: number;
 }
 
 interface KPIStats {
@@ -95,12 +98,14 @@ const TaskItem = React.memo(({
   task, 
   colors, 
   onPress, 
-  isHighlighted 
+  isHighlighted,
+  onPressViews
 }: { 
   task: Task; 
   colors: any; 
   onPress: () => void; 
   isHighlighted: boolean;
+  onPressViews?: (task: Task) => void;
 }) => {
   const getStatusText = (status?: string) => {
     switch (status) {
@@ -174,9 +179,25 @@ const TaskItem = React.memo(({
             </Text>
           )}
           {task.total_assignees !== undefined && task.total_assignees > 0 && (
-            <Text style={{ fontSize: 11, color: colors.tabIconDefault, marginLeft: 8 }}>
-              👀 {task.viewed_assignees_count || 0}/{task.total_assignees}
-            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginLeft: 8 }}>
+              <TouchableOpacity
+                onPress={(e) => {
+                  e.stopPropagation();
+                  onPressViews?.(task);
+                }}
+                activeOpacity={0.6}
+              >
+                <Text style={{ fontSize: 11, color: colors.tabIconDefault }}>
+                  👀 {task.viewed_assignees_count || 0}/{task.total_assignees}
+                </Text>
+              </TouchableOpacity>
+              <Text style={{ fontSize: 11, color: '#059669', fontWeight: '600' }}>
+                👥 {task.completed_assignees_count || 0}/{task.total_assignees} HT
+              </Text>
+              <Text style={{ fontSize: 11, color: colors.tint, fontWeight: '600' }}>
+                📝 {task.total_reports_count || 0} BC
+              </Text>
+            </View>
           )}
         </View>
       </View>
@@ -247,6 +268,17 @@ export default function WorkspaceScreen() {
   // Detail Modal states
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+
+  // Views Modal states
+  const [viewsModalVisible, setViewsModalVisible] = useState(false);
+  const [viewsModalTaskId, setViewsModalTaskId] = useState<number | null>(null);
+  const [viewsModalTaskTitle, setViewsModalTaskTitle] = useState<string | null>(null);
+
+  const handleOpenViewsModal = useCallback((task: Task) => {
+    setViewsModalTaskId(task.id);
+    setViewsModalTaskTitle(task.title);
+    setViewsModalVisible(true);
+  }, []);
 
   // Scroll and highlight states
   const [highlightedAccordion, setHighlightedAccordion] = useState<string | null>(null);
@@ -1006,6 +1038,7 @@ export default function WorkspaceScreen() {
                         setSelectedTask(item);
                         setIsDetailModalOpen(true);
                       }}
+                      onPressViews={handleOpenViewsModal}
                     />
                   )}
                 />
@@ -1346,6 +1379,14 @@ export default function WorkspaceScreen() {
         task={selectedTask}
         onTaskUpdated={handleTaskUpdated}
         onTaskDeleted={handleTaskDeleted}
+      />
+
+      {/* Task Views Modal */}
+      <TaskViewsModal
+        visible={viewsModalVisible}
+        onClose={() => setViewsModalVisible(false)}
+        taskId={viewsModalTaskId}
+        taskTitle={viewsModalTaskTitle}
       />
 
       {/* Modal: Thêm Trang */}

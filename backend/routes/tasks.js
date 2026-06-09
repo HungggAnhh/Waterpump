@@ -203,6 +203,32 @@ router.get('/', async (req, res) => {
         viewsMap[tId].add(parseInt(row.user_id));
       });
 
+      // Lấy số người nhận hoàn thành
+      const completedRes = await query(
+        `SELECT task_id, COUNT(CASE WHEN status = 'completed' THEN 1 END)::int AS completed_count
+         FROM task_assignments
+         WHERE task_id = ANY($1)
+         GROUP BY task_id`,
+        [taskIds]
+      );
+      const completedMap = {};
+      completedRes.rows.forEach(row => {
+        completedMap[parseInt(row.task_id)] = row.completed_count;
+      });
+
+      // Lấy số báo cáo của từng nhiệm vụ
+      const reportsCountRes = await query(
+        `SELECT task_id, COUNT(*)::int AS reports_count
+         FROM task_reports
+         WHERE task_id = ANY($1)
+         GROUP BY task_id`,
+        [taskIds]
+      );
+      const reportsCountMap = {};
+      reportsCountRes.rows.forEach(row => {
+        reportsCountMap[parseInt(row.task_id)] = row.reports_count;
+      });
+
       tasks.forEach(t => {
         t.assignees = assigneesMap[t.id] || [];
         const taskViews = viewsMap[t.id] || new Set();
@@ -222,6 +248,8 @@ router.get('/', async (req, res) => {
         
         t.total_assignees = uniqueAssigneeIds.size;
         t.viewed_assignees_count = viewedCount;
+        t.completed_assignees_count = completedMap[t.id] || 0;
+        t.total_reports_count = reportsCountMap[t.id] || 0;
       });
     }
 
@@ -998,6 +1026,33 @@ router.put('/tasks/:taskId/assignment/status', async (req, res) => {
       [status, startedAt, completedAt, taskId, user.id]
     );
 
+    // Kiểm tra đồng bộ trạng thái task tổng khi có thay đổi trạng thái phân công
+    const assigneesStatusRes = await query(
+      'SELECT status FROM task_assignments WHERE task_id = $1',
+      [taskId]
+    );
+    const totalAssigneesCount = assigneesStatusRes.rows.length;
+    const completedAssigneesCountVal = assigneesStatusRes.rows.filter(a => a.status === 'completed').length;
+
+    if (completedAssigneesCountVal === totalAssigneesCount && totalAssigneesCount > 0) {
+      await query(
+        `UPDATE tasks 
+         SET status = 'completed', approval_status = 'completed', completed = TRUE, completed_at = NOW(), updated_at = NOW() 
+         WHERE id = $1`,
+        [taskId]
+      );
+    } else {
+      const currentTaskStatusRes = await query('SELECT status FROM tasks WHERE id = $1', [taskId]);
+      if (currentTaskStatusRes.rows[0]?.status === 'completed' && completedAssigneesCountVal < totalAssigneesCount) {
+        await query(
+          `UPDATE tasks 
+           SET status = 'in_progress', approval_status = 'in_progress', completed = FALSE, completed_at = NULL, updated_at = NOW() 
+           WHERE id = $1`,
+          [taskId]
+        );
+      }
+    }
+
     // 3. Lấy thông tin nhiệm vụ để lấy tiêu đề và conversation_id
     const taskRes = await query('SELECT title, conversation_id, workspace_id FROM tasks WHERE id = $1', [taskId]);
     const task = taskRes.rows[0];
@@ -1029,6 +1084,9 @@ router.put('/tasks/:taskId/assignment/status', async (req, res) => {
       }
       io.emit('assignment_status_updated', payload);
       io.emit('task_updated', { id: taskId, user_id: user.id, status, assignees });
+      if (status === 'in_progress') {
+        io.emit('task_started', { taskId, user_id: user.id, userName: user.name, title: task.title });
+      }
     }
 
     // 5. Tạo tin nhắn hệ thống thông báo đổi trạng thái
@@ -1275,7 +1333,7 @@ router.put('/tasks/:taskId', async (req, res) => {
       io.emit('task_updated', updatedTask);
       console.log('📡 Realtime: Phát sự kiện task_updated cho:', updatedTask.title);
       if (updatedTask.completed && !currentTask.completed) {
-        io.emit('task_completed', updatedTask);
+        io.emit('task_completed', { ...updatedTask, completed_by_name: user.name });
       }
     }
 
@@ -1323,6 +1381,7 @@ router.get('/stats', async (req, res) => {
   try {
     let result;
     let viewedRes;
+    let assignmentStatsRes;
     if (user.role === 'admin') {
       result = await query(`
         SELECT 
@@ -1340,6 +1399,23 @@ router.get('/stats', async (req, res) => {
         FROM tasks t
         JOIN task_views tv ON t.id = tv.task_id
         WHERE (t.is_deleted = FALSE OR t.is_deleted IS NULL)
+      `);
+      assignmentStatsRes = await query(`
+        SELECT 
+          COUNT(*)::int AS total_assignments,
+          COUNT(CASE WHEN EXISTS (
+            SELECT 1 FROM task_views tv 
+            WHERE tv.task_id = ta.task_id AND tv.user_id = ta.user_id
+          ) THEN 1 END)::int AS viewed_assignments,
+          COUNT(CASE WHEN EXISTS (
+            SELECT 1 FROM task_reports tr 
+            WHERE tr.task_id = ta.task_id AND tr.user_id = ta.user_id
+          ) THEN 1 END)::int AS reported_assignments,
+          COUNT(CASE WHEN ta.status = 'in_progress' THEN 1 END)::int AS in_progress_assignments,
+          COUNT(CASE WHEN ta.status = 'completed' THEN 1 END)::int AS completed_assignments
+        FROM task_assignments ta
+        JOIN tasks t ON ta.task_id = t.id
+        WHERE t.is_deleted = FALSE OR t.is_deleted IS NULL
       `);
     } else {
       result = await query(`
@@ -1379,6 +1455,33 @@ router.get('/stats', async (req, res) => {
             )
           )
       `, [user.id]);
+      assignmentStatsRes = await query(`
+        SELECT 
+          COUNT(*)::int AS total_assignments,
+          COUNT(CASE WHEN EXISTS (
+            SELECT 1 FROM task_views tv 
+            WHERE tv.task_id = ta.task_id AND tv.user_id = ta.user_id
+          ) THEN 1 END)::int AS viewed_assignments,
+          COUNT(CASE WHEN EXISTS (
+            SELECT 1 FROM task_reports tr 
+            WHERE tr.task_id = ta.task_id AND tr.user_id = ta.user_id
+          ) THEN 1 END)::int AS reported_assignments,
+          COUNT(CASE WHEN ta.status = 'in_progress' THEN 1 END)::int AS in_progress_assignments,
+          COUNT(CASE WHEN ta.status = 'completed' THEN 1 END)::int AS completed_assignments
+        FROM task_assignments ta
+        JOIN tasks t ON ta.task_id = t.id
+        WHERE (t.is_deleted = FALSE OR t.is_deleted IS NULL)
+          AND (
+            t.created_by = $1 OR 
+            t.assigned_to = $1 OR 
+            EXISTS (
+              SELECT 1 FROM task_assignments ta2 WHERE ta2.task_id = t.id AND ta2.user_id = $1
+            ) OR
+            EXISTS (
+              SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = t.workspace_id AND wm.user_id = $1
+            )
+          )
+      `, [user.id]);
     }
 
     const row = result.rows[0];
@@ -1386,6 +1489,14 @@ router.get('/stats', async (req, res) => {
     const completed = row.completed || 0;
     const completion_rate = total > 0 ? Math.round((completed / total) * 100) : 0;
     const viewed = viewedRes.rows[0]?.viewed || 0;
+
+    const assRow = assignmentStatsRes.rows[0] || {
+      total_assignments: 0,
+      viewed_assignments: 0,
+      reported_assignments: 0,
+      in_progress_assignments: 0,
+      completed_assignments: 0
+    };
 
     const statsData = {
       total,
@@ -1395,7 +1506,13 @@ router.get('/stats', async (req, res) => {
       revision_required: row.revision_required || 0,
       completed,
       completion_rate,
-      viewed
+      viewed,
+      total_assignments: assRow.total_assignments || 0,
+      viewed_assignments: assRow.viewed_assignments || 0,
+      reported_assignments: assRow.reported_assignments || 0,
+      unreported_assignments: (assRow.total_assignments || 0) - (assRow.reported_assignments || 0),
+      in_progress_assignments: assRow.in_progress_assignments || 0,
+      completed_assignments: assRow.completed_assignments || 0
     };
 
     return res.status(200).json({ status: 'success', data: statsData });
@@ -1508,6 +1625,11 @@ router.post('/tasks/:taskId/urge', async (req, res) => {
       } else {
         filteredIds = [];
       }
+    } else if (target === 'not_reported') {
+      // Chưa báo cáo: tìm các assignees chưa có bất kỳ báo cáo nào trong task_reports
+      const reportsRes = await query('SELECT DISTINCT user_id FROM task_reports WHERE task_id = $1', [taskId]);
+      const reportedIds = new Set(reportsRes.rows.map(r => parseInt(r.user_id)));
+      filteredIds = assigneeIds.filter(uid => !reportedIds.has(parseInt(uid)));
     }
 
     // Nếu không tìm thấy người nào thoả mãn bộ lọc, trả về thông báo thành công nhưng không cần gửi push/socket
@@ -1681,6 +1803,16 @@ router.get('/tasks/:taskId/activities', async (req, res) => {
       [taskId]
     );
 
+    // 4. Lấy báo cáo tiến độ nhiệm vụ
+    const reportsRes = await query(
+      `SELECT tr.id, tr.task_id, tr.user_id, tr.report_type, tr.content, tr.progress_percent, tr.created_at,
+              u.name AS user_name, u.avatar AS user_avatar, u.role AS user_role
+       FROM task_reports tr
+       JOIN users u ON tr.user_id = u.id
+       WHERE tr.task_id = $1`,
+      [taskId]
+    );
+
     // Chuẩn hóa và gộp tất cả
     const activities = [
       ...actRes.rows,
@@ -1707,6 +1839,18 @@ router.get('/tasks/:taskId/activities', async (req, res) => {
         user_name: c.user_name,
         user_avatar: c.user_avatar,
         user_role: c.user_role
+      })),
+      ...reportsRes.rows.map(r => ({
+        id: `report-${r.id}`,
+        task_id: r.task_id,
+        user_id: r.user_id,
+        action: 'progress_reported',
+        old_value: r.report_type,
+        new_value: `${r.progress_percent}%: ${r.content}`,
+        created_at: r.created_at,
+        user_name: r.user_name,
+        user_avatar: r.user_avatar,
+        user_role: r.user_role
       }))
     ];
 
@@ -2026,8 +2170,8 @@ router.post('/tasks/:taskId/approve', async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       io.emit('task_updated', updatedTask);
-      io.emit('task_approved', updatedTask);
-      io.emit('task_completed', updatedTask);
+      io.emit('task_approved', { ...updatedTask, approved_by_name: user.name });
+      io.emit('task_completed', { ...updatedTask, completed_by_name: user.name });
     }
 
     // Gửi Push Notification cho Assignee
@@ -2133,7 +2277,7 @@ router.post('/tasks/:taskId/reject', async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       io.emit('task_updated', updatedTask);
-      io.emit('task_rejected', updatedTask);
+      io.emit('task_rejected', { ...updatedTask, rejected_by_name: user.name });
     }
 
     // Gửi Push Notification cho Assignee
@@ -2205,7 +2349,7 @@ router.post('/tasks/:taskId/view', async (req, res) => {
     // Phát sự kiện realtime
     const io = req.app.get('io');
     if (io) {
-      io.emit('task_viewed', { taskId, userId: user.id });
+      io.emit('task_viewed', { taskId, userId: user.id, userName: user.name });
     }
 
     return res.status(200).json({
@@ -2271,6 +2415,22 @@ router.get('/tasks/:taskId/recipients', async (req, res) => {
       viewsMap[parseInt(v.user_id)] = v;
     });
 
+    // Lấy thông tin số lượng báo cáo và thời gian hoạt động cuối cùng của từng người nhận
+    const reportsRes = await query(
+      `SELECT user_id, COUNT(*)::int AS reports_count, MAX(created_at) AS last_report_at
+       FROM task_reports
+       WHERE task_id = $1
+       GROUP BY user_id`,
+      [taskId]
+    );
+    const reportsMap = {};
+    reportsRes.rows.forEach(r => {
+      reportsMap[parseInt(r.user_id)] = {
+        reports_count: r.reports_count,
+        last_report_at: r.last_report_at
+      };
+    });
+
     let viewedCount = 0;
     let inProgressCount = 0;
     let waitingApprovalCount = 0;
@@ -2279,8 +2439,20 @@ router.get('/tasks/:taskId/recipients', async (req, res) => {
     const users = list.map(item => {
       const userId = parseInt(item.user_id);
       const viewRecord = viewsMap[userId];
+      const reportRecord = reportsMap[userId];
       const viewed = !!viewRecord;
       if (viewed) viewedCount++;
+
+      // Số báo cáo và thời gian hoạt động cuối cùng
+      const reports_count = reportRecord ? reportRecord.reports_count : 0;
+      let last_active_at = null;
+
+      const viewTime = viewRecord ? new Date(viewRecord.last_viewed_at).getTime() : 0;
+      const reportTime = reportRecord && reportRecord.last_report_at ? new Date(reportRecord.last_report_at).getTime() : 0;
+      const maxTime = Math.max(viewTime, reportTime);
+      if (maxTime > 0) {
+        last_active_at = new Date(maxTime).toISOString();
+      }
 
       // Xác định trạng thái chi tiết của assignee
       let status = 'not_viewed';
@@ -2316,7 +2488,9 @@ router.get('/tasks/:taskId/recipients', async (req, res) => {
         viewed,
         first_viewed_at: viewRecord ? viewRecord.first_viewed_at : null,
         last_viewed_at: viewRecord ? viewRecord.last_viewed_at : null,
-        status
+        status,
+        reports_count,
+        last_active_at
       };
     });
 
@@ -2337,6 +2511,221 @@ router.get('/tasks/:taskId/recipients', async (req, res) => {
   } catch (err) {
     console.error('❌ Lỗi API lấy người nhận nhiệm vụ:', err.message);
     return res.status(500).json({ status: 'error', message: 'Lỗi hệ thống khi lấy thông tin người nhận: ' + err.message });
+  }
+});
+
+// POST /api/tasks/tasks/:taskId/reports — Tạo báo cáo mới
+router.post('/tasks/:taskId/reports', async (req, res) => {
+  const user = getAuthUser(req);
+  if (!user) {
+    return res.status(401).json({ status: 'error', message: 'Không thể xác thực người dùng.' });
+  }
+
+  const taskId = parseInt(req.params.taskId);
+  const { report_type = 'progress', content, progress_percent = 0, attachments = [] } = req.body;
+
+  if (!content || !content.trim()) {
+    return res.status(400).json({ status: 'error', message: 'Nội dung báo cáo không được để trống.' });
+  }
+
+  if (!['progress', 'issue', 'material_request', 'completion'].includes(report_type)) {
+    return res.status(400).json({ status: 'error', message: 'Loại báo cáo không hợp lệ.' });
+  }
+
+  try {
+    const taskRes = await query('SELECT * FROM tasks WHERE id = $1 AND is_deleted = FALSE', [taskId]);
+    if (taskRes.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'Không tìm thấy nhiệm vụ.' });
+    }
+
+    const task = taskRes.rows[0];
+
+    // Kiểm tra xem user có được giao nhiệm vụ này không
+    const checkAssignment = await query(
+      'SELECT 1 FROM task_assignments WHERE task_id = $1 AND user_id = $2',
+      [taskId, user.id]
+    );
+    const isAssigned = checkAssignment.rows.length > 0 || task.assigned_to === user.id;
+    if (user.role !== 'admin' && !isAssigned) {
+      return res.status(403).json({ status: 'error', message: 'Bạn không được phân quyền trong nhiệm vụ này.' });
+    }
+
+    // Nếu chưa có dòng phân công trong task_assignments (ví dụ là primary assignee cũ), tự chèn vào
+    if (checkAssignment.rows.length === 0 && task.assigned_to === user.id) {
+      await query(
+        `INSERT INTO task_assignments (task_id, user_id, status, assigned_by)
+         VALUES ($1, $2, 'todo', $3) ON CONFLICT DO NOTHING`,
+        [taskId, user.id, task.created_by]
+      );
+    }
+
+    // Thêm báo cáo vào CSDL
+    const attachmentsJson = JSON.stringify(attachments);
+    const dailyReportDate = new Date().toISOString().slice(0, 10); // Format YYYY-MM-DD
+
+    const reportInsertRes = await query(
+      `INSERT INTO task_reports (task_id, user_id, report_type, content, progress_percent, attachments, daily_report_date)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [taskId, user.id, report_type, content.trim(), parseInt(progress_percent), attachmentsJson, dailyReportDate]
+    );
+
+    const report = reportInsertRes.rows[0];
+
+    // Ghi log hoạt động
+    await logTaskActivity(taskId, user.id, 'progress_reported', report_type, `${progress_percent}%: ${content.trim()}`);
+
+    // Cập nhật trạng thái phân công của người báo cáo
+    if (report_type === 'completion') {
+      await query(
+        `UPDATE task_assignments 
+         SET status = 'completed', completed_at = NOW(), updated_at = NOW()
+         WHERE task_id = $1 AND user_id = $2`,
+        [taskId, user.id]
+      );
+    } else {
+      // Nếu gửi các báo cáo khác, tự động cập nhật status sang 'in_progress' nếu nó đang là 'todo'
+      await query(
+        `UPDATE task_assignments 
+         SET status = 'in_progress', started_at = COALESCE(started_at, NOW()), updated_at = NOW()
+         WHERE task_id = $1 AND user_id = $2 AND status = 'todo'`,
+        [taskId, user.id]
+      );
+    }
+
+    // Lấy thông tin assignees đầy đủ để trả về và check hoàn thành task tổng
+    const assigneesRes = await query(
+      `SELECT ta.user_id, ta.status, ta.started_at, ta.completed_at, u.name, u.avatar
+       FROM task_assignments ta
+       JOIN users u ON ta.user_id = u.id
+       WHERE ta.task_id = $1`,
+      [taskId]
+    );
+    const assignees = assigneesRes.rows;
+
+    const totalAssignees = assignees.length;
+    const completedAssigneesCount = assignees.filter(a => a.status === 'completed').length;
+
+    let updatedTask = task;
+    if (completedAssigneesCount === totalAssignees && totalAssignees > 0) {
+      const taskUpdateRes = await query(
+        `UPDATE tasks 
+         SET status = 'completed', approval_status = 'completed', completed = TRUE, completed_at = NOW(), updated_at = NOW() 
+         WHERE id = $1 RETURNING *`,
+        [taskId]
+      );
+      updatedTask = taskUpdateRes.rows[0];
+    } else {
+      // Nếu gửi completion report nhưng chưa hoàn thành hết, hãy chắc chắn task_status không chuyển thành completed
+      // Trừ khi task tổng đã completed trước đó, nhưng ta giữ nguyên status hoặc chuyển sang in_progress nếu chưa xong
+      if (task.status === 'completed' && completedAssigneesCount < totalAssignees) {
+        const taskUpdateRes = await query(
+          `UPDATE tasks 
+           SET status = 'in_progress', approval_status = 'in_progress', completed = FALSE, completed_at = NULL, updated_at = NOW() 
+           WHERE id = $1 RETURNING *`,
+          [taskId]
+        );
+        updatedTask = taskUpdateRes.rows[0];
+      }
+    }
+
+    // Chuẩn bị payload socket/realtime
+    const io = req.app.get('io');
+    if (io) {
+      const socketPayload = {
+        taskId,
+        report: { ...report, userName: user.name },
+        user_id: user.id,
+        userName: user.name,
+        completed_assignees_count: completedAssigneesCount,
+        total_assignees: totalAssignees,
+        task_status: updatedTask.status,
+        approval_status: updatedTask.approval_status
+      };
+      io.emit('task_report_created', socketPayload);
+      if (task.conversation_id) {
+        io.to(`room_${task.conversation_id}`).emit('task_report_created', socketPayload);
+      }
+      io.emit('task_updated', { id: taskId, user_id: user.id, status: updatedTask.status, assignees });
+
+      if (report_type === 'completion') {
+        io.emit('task_completed', { id: taskId, user_id: user.id, userName: user.name, completed_by_name: user.name, title: task.title });
+      }
+    }
+
+    // Trigger push notification cho những người liên quan (ví dụ sếp hoặc assignees khác)
+    try {
+      const userRes = await query('SELECT name FROM users WHERE id = $1', [user.id]);
+      const userName = userRes.rows[0]?.name || 'Thành viên';
+      
+      let typeText = 'báo cáo tiến độ';
+      if (report_type === 'issue') typeText = 'báo cáo sự cố ⚠️';
+      if (report_type === 'material_request') typeText = 'báo cáo thiếu vật tư 📦';
+      if (report_type === 'completion') typeText = 'báo cáo hoàn thành ✅';
+
+      const pushMessage = `📢 ${userName} đã gửi ${typeText}: "${content.substring(0, 40)}${content.length > 40 ? '...' : ''}" cho công việc "${task.title}"`;
+      
+      // Gửi cho người tạo nhiệm vụ nếu không phải chính mình
+      const recipientsToNotify = [];
+      if (task.created_by && task.created_by !== user.id) {
+        recipientsToNotify.push(task.created_by);
+      }
+      // Gửi cho những người nhận việc khác
+      assignees.forEach(a => {
+        if (a.user_id !== user.id && !recipientsToNotify.includes(a.user_id)) {
+          recipientsToNotify.push(a.user_id);
+        }
+      });
+
+      if (recipientsToNotify.length > 0) {
+        const tokensRes = await query(
+          'SELECT user_id, fcm_token FROM user_push_tokens WHERE user_id = ANY($1)',
+          [recipientsToNotify]
+        );
+        const { sendPWAPushNotification } = require('../config/firebaseAdmin');
+        tokensRes.rows.forEach(({ fcm_token }) => {
+          if (fcm_token) {
+            sendPWAPushNotification(fcm_token, 'Báo cáo công việc mới', pushMessage, {
+              taskId: String(taskId),
+              type: 'task_report'
+            }).catch(e => console.error('Error sending report push:', e.message));
+          }
+        });
+      }
+    } catch (pushErr) {
+      console.error('Error processing push notification for report:', pushErr.message);
+    }
+
+    return res.status(201).json({ status: 'success', data: report });
+  } catch (err) {
+    console.error('❌ Lỗi tạo báo cáo:', err.message);
+    return res.status(500).json({ status: 'error', message: 'Lỗi máy chủ: ' + err.message });
+  }
+});
+
+// GET /api/tasks/tasks/:taskId/reports — Lấy danh sách báo cáo của nhiệm vụ
+router.get('/tasks/:taskId/reports', async (req, res) => {
+  const user = getAuthUser(req);
+  if (!user) {
+    return res.status(401).json({ status: 'error', message: 'Không thể xác thực người dùng.' });
+  }
+
+  const taskId = parseInt(req.params.taskId);
+
+  try {
+    const result = await query(
+      `SELECT tr.*, u.name AS user_name, u.avatar AS user_avatar, u.role AS user_role
+       FROM task_reports tr
+       JOIN users u ON tr.user_id = u.id
+       WHERE tr.task_id = $1
+       ORDER BY tr.created_at DESC`,
+      [taskId]
+    );
+
+    return res.status(200).json({ status: 'success', data: result.rows });
+  } catch (err) {
+    console.error('❌ Lỗi lấy báo cáo nhiệm vụ:', err.message);
+    return res.status(500).json({ status: 'error', message: 'Lỗi máy chủ khi lấy danh sách báo cáo.' });
   }
 });
 

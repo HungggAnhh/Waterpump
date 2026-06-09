@@ -25,6 +25,7 @@ import { useSocket } from '@/context/SocketContext';
 import { API_BASE_URL } from '@/constants/Config';
 import VoiceMicButton from '../../components/VoiceMicButton';
 import TaskDetailModal from '@/components/tasks/TaskDetailModal';
+import TaskViewsModal from '@/components/tasks/TaskViewsModal';
 import { sortTasksStable } from '@/utils/taskSort';
 import { useNotifications } from '@/context/NotificationContext';
 
@@ -64,6 +65,8 @@ interface Task {
   revision_count?: number;
   total_assignees?: number;
   viewed_assignees_count?: number;
+  completed_assignees_count?: number;
+  total_reports_count?: number;
 }
 
 
@@ -91,6 +94,17 @@ export default function PageTasksScreen() {
   // Modals
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+
+  // Views Modal states
+  const [viewsModalVisible, setViewsModalVisible] = useState(false);
+  const [viewsModalTaskId, setViewsModalTaskId] = useState<number | null>(null);
+  const [viewsModalTaskTitle, setViewsModalTaskTitle] = useState<string | null>(null);
+
+  const handleOpenViewsModal = (task: Task) => {
+    setViewsModalTaskId(task.id);
+    setViewsModalTaskTitle(task.title);
+    setViewsModalVisible(true);
+  };
 
   // Share Menu Popover State
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
@@ -1290,7 +1304,7 @@ export default function PageTasksScreen() {
                 >
                   <View style={[styles.colCell, styles.colTitle, { borderRightColor: colors.border }]}>
                     <TouchableOpacity
-                      style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+                      style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
                       onPress={() => {
                         setSelectedTask(task);
                         setIsDetailModalOpen(true);
@@ -1306,14 +1320,25 @@ export default function PageTasksScreen() {
                       >
                         {task.title}
                       </Text>
-                      {task.total_assignees !== undefined && task.total_assignees > 0 && (
-                        <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.border + '30', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8, marginLeft: 8 }}>
+                    </TouchableOpacity>
+                    {task.total_assignees !== undefined && task.total_assignees > 0 && (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.border + '30', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8, marginLeft: 8, gap: 6 }}>
+                        <TouchableOpacity
+                          onPress={() => handleOpenViewsModal(task)}
+                          activeOpacity={0.6}
+                        >
                           <Text style={{ fontSize: 10, color: colors.tabIconDefault, fontWeight: '600' }}>
                             👀 {task.viewed_assignees_count || 0}/{task.total_assignees}
                           </Text>
-                        </View>
-                      )}
-                    </TouchableOpacity>
+                        </TouchableOpacity>
+                        <Text style={{ fontSize: 10, color: '#059669', fontWeight: '600' }}>
+                          👥 {task.completed_assignees_count || 0}/{task.total_assignees} HT
+                        </Text>
+                        <Text style={{ fontSize: 10, color: colors.tint, fontWeight: '600' }}>
+                          📝 {task.total_reports_count || 0} BC
+                        </Text>
+                      </View>
+                    )}
                   </View>
 
                   {/* Column 2: Trạng thái */}
@@ -2225,6 +2250,14 @@ export default function PageTasksScreen() {
         onTaskDeleted={(taskId) => {
           setTasks(prev => prev.filter(t => t.id !== taskId));
         }}
+      />
+
+      {/* Task Views Modal */}
+      <TaskViewsModal
+        visible={viewsModalVisible}
+        onClose={() => setViewsModalVisible(false)}
+        taskId={viewsModalTaskId}
+        taskTitle={viewsModalTaskTitle}
       />
 
       {/* 8. Popover: Share Menu removed */}

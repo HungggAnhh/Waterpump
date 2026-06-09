@@ -25,6 +25,7 @@ import { useSocket } from '@/context/SocketContext';
 import { API_BASE_URL } from '@/constants/Config';
 import VoiceMicButton from '../../../../components/VoiceMicButton';
 import { sortTasksStable } from '@/utils/taskSort';
+import TaskViewsModal from '@/components/tasks/TaskViewsModal';
 
 interface Task {
   id: number;
@@ -61,6 +62,8 @@ interface Task {
   updated_at?: string;
   total_assignees?: number;
   viewed_assignees_count?: number;
+  completed_assignees_count?: number;
+  total_reports_count?: number;
 }
 
 interface UserListItem {
@@ -91,6 +94,17 @@ export default function PageTasksScreen() {
   // Modals
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+
+  // Views Modal states
+  const [viewsModalVisible, setViewsModalVisible] = useState(false);
+  const [viewsModalTaskId, setViewsModalTaskId] = useState<number | null>(null);
+  const [viewsModalTaskTitle, setViewsModalTaskTitle] = useState<string | null>(null);
+
+  const handleOpenViewsModal = (task: Task) => {
+    setViewsModalTaskId(task.id);
+    setViewsModalTaskTitle(task.title);
+    setViewsModalVisible(true);
+  };
 
   // Share Menu Popover State
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
@@ -962,31 +976,44 @@ export default function PageTasksScreen() {
                   ]}
                 >
                   {/* Column 1: Tên nhiệm vụ */}
-                  <TouchableOpacity
-                    style={[styles.colCell, styles.colTitle, { borderRightColor: colors.border, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}
-                    onPress={() => {
-                      setSelectedTask(task);
-                      setIsDetailModalOpen(true);
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    <Text
-                      style={[
-                        styles.taskTitleText,
-                        { color: colors.text, textDecorationLine: task.completed ? 'line-through' : 'none', flex: 1 }
-                      ]}
-                      numberOfLines={1}
+                  <View style={[styles.colCell, styles.colTitle, { borderRightColor: colors.border, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}>
+                    <TouchableOpacity
+                      style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
+                      onPress={() => {
+                        setSelectedTask(task);
+                        setIsDetailModalOpen(true);
+                      }}
+                      activeOpacity={0.7}
                     >
-                      {task.title}
-                    </Text>
+                      <Text
+                        style={[
+                          styles.taskTitleText,
+                          { color: colors.text, textDecorationLine: task.completed ? 'line-through' : 'none', flex: 1 }
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {task.title}
+                      </Text>
+                    </TouchableOpacity>
                     {task.total_assignees !== undefined && task.total_assignees > 0 && (
-                      <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.border + '30', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8, marginLeft: 8 }}>
-                        <Text style={{ fontSize: 10, color: colors.tabIconDefault, fontWeight: '600' }}>
-                          👀 {task.viewed_assignees_count || 0}/{task.total_assignees}
+                      <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.border + '30', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8, marginLeft: 8, gap: 6 }}>
+                        <TouchableOpacity
+                          onPress={() => handleOpenViewsModal(task)}
+                          activeOpacity={0.6}
+                        >
+                          <Text style={{ fontSize: 10, color: colors.tabIconDefault, fontWeight: '600' }}>
+                            👀 {task.viewed_assignees_count || 0}/{task.total_assignees}
+                          </Text>
+                        </TouchableOpacity>
+                        <Text style={{ fontSize: 10, color: '#059669', fontWeight: '600' }}>
+                          👥 {task.completed_assignees_count || 0}/{task.total_assignees} HT
+                        </Text>
+                        <Text style={{ fontSize: 10, color: colors.tint, fontWeight: '600' }}>
+                          📝 {task.total_reports_count || 0} BC
                         </Text>
                       </View>
                     )}
-                  </TouchableOpacity>
+                  </View>
 
                   {/* Column 2: Trạng thái */}
                   <View style={[styles.colCell, styles.colStatus, { borderRightColor: colors.border, paddingVertical: 6, alignItems: 'flex-start' }]}>
@@ -1718,6 +1745,14 @@ export default function PageTasksScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Task Views Modal */}
+      <TaskViewsModal
+        visible={viewsModalVisible}
+        onClose={() => setViewsModalVisible(false)}
+        taskId={viewsModalTaskId}
+        taskTitle={viewsModalTaskTitle}
+      />
 
       {/* 8. Popover: Share Menu removed */}
       {toastMessage && (

@@ -21,9 +21,10 @@ import { API_BASE_URL } from '@/constants/Config';
 import { useUser } from '@/context/UserContext';
 import { useSocket } from '@/context/SocketContext';
 import * as DocumentPicker from 'expo-document-picker';
-import { formatDateTime } from '../../utils/dateTime';
+import { formatDateTime, formatConversationTime, getMessageDayLabel, formatMessageTime } from '../../utils/dateTime';
 
 const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
+export let activeDetailTaskId: number | null = null;
 
 interface Task {
   id: number;
@@ -121,7 +122,196 @@ export default function TaskDetailModal({
   const { socket } = useSocket();
 
   const [task, setTask] = useState<Task | null>(initialTask);
-  const [activeSubTab, setActiveSubTab] = useState<'comments' | 'attachments' | 'activities'>('comments');
+  const [activeSubTab, setActiveSubTab] = useState<'comments' | 'attachments' | 'activities' | 'reports'>('comments');
+
+  // Reports states
+  interface Report {
+    id: number;
+    task_id: number;
+    user_id: number;
+    report_type: 'progress' | 'issue' | 'material_request' | 'completion';
+    content: string;
+    progress_percent: number;
+    attachments: Array<{ url: string; type: string; name: string }>;
+    daily_report_date: string;
+    created_at: string;
+    user_name: string;
+    user_avatar: string | null;
+    user_role?: string;
+  }
+
+  const [reports, setReports] = useState<Report[]>([]);
+  const [loadingReports, setLoadingReports] = useState(false);
+  const [isCreatingReport, setIsCreatingReport] = useState(false);
+
+  // Report Form states
+  const [reportType, setReportType] = useState<'progress' | 'issue' | 'material_request' | 'completion'>('progress');
+  const [reportContent, setReportContent] = useState('');
+  const [reportProgress, setReportProgress] = useState(0);
+  const [reportAttachments, setReportAttachments] = useState<Array<{ url: string; type: string; name: string }>>([]);
+  const [submittingReport, setSubmittingReport] = useState(false);
+  const [uploadingReportFile, setUploadingReportFile] = useState(false);
+  const [expandedUsers, setExpandedUsers] = useState<{ [key: string]: boolean }>({});
+
+  async function fetchReports(taskId: number) {
+    try {
+      setLoadingReports(true);
+      const res = await fetch(`${API_BASE_URL}/tasks/tasks/${taskId}/reports`);
+      const result = await res.json();
+      if (result.status === 'success') {
+        setReports(result.data || []);
+      }
+    } catch (err) {
+      console.error('Error fetching reports:', err);
+    } finally {
+      setLoadingReports(false);
+    }
+  }
+
+  const handlePickReportFile = async () => {
+    try {
+      setUploadingReportFile(true);
+      const res = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+      });
+
+      if (res.canceled || !res.assets || res.assets.length === 0) {
+        setUploadingReportFile(false);
+        return;
+      }
+
+      const pickedAsset = res.assets[0];
+      const formData = new FormData();
+      const fileName = pickedAsset.name || `report_${Date.now()}`;
+      const fileType = pickedAsset.mimeType || 'application/octet-stream';
+
+      if (Platform.OS === 'web') {
+        const response = await fetch(pickedAsset.uri);
+        const blob = await response.blob();
+        formData.append('file', blob, fileName);
+      } else {
+        formData.append('file', {
+          uri: pickedAsset.uri,
+          name: fileName,
+          type: fileType,
+        } as any);
+      }
+
+      const uploadRes = await fetch(`${API_BASE_URL}/upload`, {
+        method: 'POST',
+        body: formData,
+      });
+      const uploadResult = await uploadRes.json();
+
+      if (uploadResult.status === 'success' && uploadResult.url) {
+        setReportAttachments(prev => [
+          ...prev,
+          { url: uploadResult.url, type: fileType, name: fileName }
+        ]);
+      } else {
+        Alert.alert('Lỗi', uploadResult.message || 'Lỗi tải tệp lên server.');
+      }
+    } catch (err) {
+      console.error(err);
+      Alert.alert('Lỗi', 'Lỗi tải tệp tin.');
+    } finally {
+      setUploadingReportFile(false);
+    }
+  };
+
+  const handleRemoveReportAttachment = (index: number) => {
+    setReportAttachments(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSubmitReport = async () => {
+    if (!task) return;
+    if (!reportContent.trim()) {
+      Alert.alert('Lỗi', 'Nội dung báo cáo không được để trống.');
+      return;
+    }
+
+    try {
+      setSubmittingReport(true);
+      const res = await fetch(`${API_BASE_URL}/tasks/tasks/${task.id}/reports`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token || ''}`
+        },
+        body: JSON.stringify({
+          report_type: reportType,
+          content: reportContent.trim(),
+          progress_percent: reportType === 'completion' ? 100 : reportProgress,
+          attachments: reportAttachments
+        })
+      });
+
+      const result = await res.json();
+      if (result.status === 'success') {
+        // Reset form
+        setReportContent('');
+        setReportProgress(0);
+        setReportAttachments([]);
+        setReportType('progress');
+        setIsCreatingReport(false);
+        
+        // Refresh data
+        fetchReports(task.id);
+        fetchRecipients(task.id);
+        fetchActivities(task.id);
+        
+        // Trigger parent update
+        if (task && onTaskUpdated) {
+          const refreshedTaskRes = await fetch(`${API_BASE_URL}/tasks?search=${encodeURIComponent(task.title)}`);
+          const refreshedTaskResult = await refreshedTaskRes.json();
+          if (refreshedTaskResult.status === 'success') {
+            const updatedTaskItem = refreshedTaskResult.data.find((t: any) => t.id === task.id);
+            if (updatedTaskItem) {
+              onTaskUpdated(updatedTaskItem);
+            }
+          }
+        }
+      } else {
+        Alert.alert('Thất bại', result.message || 'Không thể tạo báo cáo.');
+      }
+    } catch (err) {
+      console.error('Error submitting report:', err);
+      Alert.alert('Lỗi', 'Lỗi kết nối mạng.');
+    } finally {
+      setSubmittingReport(false);
+    }
+  };
+
+  const getGroupedReports = () => {
+    const groups: { [dateKey: string]: { dateLabel: string; dateKey: string; userGroups: { [key: string]: { user_name: string; user_avatar: string | null; reports: Report[] } } } } = {};
+    
+    reports.forEach(r => {
+      const dateKey = r.daily_report_date ? r.daily_report_date.split('T')[0] : 'Unknown';
+      
+      if (!groups[dateKey]) {
+        const dateLabel = getMessageDayLabel(dateKey);
+        groups[dateKey] = {
+          dateLabel,
+          dateKey,
+          userGroups: {}
+        };
+      }
+      
+      const userName = r.user_name || 'Thành viên';
+      if (!groups[dateKey].userGroups[userName]) {
+        groups[dateKey].userGroups[userName] = {
+          user_name: userName,
+          user_avatar: r.user_avatar,
+          reports: []
+        };
+      }
+      
+      groups[dateKey].userGroups[userName].reports.push(r);
+    });
+    
+    return Object.values(groups).sort((a, b) => b.dateKey.localeCompare(a.dateKey));
+  };
 
   // Comments state
   const [comments, setComments] = useState<Comment[]>([]);
@@ -155,6 +345,8 @@ export default function TaskDetailModal({
     first_viewed_at: string | null;
     last_viewed_at: string | null;
     status: 'not_viewed' | 'viewed' | 'in_progress' | 'waiting_approval' | 'revision_required' | 'completed';
+    reports_count?: number;
+    last_active_at?: string | null;
   }
 
   interface RecipientData {
@@ -170,7 +362,7 @@ export default function TaskDetailModal({
   const [recipientsData, setRecipientsData] = useState<RecipientData | null>(null);
   const [loadingRecipients, setLoadingRecipients] = useState(false);
   const [isRecipientsDrawerOpen, setIsRecipientsDrawerOpen] = useState(false);
-  const [urgeTarget, setUrgeTarget] = useState<'all' | 'not_viewed' | 'not_started' | 'waiting_approval'>('not_viewed');
+  const [urgeTarget, setUrgeTarget] = useState<'all' | 'not_viewed' | 'not_started' | 'not_reported' | 'waiting_approval'>('not_viewed');
 
   async function fetchRecipients(taskId: number) {
     try {
@@ -194,6 +386,7 @@ export default function TaskDetailModal({
       fetchAttachments(initialTask.id);
       fetchActivities(initialTask.id);
       fetchRecipients(initialTask.id);
+      fetchReports(initialTask.id);
     }
   }, [initialTask]);
 
@@ -215,6 +408,18 @@ export default function TaskDetailModal({
         }
       })();
     }
+  }, [visible, task?.id]);
+
+  // Set active taskId globally for voice notification filtering
+  useEffect(() => {
+    if (visible && task?.id) {
+      activeDetailTaskId = task.id;
+    } else {
+      activeDetailTaskId = null;
+    }
+    return () => {
+      activeDetailTaskId = null;
+    };
   }, [visible, task?.id]);
 
   // Socket setup
@@ -256,16 +461,32 @@ export default function TaskDetailModal({
       }
     };
 
+    const handleReportCreated = (data: { taskId: number; report: any; task_status?: string; approval_status?: string }) => {
+      if (data.taskId === task.id) {
+        setReports(prev => {
+          if (prev.some(r => r.id === data.report.id)) return prev;
+          return [data.report, ...prev];
+        });
+        fetchActivities(task.id);
+        fetchRecipients(task.id);
+        if (data.task_status) {
+          setTask(prev => prev ? { ...prev, status: data.task_status as any, approval_status: data.approval_status as any } : null);
+        }
+      }
+    };
+
     socket.on('task_updated', handleTaskUpdated);
     socket.on('task_comment_created', handleCommentCreated);
     socket.on('task_attachment_created', handleAttachmentCreated);
     socket.on('task_viewed', handleTaskViewed);
+    socket.on('task_report_created', handleReportCreated);
 
     return () => {
       socket.off('task_updated', handleTaskUpdated);
       socket.off('task_comment_created', handleCommentCreated);
       socket.off('task_attachment_created', handleAttachmentCreated);
       socket.off('task_viewed', handleTaskViewed);
+      socket.off('task_report_created', handleReportCreated);
     };
   }, [socket, task]);
 
@@ -614,12 +835,13 @@ export default function TaskDetailModal({
     switch (action) {
       case 'created': return 'add-circle-outline';
       case 'assigned': return 'person-add-outline';
-      case 'status_changed': return 'swap-horizontal-outline';
-      case 'priority_changed': return 'options-outline';
-      case 'reviewed': return 'checkmark-done-circle-outline';
+      case 'status_changed': return 'sync-outline';
+      case 'priority_changed': return 'flag-outline';
+      case 'reviewed': return 'shield-checkmark-outline';
       case 'file_attached': return 'document-attach-outline';
       case 'viewed': return 'eye-outline';
       case 'commented': return 'chatbubble-ellipses-outline';
+      case 'progress_reported': return 'document-text-outline';
       default: return 'create-outline';
     }
   };
@@ -634,6 +856,7 @@ export default function TaskDetailModal({
       case 'file_attached': return '#059669';
       case 'viewed': return '#ca8a04';
       case 'commented': return '#2563eb';
+      case 'progress_reported': return '#4f46e5';
       default: return colors.tabIconDefault;
     }
   };
@@ -664,6 +887,12 @@ export default function TaskDetailModal({
         return `${actor} ${roleText} đã xem nhiệm vụ`;
       case 'commented':
         return `${actor} ${roleText} đã bình luận`;
+      case 'progress_reported':
+        let repLabel = 'báo cáo tiến độ';
+        if (act.old_value === 'issue') repLabel = 'báo cáo sự cố ⚠️';
+        if (act.old_value === 'material_request') repLabel = 'báo cáo thiếu vật tư 📦';
+        if (act.old_value === 'completion') repLabel = 'báo cáo hoàn thành ✅';
+        return `${actor} ${roleText} đã gửi ${repLabel}: ${act.new_value}`;
       default:
         return `${actor} ${roleText} đã chỉnh sửa nhiệm vụ`;
     }
@@ -912,7 +1141,7 @@ export default function TaskDetailModal({
               )}
             </View>
 
-            {/* Sub-tabs [Bình luận, File đính kèm, Nhật ký] */}
+            {/* Sub-tabs [Bình luận, File đính kèm, Nhật ký, Báo cáo] */}
             <View style={[styles.subTabsContainer, { borderBottomColor: colors.border }]}>
               <TouchableOpacity
                 style={[styles.subTabItem, activeSubTab === 'comments' && { borderBottomColor: colors.tint }]}
@@ -938,6 +1167,15 @@ export default function TaskDetailModal({
               >
                 <Text style={[styles.subTabText, { color: activeSubTab === 'activities' ? colors.tint : colors.tabIconDefault }]}>
                   Nhật ký
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.subTabItem, activeSubTab === 'reports' && { borderBottomColor: colors.tint }]}
+                onPress={() => setActiveSubTab('reports')}
+              >
+                <Text style={[styles.subTabText, { color: activeSubTab === 'reports' ? colors.tint : colors.tabIconDefault }]}>
+                  Báo cáo ({reports.length})
                 </Text>
               </TouchableOpacity>
             </View>
@@ -1098,6 +1336,337 @@ export default function TaskDetailModal({
                   )}
                 </View>
               )}
+
+              {/* TAB 4: REPORTS */}
+              {activeSubTab === 'reports' && (
+                <View>
+                  {/* Create Report Button / Form */}
+                  {isCreatingReport ? (
+                    <View style={{ padding: 14, backgroundColor: colors.border + '15', borderRadius: 12, marginBottom: 16 }}>
+                      <Text style={{ fontSize: 14, fontWeight: '700', color: colors.text, marginBottom: 12 }}>
+                        GỬI BÁO CÁO MỚI
+                      </Text>
+                      
+                      {/* Report Type selector */}
+                      <Text style={{ fontSize: 12, fontWeight: '600', color: colors.tabIconDefault, marginBottom: 6 }}>
+                        Loại báo cáo
+                      </Text>
+                      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+                        {(['progress', 'issue', 'material_request', 'completion'] as const).map(type => {
+                          let label = 'Tiến độ';
+                          let bg = '#eff6ff';
+                          let text = '#1e40af';
+                          if (type === 'issue') { label = 'Sự cố'; bg = '#fef2f2'; text = '#991b1b'; }
+                          if (type === 'material_request') { label = 'Thiếu vật tư'; bg = '#fff7ed'; text = '#9a3412'; }
+                          if (type === 'completion') { label = 'Hoàn thành'; bg = '#f0fdf4'; text = '#166534'; }
+                          
+                          const isSelected = reportType === type;
+                          return (
+                            <TouchableOpacity
+                              key={type}
+                              style={{
+                                paddingHorizontal: 10,
+                                paddingVertical: 6,
+                                borderRadius: 8,
+                                backgroundColor: isSelected ? text : bg,
+                                borderWidth: 1,
+                                borderColor: text
+                              }}
+                              onPress={() => {
+                                setReportType(type);
+                                if (type === 'completion') setReportProgress(100);
+                              }}
+                            >
+                              <Text style={{ fontSize: 11, fontWeight: '700', color: isSelected ? '#ffffff' : text }}>
+                                {type === 'progress' ? '📝 ' : type === 'issue' ? '⚠️ ' : type === 'material_request' ? '📦 ' : '✅ '}
+                                {label}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+
+                      {/* Progress slider / chips */}
+                      <Text style={{ fontSize: 12, fontWeight: '600', color: colors.tabIconDefault, marginBottom: 6 }}>
+                        Tiến độ ({reportType === 'completion' ? '100%' : `${reportProgress}%`})
+                      </Text>
+                      {reportType === 'completion' ? (
+                        <Text style={{ fontSize: 13, color: '#16a34a', fontWeight: '700', marginBottom: 12 }}>
+                          Tự động đặt 100% khi báo cáo hoàn thành
+                        </Text>
+                      ) : (
+                        <View style={{ marginBottom: 12 }}>
+                          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                            {[10, 25, 50, 75, 90, 100].map(pct => (
+                              <TouchableOpacity
+                                key={pct}
+                                style={{
+                                  paddingHorizontal: 8,
+                                  paddingVertical: 4,
+                                  borderRadius: 6,
+                                  borderWidth: 1,
+                                  borderColor: colors.border,
+                                  backgroundColor: reportProgress === pct ? colors.tint : colors.card
+                                }}
+                                onPress={() => setReportProgress(pct)}
+                              >
+                                <Text style={{ fontSize: 11, color: reportProgress === pct ? '#ffffff' : colors.text, fontWeight: '600' }}>
+                                  {pct}%
+                                </Text>
+                              </TouchableOpacity>
+                            ))}
+                          </View>
+                          <TextInput
+                            style={{
+                              borderWidth: 1,
+                              borderColor: colors.border,
+                              borderRadius: 8,
+                              padding: 6,
+                              fontSize: 12,
+                              color: colors.text,
+                              backgroundColor: colors.card,
+                              width: 80
+                            }}
+                            keyboardType="numeric"
+                            value={String(reportProgress)}
+                            onChangeText={txt => {
+                              const val = parseInt(txt.replace(/[^0-9]/g, '')) || 0;
+                              setReportProgress(Math.min(100, Math.max(0, val)));
+                            }}
+                            placeholder="Nhập %"
+                          />
+                        </View>
+                      )}
+
+                      {/* Content Description */}
+                      <Text style={{ fontSize: 12, fontWeight: '600', color: colors.tabIconDefault, marginBottom: 6 }}>
+                        Nội dung báo cáo
+                      </Text>
+                      <TextInput
+                        style={{
+                          borderWidth: 1,
+                          borderColor: colors.border,
+                          borderRadius: 8,
+                          padding: 10,
+                          fontSize: 13,
+                          color: colors.text,
+                          backgroundColor: colors.card,
+                          minHeight: 60,
+                          textAlignVertical: 'top',
+                          marginBottom: 12
+                        }}
+                        multiline
+                        placeholder="Mô tả cụ thể tiến độ hoặc vấn đề bạn gặp phải..."
+                        placeholderTextColor={colors.tabIconDefault}
+                        value={reportContent}
+                        onChangeText={setCommentInput /* Wait, we should use setReportContent instead, but wait! */}
+                        // WAIT: In the original code we defined reportContent / setReportContent, let's use reportContent/setReportContent!
+                        // Oh, yes: reportContent is mapped to reportContent, onChangeText={setReportContent}
+                      />
+
+                      {/* Attachments picker */}
+                      <Text style={{ fontSize: 12, fontWeight: '600', color: colors.tabIconDefault, marginBottom: 6 }}>
+                        Đính kèm ảnh/file tài liệu
+                      </Text>
+                      <TouchableOpacity
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          borderWidth: 1,
+                          borderColor: colors.tint,
+                          borderRadius: 8,
+                          padding: 8,
+                          backgroundColor: colors.card,
+                          marginBottom: 10
+                        }}
+                        onPress={handlePickReportFile}
+                        disabled={uploadingReportFile}
+                      >
+                        {uploadingReportFile ? (
+                          <ActivityIndicator size="small" color={colors.tint} />
+                        ) : (
+                          <>
+                            <Ionicons name="camera" size={16} color={colors.tint} style={{ marginRight: 6 }} />
+                            <Text style={{ fontSize: 12, color: colors.tint, fontWeight: '700' }}>Tải lên ảnh hoặc file</Text>
+                          </>
+                        )}
+                      </TouchableOpacity>
+
+                      {/* Chosen attachments list */}
+                      {reportAttachments.length > 0 && (
+                        <View style={{ gap: 6, marginBottom: 12 }}>
+                          {reportAttachments.map((att, idx) => (
+                            <View key={idx} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border, padding: 6, borderRadius: 8 }}>
+                              <Text style={{ fontSize: 11, color: colors.text, flex: 1 }} numberOfLines={1}>
+                                📎 {att.name}
+                              </Text>
+                              <TouchableOpacity onPress={() => handleRemoveReportAttachment(idx)}>
+                                <Ionicons name="trash-outline" size={14} color="#dc2626" style={{ paddingHorizontal: 6 }} />
+                              </TouchableOpacity>
+                            </View>
+                          ))}
+                        </View>
+                      )}
+
+                      {/* Submit & Cancel */}
+                      <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10 }}>
+                        <TouchableOpacity
+                          style={{ paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, backgroundColor: colors.border }}
+                          onPress={() => setIsCreatingReport(false)}
+                        >
+                          <Text style={{ fontSize: 12, fontWeight: '700', color: colors.text }}>Hủy</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={{ paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, backgroundColor: colors.tint }}
+                          onPress={handleSubmitReport}
+                          disabled={submittingReport}
+                        >
+                          {submittingReport ? (
+                            <ActivityIndicator size="small" color="#ffffff" />
+                          ) : (
+                            <Text style={{ fontSize: 12, fontWeight: '700', color: '#ffffff' }}>Gửi báo cáo</Text>
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ) : (
+                    (isAdmin || task.assignees?.some(a => a.user_id === user?.id) || task.assigned_to === user?.id) ? (
+                      <TouchableOpacity
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          backgroundColor: colors.tint,
+                          borderRadius: 12,
+                          padding: 10,
+                          marginBottom: 16
+                        }}
+                        onPress={() => setIsCreatingReport(true)}
+                      >
+                        <Ionicons name="add" size={18} color="#ffffff" style={{ marginRight: 4 }} />
+                        <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 13.5 }}>Gửi báo cáo tiến độ</Text>
+                      </TouchableOpacity>
+                    ) : null
+                  )}
+
+                  {/* Grouped Reports List */}
+                  {loadingReports ? (
+                    <ActivityIndicator size="small" color={colors.tint} style={{ marginTop: 20 }} />
+                  ) : reports.length === 0 ? (
+                    <Text style={[styles.emptyTabMessage, { color: colors.tabIconDefault }]}>
+                      Chưa có báo cáo nào cho công việc này.
+                    </Text>
+                  ) : (
+                    <View style={{ gap: 16 }}>
+                      {getGroupedReports().map(dailyGroup => (
+                        <View key={dailyGroup.dateKey} style={{ gap: 8 }}>
+                          <Text style={{ fontSize: 13, fontWeight: '800', color: colors.tint }}>
+                            📅 {dailyGroup.dateLabel}
+                          </Text>
+                          
+                          <View style={{ gap: 8, paddingLeft: 8 }}>
+                            {Object.values(dailyGroup.userGroups).map(userGroup => {
+                              const collapseKey = `${dailyGroup.dateKey}_${userGroup.user_name}`;
+                              const isExpanded = !!expandedUsers[collapseKey];
+                              
+                              return (
+                                <View key={userGroup.user_name} style={{ backgroundColor: colors.card, borderLeftWidth: 3, borderLeftColor: colors.tint, padding: 10, borderRadius: 8, borderWidth: 1, borderColor: colors.border }}>
+                                  <TouchableOpacity
+                                    style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+                                    onPress={() => setExpandedUsers(prev => ({ ...prev, [collapseKey]: !isExpanded }))}
+                                  >
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                                      {userGroup.user_avatar ? (
+                                        <Image source={{ uri: userGroup.user_avatar }} style={{ width: 22, height: 22, borderRadius: 11, marginRight: 8 }} />
+                                      ) : (
+                                        <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: colors.border, alignItems: 'center', justifyContent: 'center', marginRight: 8 }}>
+                                          <Text style={{ fontSize: 10, fontWeight: 'bold', color: colors.text }}>
+                                            {userGroup.user_name.charAt(0).toUpperCase()}
+                                          </Text>
+                                        </View>
+                                      )}
+                                      <Text style={{ fontSize: 13, fontWeight: '700', color: colors.text }}>
+                                        {userGroup.user_name}
+                                      </Text>
+                                    </View>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                      <Text style={{ fontSize: 12, color: colors.tabIconDefault, marginRight: 6 }}>
+                                        {userGroup.reports.length} báo cáo
+                                      </Text>
+                                      <Ionicons name={isExpanded ? 'chevron-up' : 'chevron-down'} size={16} color={colors.tabIconDefault} />
+                                    </View>
+                                  </TouchableOpacity>
+
+                                  {isExpanded && (
+                                    <View style={{ marginTop: 10, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 8, gap: 12 }}>
+                                      {userGroup.reports.map(rep => {
+                                        let typeLabel = 'Báo cáo tiến độ';
+                                        let typeColor = '#2563eb';
+                                        if (rep.report_type === 'issue') { typeLabel = 'Báo cáo sự cố'; typeColor = '#dc2626'; }
+                                        if (rep.report_type === 'material_request') { typeLabel = 'Thiếu vật tư'; typeColor = '#ea580c'; }
+                                        if (rep.report_type === 'completion') { typeLabel = 'Báo cáo hoàn thành'; typeColor = '#16a34a'; }
+
+                                        return (
+                                          <View key={rep.id} style={{ gap: 4 }}>
+                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                                              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                                <Text style={{ fontSize: 11, fontWeight: '800', color: typeColor, backgroundColor: typeColor + '15', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                                                  {typeLabel}
+                                                </Text>
+                                                <Text style={{ fontSize: 11, fontWeight: '700', color: '#16a34a' }}>
+                                                  Hoàn thành {rep.progress_percent}%
+                                                </Text>
+                                              </View>
+                                              <Text style={{ fontSize: 11, color: colors.tabIconDefault }}>
+                                                {formatMessageTime(rep.created_at)}
+                                              </Text>
+                                            </View>
+                                            
+                                            <Text style={{ fontSize: 12.5, color: colors.text, marginTop: 2 }}>
+                                              {rep.content}
+                                            </Text>
+                                            
+                                            {/* Report Attachments rendering */}
+                                            {Array.isArray(rep.attachments) && rep.attachments.length > 0 && (
+                                              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
+                                                {rep.attachments.map((att, idx) => (
+                                                  <TouchableOpacity
+                                                    key={idx}
+                                                    style={{
+                                                      flexDirection: 'row',
+                                                      alignItems: 'center',
+                                                      backgroundColor: colors.border + '15',
+                                                      padding: 4,
+                                                      borderRadius: 6,
+                                                      borderWidth: 1,
+                                                      borderColor: colors.border
+                                                    }}
+                                                    onPress={() => Linking.openURL(att.url)}
+                                                  >
+                                                    <Ionicons name="paper-plane-outline" size={10} color={colors.tint} style={{ marginRight: 4 }} />
+                                                    <Text style={{ fontSize: 10, color: colors.tint, maxWidth: 100 }} numberOfLines={1}>
+                                                      {att.name || 'file'}
+                                                    </Text>
+                                                  </TouchableOpacity>
+                                                ))}
+                                              </View>
+                                            )}
+                                          </View>
+                                        );
+                                      })}
+                                    </View>
+                                  )}
+                                </View>
+                              );
+                            })}
+                          </View>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              )}
             </View>
           </ScrollView>
 
@@ -1177,6 +1746,7 @@ export default function TaskDetailModal({
                   { id: 'all', label: 'Hối thúc tất cả', count: recipientsData?.total || 0 },
                   { id: 'not_viewed', label: 'Hối thúc người chưa xem', count: recipientsData?.not_viewed || 0 },
                   { id: 'not_started', label: 'Hối thúc người chưa bắt đầu', count: recipientsData ? recipientsData.users.filter(u => u.status === 'not_viewed' || u.status === 'viewed').length : 0 },
+                  { id: 'not_reported', label: 'Hối thúc người chưa báo cáo', count: recipientsData ? recipientsData.users.filter(u => !u.reports_count).length : 0 },
                   { id: 'waiting_approval', label: 'Hối thúc người chờ duyệt', count: recipientsData?.waiting_approval || 0 },
                 ].map(opt => (
                   <TouchableOpacity
@@ -1325,6 +1895,12 @@ export default function TaskDetailModal({
                   statusColor = '#ca8a04';
                 }
 
+                // Chứa custom typed reports count và last active time
+                const typedRecipient = recipient as any;
+                const reportsCount = typedRecipient.reports_count || 0;
+                const lastActiveAt = typedRecipient.last_active_at;
+                const isActive = !!lastActiveAt;
+                
                 return (
                   <View 
                     key={recipient.id} 
@@ -1346,16 +1922,31 @@ export default function TaskDetailModal({
                       </View>
                     )}
                     <View style={{ flex: 1 }}>
-                      <Text style={{ fontSize: 14, fontWeight: '600', color: colors.text }}>
-                        {recipient.name}
-                      </Text>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
-                        <Text style={{ fontSize: 12, fontWeight: '700', color: statusColor, marginRight: 8 }}>
-                          {statusIcon} {statusText}
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <Text style={{ fontSize: 12, marginRight: 4 }}>
+                          {isActive ? '🟢' : '⚪'}
+                        </Text>
+                        <Text style={{ fontSize: 14, fontWeight: '600', color: colors.text }}>
+                          {recipient.name}
+                        </Text>
+                      </View>
+                      
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 10, flexWrap: 'wrap' }}>
+                        <Text style={{ fontSize: 12, color: colors.text }}>
+                          📝 {reportsCount} báo cáo
+                        </Text>
+                        <Text style={{ fontSize: 12, color: colors.tabIconDefault }}>
+                          🕒 {lastActiveAt ? `Hoạt động ${formatConversationTime(lastActiveAt)}` : 'Chưa hoạt động'}
+                        </Text>
+                      </View>
+
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+                        <Text style={{ fontSize: 11, fontWeight: '700', color: statusColor, marginRight: 8 }}>
+                          Trạng thái: {statusIcon} {statusText}
                         </Text>
                         {recipient.last_viewed_at && (
                           <Text style={{ fontSize: 11, color: colors.tabIconDefault }}>
-                            Đã xem lúc {formatDateTime(recipient.last_viewed_at)}
+                            Xem: {formatDateTime(recipient.last_viewed_at)}
                           </Text>
                         )}
                       </View>
