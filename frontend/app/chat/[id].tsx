@@ -1785,7 +1785,12 @@ export default function ChatRoomScreen() {
             {!voiceUploading && (
               <TouchableOpacity
                 style={{ padding: 8, justifyContent: 'center', alignItems: 'center', marginRight: 6 }}
-                onPress={() => setShowVoiceSheet(true)}
+                onPress={() => {
+                  Keyboard.dismiss();
+                  setTimeout(() => {
+                    setShowVoiceSheet(true);
+                  }, 150);
+                }}
                 activeOpacity={0.7}
               >
                 <Ionicons 

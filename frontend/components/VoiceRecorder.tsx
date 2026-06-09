@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  PanResponder,
   Animated,
   useWindowDimensions,
   Platform,
@@ -86,6 +85,11 @@ export default function VoiceRecorder({
       // Ignore haptics on web / unsupported
     }
   };
+
+  const stateRef = useRef({ isRecording, isHandsFree, swipeCancel });
+  useEffect(() => {
+    stateRef.current = { isRecording, isHandsFree, swipeCancel };
+  }, [isRecording, isHandsFree, swipeCancel]);
 
   // Notify parent of recording state
   useEffect(() => {
@@ -198,42 +202,63 @@ export default function VoiceRecorder({
     setSwipeCancel(false);
   };
 
-  // Configure PanResponder for hold-and-drag gesture
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: () => {
-        pressStartRef.current = Date.now();
-        handleStart();
-      },
-      onPanResponderMove: (_, gestureState) => {
-        // Only allow swipe cancel if not in hands-free mode
-        if (isHandsFree) return;
-        
-        // Swipe left dx < -60
-        if (gestureState.dx < -60) {
-          setSwipeCancel(true);
-        } else {
-          setSwipeCancel(false);
-        }
-      },
-      onPanResponderRelease: () => {
-        const pressDuration = Date.now() - pressStartRef.current;
-        if (pressDuration < 300) {
-          // Enter hands free mode
-          setIsHandsFree(true);
-        } else {
-          handleRelease();
-        }
-      },
-      onPanResponderTerminate: () => {
-        cancelRecording();
-        setSwipeCancel(false);
-        setIsHandsFree(false);
-      },
-    })
-  ).current;
+  const startTouchXRef = useRef<number | null>(null);
+
+  const handleTouchStart = () => {
+    console.log('[VOICE_TOUCH_GRANT]', {
+      timestamp: Date.now(),
+      isRecording: stateRef.current.isRecording,
+      isHandsFree: stateRef.current.isHandsFree
+    });
+    if (stateRef.current.isHandsFree) return;
+    pressStartRef.current = Date.now();
+    startTouchXRef.current = null;
+    handleStart();
+  };
+
+  const handleTouchMove = (evt: any) => {
+    if (stateRef.current.isHandsFree) return;
+    const touchX = evt.nativeEvent.pageX;
+    const startX = startTouchXRef.current !== null ? startTouchXRef.current : touchX;
+    if (startTouchXRef.current === null) {
+      startTouchXRef.current = touchX;
+    }
+    const dx = touchX - startX;
+    console.log('[VOICE_TOUCH_MOVE]', { dx });
+
+    if (dx < -60) {
+      setSwipeCancel(true);
+    } else {
+      setSwipeCancel(false);
+    }
+  };
+
+  const handleTouchRelease = () => {
+    const pressDuration = Date.now() - pressStartRef.current;
+    console.log('[VOICE_TOUCH_RELEASE]', {
+      timestamp: Date.now(),
+      pressDuration,
+      isRecording: stateRef.current.isRecording,
+      isHandsFree: stateRef.current.isHandsFree
+    });
+    startTouchXRef.current = null;
+
+    if (stateRef.current.isHandsFree) return;
+    if (pressDuration < 300) {
+      setIsHandsFree(true);
+    } else {
+      handleRelease();
+    }
+  };
+
+  const handleTouchTerminate = () => {
+    console.log('[VOICE_TOUCH_TERMINATE]');
+    console.log('[IS_RECORDING]', stateRef.current.isRecording);
+    startTouchXRef.current = null;
+    cancelRecording();
+    setSwipeCancel(false);
+    setIsHandsFree(false);
+  };
 
   const formatTime = (sec: number) => {
     const m = Math.floor(sec / 60);
@@ -243,15 +268,25 @@ export default function VoiceRecorder({
 
   return (
     <View style={[styles.container, variant === 'full' && styles.fullWidthContainer]}>
-      {/* Idle Mic Button */}
-      <View {...panResponder.panHandlers} style={variant === 'full' ? styles.fullWidthTouch : null}>
+      <View
+        onStartShouldSetResponder={() => true}
+        onMoveShouldSetResponder={() => true}
+        onResponderGrant={handleTouchStart}
+        onResponderMove={handleTouchMove}
+        onResponderRelease={handleTouchRelease}
+        onResponderTerminate={handleTouchTerminate}
+        style={variant === 'full' ? styles.fullWidthTouch : null}
+      >
         {variant === 'full' ? (
-          <TouchableOpacity
+          <View
             style={[
               styles.wideMicButton,
-              { backgroundColor: colors.border + '40', borderColor: colors.border },
+              { 
+                backgroundColor: colors.border + '40', 
+                borderColor: colors.border,
+                opacity: isRecording ? 0.7 : 1.0,
+              },
             ]}
-            activeOpacity={0.7}
           >
             <Ionicons
               name="mic"
@@ -260,21 +295,23 @@ export default function VoiceRecorder({
               style={{ marginRight: 6 }}
             />
             <Text style={[styles.wideMicText, { color: colors.text }]}>Nhấn và giữ để ghi âm</Text>
-          </TouchableOpacity>
+          </View>
         ) : (
-          <TouchableOpacity
+          <View
             style={[
               styles.micButton,
-              { backgroundColor: isRecording ? '#ef4444' : 'transparent' },
+              { 
+                backgroundColor: isRecording ? '#ef4444' : 'transparent',
+                opacity: isRecording ? 0.7 : 1.0,
+              },
             ]}
-            activeOpacity={0.7}
           >
             <Ionicons
               name="mic"
               size={22}
               color={isRecording ? '#fff' : colors.textSecondary}
             />
-          </TouchableOpacity>
+          </View>
         )}
       </View>
 

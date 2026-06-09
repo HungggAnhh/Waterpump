@@ -9,7 +9,6 @@ import {
   Animated,
   Dimensions,
   Platform,
-  PanResponder,
   Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -336,59 +335,64 @@ export default function VoiceActionSheet({
     cancelRecordRef.current = cancelRecording;
   });
 
-  // PanResponder for Tab 1 circular button (Hold or Tap to Record)
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: () => {
-        console.log('[BUTTON_DOWN]', {
-          timestamp: Date.now(),
-          isRecording: stateRef.current.isRecording,
-          isHandsFree: stateRef.current.isHandsFree
-        });
-        if (stateRef.current.activeTab !== 'voice' || stateRef.current.isHandsFree) return;
-        pressStartRef.current = Date.now();
-        startRecordRef.current();
-      },
-      onPanResponderMove: (_, gestureState) => {
-        if (stateRef.current.activeTab !== 'voice' || stateRef.current.isHandsFree) return;
-        if (gestureState.dx < -60) {
-          setSwipeCancel(true);
-        } else {
-          setSwipeCancel(false);
-        }
-      },
-      onPanResponderRelease: () => {
-        const pressDuration = Date.now() - pressStartRef.current;
-        console.log('[BUTTON_UP]', {
-          timestamp: Date.now(),
-          pressDuration,
-          isRecording: stateRef.current.isRecording,
-          isHandsFree: stateRef.current.isHandsFree
-        });
-        console.log('[PRESS_DURATION]', pressDuration);
-        console.log('[IS_RECORDING]', stateRef.current.isRecording);
-        console.log('[IS_HANDSFREE]', stateRef.current.isHandsFree);
+  const startTouchXRef = useRef<number | null>(null);
 
-        if (stateRef.current.activeTab !== 'voice' || stateRef.current.isHandsFree) return;
-        console.log('[VoiceRecorder] Button released. Press duration:', pressDuration, 'ms');
-        if (pressDuration < 300) {
-          console.log('[VoiceRecorder] Quick press detected. Switching to Hands-Free mode.');
-          setIsHandsFree(true);
-        } else {
-          releaseRecordRef.current();
-        }
-      },
-      onPanResponderTerminate: () => {
-        console.log('[VoiceRecorder] PanResponder terminated.');
-        console.log('[IS_RECORDING]', stateRef.current.isRecording);
-        cancelRecordRef.current();
-        setIsHandsFree(false);
-        setSwipeCancel(false);
-      },
-    })
-  ).current;
+  const handleTouchStart = () => {
+    console.log('[VOICE_TOUCH_GRANT]', {
+      timestamp: Date.now(),
+      isRecording: stateRef.current.isRecording,
+      isHandsFree: stateRef.current.isHandsFree
+    });
+    if (stateRef.current.activeTab !== 'voice' || stateRef.current.isHandsFree) return;
+    pressStartRef.current = Date.now();
+    startTouchXRef.current = null;
+    startRecordRef.current();
+  };
+
+  const handleTouchMove = (evt: any) => {
+    if (stateRef.current.activeTab !== 'voice' || stateRef.current.isHandsFree) return;
+    const touchX = evt.nativeEvent.pageX;
+    const startX = startTouchXRef.current !== null ? startTouchXRef.current : touchX;
+    if (startTouchXRef.current === null) {
+      startTouchXRef.current = touchX;
+    }
+    const dx = touchX - startX;
+    console.log('[VOICE_TOUCH_MOVE]', { dx });
+
+    if (dx < -60) {
+      setSwipeCancel(true);
+    } else {
+      setSwipeCancel(false);
+    }
+  };
+
+  const handleTouchRelease = () => {
+    const pressDuration = Date.now() - pressStartRef.current;
+    console.log('[VOICE_TOUCH_RELEASE]', {
+      timestamp: Date.now(),
+      pressDuration,
+      isRecording: stateRef.current.isRecording,
+      isHandsFree: stateRef.current.isHandsFree
+    });
+    startTouchXRef.current = null;
+
+    if (stateRef.current.activeTab !== 'voice' || stateRef.current.isHandsFree) return;
+    if (pressDuration < 300) {
+      console.log('[VoiceRecorder] Quick press detected. Switching to Hands-Free mode.');
+      setIsHandsFree(true);
+    } else {
+      releaseRecordRef.current();
+    }
+  };
+
+  const handleTouchTerminate = () => {
+    console.log('[VOICE_TOUCH_TERMINATE]');
+    console.log('[IS_RECORDING]', stateRef.current.isRecording);
+    startTouchXRef.current = null;
+    cancelRecordRef.current();
+    setIsHandsFree(false);
+    setSwipeCancel(false);
+  };
 
   // Trigger for Tab 2 STT Press
   const handleSttPress = async () => {
@@ -507,13 +511,22 @@ export default function VoiceActionSheet({
 
               {/* Central Large Microphone Button */}
               {activeTab === 'voice' ? (
-                <View {...panResponder.panHandlers}>
-                  <TouchableOpacity
-                    style={[styles.bigMicCircle, { backgroundColor: colors.tint }]}
-                    activeOpacity={0.8}
-                  >
-                    <Ionicons name="mic" size={42} color="#fff" />
-                  </TouchableOpacity>
+                <View
+                  onStartShouldSetResponder={() => true}
+                  onMoveShouldSetResponder={() => true}
+                  onResponderGrant={handleTouchStart}
+                  onResponderMove={handleTouchMove}
+                  onResponderRelease={handleTouchRelease}
+                  onResponderTerminate={handleTouchTerminate}
+                  style={[
+                    styles.bigMicCircle,
+                    {
+                      backgroundColor: colors.tint,
+                      opacity: isRecording ? 0.7 : 1.0,
+                    },
+                  ]}
+                >
+                  <Ionicons name="mic" size={42} color="#fff" />
                 </View>
               ) : (
                 <TouchableOpacity
