@@ -372,10 +372,14 @@ class VoiceUploadWorker {
 
       // 5. Send message via Socket
       if (this.socket && this.socket.connected) {
-        console.log(
-          '[VOICE_DEBUG] SOCKET_SEND_VOICE',
-          payload
-        );
+        console.log('[VOICE_SEND]', {
+          id: item.localId,
+          client_message_id: item.client_message_id,
+          conversation_id: item.roomId,
+          attachment_url: attachmentUrl,
+          status: 'pending',
+          created_at: item.createdAt
+        });
         this.socket.emit('send_message', payload);
 
         // Mark as sent

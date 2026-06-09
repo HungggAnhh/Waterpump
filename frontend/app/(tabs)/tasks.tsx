@@ -35,6 +35,14 @@ interface Workspace {
   name: string;
   created_by: number | null;
   created_at: string;
+  task_stats?: {
+    total: number;
+    completed: number;
+    pending: number;
+    in_progress: number;
+    waiting_approval: number;
+    revision_required: number;
+  };
 }
 
 interface UserListItem {
@@ -72,6 +80,7 @@ interface Task {
   reminder_interval?: 'hourly' | 'daily' | null;
   last_reminded_at?: string | null;
   created_at: string;
+  assigned_at?: string;
   updated_at?: string;
   approval_status?: 'pending' | 'in_progress' | 'waiting_approval' | 'completed' | 'revision_required';
   approved_by?: number | null;
@@ -99,13 +108,17 @@ const TaskItem = React.memo(({
   colors, 
   onPress, 
   isHighlighted,
-  onPressViews
+  onPressViews,
+  currentUserId,
+  colorScheme,
 }: { 
   task: Task; 
   colors: any; 
   onPress: () => void; 
   isHighlighted: boolean;
   onPressViews?: (task: Task) => void;
+  currentUserId: number | undefined;
+  colorScheme: 'light' | 'dark';
 }) => {
   const getStatusText = (status?: string) => {
     switch (status) {
@@ -129,44 +142,80 @@ const TaskItem = React.memo(({
     }
   };
 
-  const getPriorityText = (priority?: string) => {
-    switch (priority) {
-      case 'low': return 'Thấp';
-      case 'medium': return 'T.Bình';
-      case 'high': return 'Cao';
-      default: return 'T.Bình';
-    }
-  };
-
-  const getPriorityColor = (priority?: string) => {
-    switch (priority) {
-      case 'low': return { bg: '#f3f4f6', text: '#4b5563' };
-      case 'medium': return { bg: '#fffbeb', text: '#d97706' };
-      case 'high': return { bg: '#fee2e2', text: '#dc2626' };
-      default: return { bg: '#f3f4f6', text: '#4b5563' };
-    }
-  };
-
+  const isAssignedToMe = task.assigned_to === currentUserId || task.assignees?.some(a => a.user_id === currentUserId);
   const statusStyle = getStatusColor(task.approval_status || task.status);
-  const priorityStyle = getPriorityColor(task.priority);
+
+  const cardBg = isHighlighted 
+    ? '#fef08a' 
+    : (isAssignedToMe 
+        ? (colorScheme === 'dark' ? '#1E293B' : '#EFF6FF') 
+        : colors.card);
+  const cardBorderColor = isHighlighted ? '#eab308' : colors.border;
+  const cardBorderLeftWidth = isAssignedToMe ? 4 : 1;
+  const cardBorderLeftColor = isAssignedToMe ? '#2563EB' : cardBorderColor;
 
   return (
     <TouchableOpacity
       style={[
         styles.taskCardItem, 
         { 
-          backgroundColor: isHighlighted ? '#fef08a' : colors.card, 
-          borderColor: isHighlighted ? '#eab308' : colors.border,
-          borderWidth: isHighlighted ? 1.5 : 1
+          backgroundColor: cardBg, 
+          borderColor: cardBorderColor,
+          borderWidth: isHighlighted ? 1.5 : 1,
+          borderLeftWidth: cardBorderLeftWidth,
+          borderLeftColor: cardBorderLeftColor,
         }
       ]}
       onPress={onPress}
       activeOpacity={0.7}
     >
       <View style={{ flex: 1 }}>
-        <Text style={[styles.taskCardTitle, { color: colors.text }]} numberOfLines={1}>
-          {task.title}
-        </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4, flexWrap: 'wrap' }}>
+          <Text style={[styles.taskCardTitle, { color: colors.text, marginBottom: 0, flexShrink: 1 }]} numberOfLines={1}>
+            {task.title}
+          </Text>
+          {/* Priority Badge */}
+          {(() => {
+            let label = '';
+            let bg = '';
+            let textCol = '';
+            if (task.priority === 'high') {
+              label = '🔴 Cao';
+              bg = '#fee2e2';
+              textCol = '#dc2626';
+            } else if (task.priority === 'medium') {
+              label = '🟡 Trung bình';
+              bg = '#fffbeb';
+              textCol = '#d97706';
+            } else {
+              label = '🟢 Thấp';
+              bg = '#d1fae5';
+              textCol = '#065f46';
+            }
+            return (
+              <View style={{
+                backgroundColor: bg,
+                paddingHorizontal: 6,
+                paddingVertical: 1.5,
+                borderRadius: 4,
+              }}>
+                <Text style={{ fontSize: 9.5, fontWeight: '700', color: textCol }}>{label}</Text>
+              </View>
+            );
+          })()}
+          {/* Giao cho tôi Badge */}
+          {isAssignedToMe && (
+            <View style={{
+              backgroundColor: '#DBEAFE',
+              paddingHorizontal: 8,
+              paddingVertical: 2,
+              borderRadius: 9999,
+            }}>
+              <Text style={{ fontSize: 9.5, color: '#2563EB', fontWeight: '600' }}>🎯 Giao cho tôi</Text>
+            </View>
+          )}
+        </View>
+
         <View style={styles.taskCardMetaRow}>
           {task.workspace_name && (
             <Text style={[styles.taskCardWorkspace, { color: colors.tint }]} numberOfLines={1}>
@@ -201,15 +250,10 @@ const TaskItem = React.memo(({
           )}
         </View>
       </View>
-      <View style={{ alignItems: 'flex-end', gap: 6 }}>
+      <View style={{ alignItems: 'flex-end', justifyContent: 'center' }}>
         <View style={[styles.miniBadge, { backgroundColor: statusStyle.bg }]}>
           <Text style={{ fontSize: 10, fontWeight: '700', color: statusStyle.text }}>
             {getStatusText(task.approval_status || task.status)}
-          </Text>
-        </View>
-        <View style={[styles.miniBadge, { backgroundColor: priorityStyle.bg }]}>
-          <Text style={{ fontSize: 10, fontWeight: '700', color: priorityStyle.text }}>
-            {getPriorityText(task.priority)}
           </Text>
         </View>
       </View>
@@ -222,22 +266,16 @@ export default function WorkspaceScreen() {
   const colors = Colors[colorScheme ?? 'light'];
   const { user } = useUser();
   const { socket } = useSocket();
-  const params = useLocalSearchParams<{ tab?: string; status?: string; taskId?: string }>();
-  const { unreadCount, openDrawer } = useNotifications();
+  const params = useLocalSearchParams<{ tab?: string; status?: string; taskId?: string; filter?: string }>();
+  const { unreadCount, unreadAssignedCount, openDrawer } = useNotifications();
 
   // Tabs states
   const [activeTab, setActiveTab] = useState<'tasks' | 'summary'>('tasks');
-  const [activeSubView, setActiveSubView] = useState<'my_tasks' | 'all_tasks' | 'workspaces'>('workspaces');
 
   // Original Workspaces states
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [usersList, setUsersList] = useState<UserListItem[]>([]);
   const [loadingWorkspaces, setLoadingWorkspaces] = useState(true);
-
-  // Tab 1 Tasks list state
-  const [tab1Tasks, setTab1Tasks] = useState<Task[]>([]);
-  const [tab1Loading, setTab1Loading] = useState(false);
-  const [searchQueryTab1, setSearchQueryTab1] = useState('');
 
   // Tab 2 Summary states
   const [expandedAccordions, setExpandedAccordions] = useState<{[key: string]: boolean}>({});
@@ -263,7 +301,8 @@ export default function WorkspaceScreen() {
   const [selectedPriority, setSelectedPriority] = useState<string | null>(null);
   const [fromDate, setFromDate] = useState<string | null>(null);
   const [toDate, setToDate] = useState<string | null>(null);
-  const [quickFilter, setQuickFilter] = useState<'all' | 'my_tasks' | 'assigned_to_me' | 'created_by_me' | 'overdue'>('all');
+  const [quickFilter, setQuickFilter] = useState<'all' | 'assigned_to_me' | 'created_by_me' | 'overdue' | 'due_soon' | 'completed'>('all');
+
 
   // Detail Modal states
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
@@ -283,7 +322,6 @@ export default function WorkspaceScreen() {
   // Scroll and highlight states
   const [highlightedAccordion, setHighlightedAccordion] = useState<string | null>(null);
   const [highlightedTaskId, setHighlightedTaskId] = useState<number | null>(null);
-  const [pendingScrollTaskId, setPendingScrollTaskId] = useState<number | null>(null);
 
   // Original Workspaces Modal states
   const [isWorkspaceModalOpen, setIsWorkspaceModalOpen] = useState(false);
@@ -298,7 +336,6 @@ export default function WorkspaceScreen() {
   const [updatingWorkspace, setUpdatingWorkspace] = useState(false);
 
   // Refs
-  const flatListRef = useRef<FlatList>(null);
   const scrollContainerRefTab2 = useRef<ScrollView>(null);
   const accordionYRefs = useRef<{[key: string]: number}>({});
 
@@ -312,7 +349,29 @@ export default function WorkspaceScreen() {
 
   // Load URL query params
   useEffect(() => {
-    if (params.tab === 'summary') {
+    if (params.filter) {
+      setActiveTab('summary');
+      const filterVal = params.filter;
+      if (['assigned_to_me', 'created_by_me', 'overdue', 'due_soon', 'completed'].includes(filterVal)) {
+        setQuickFilter(filterVal as any);
+      } else {
+        setQuickFilter('all');
+      }
+
+      if (params.status) {
+        let statusFilter = params.status;
+        setExpandedAccordions(prev => ({ ...prev, [statusFilter]: true }));
+        fetchAccordionTasks(statusFilter);
+
+        // Scroll to the accordion
+        setTimeout(() => {
+          const y = accordionYRefs.current[statusFilter];
+          if (y !== undefined) {
+            scrollContainerRefTab2.current?.scrollTo({ y: y - 10, animated: true });
+          }
+        }, 300);
+      }
+    } else if (params.tab === 'summary') {
       setActiveTab('summary');
       if (params.status) {
         let statusFilter = params.status;
@@ -340,38 +399,41 @@ export default function WorkspaceScreen() {
         }, 300);
       }
     }
-  }, [params.tab, params.status]);
+  }, [params.tab, params.status, params.filter]);
 
   // Handle taskId parameter redirect loading
   useEffect(() => {
     if (params.taskId) {
-      setActiveTab('tasks');
-      setActiveSubView('all_tasks');
-    }
-  }, [params.taskId]);
-
-  useEffect(() => {
-    if (params.taskId && tab1Tasks.length > 0) {
       const targetId = parseInt(params.taskId);
-      const index = tab1Tasks.findIndex(t => t.id === targetId);
-      if (index !== -1) {
-        setHighlightedTaskId(targetId);
-        const clickedTask = tab1Tasks[index];
-        setSelectedTask(clickedTask);
+      // Try to find in allTasksForSearch first
+      let targetTask = allTasksForSearch.find(t => t.id === targetId);
+      if (targetTask) {
+        setSelectedTask(targetTask);
         setIsDetailModalOpen(true);
-        setActiveTab('tasks');
-        setActiveSubView('all_tasks');
-
-        setTimeout(() => {
-          flatListRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.5 });
-        }, 300);
-
+        setHighlightedTaskId(targetId);
+        
         setTimeout(() => {
           setHighlightedTaskId(null);
         }, 3000);
+      } else {
+        // Fallback: fetch directly from API
+        fetch(`${API_BASE_URL}/tasks/tasks/${targetId}`)
+          .then(res => res.json())
+          .then(result => {
+            if (result.status === 'success' && result.data) {
+              setSelectedTask(result.data);
+              setIsDetailModalOpen(true);
+              setHighlightedTaskId(targetId);
+              
+              setTimeout(() => {
+                setHighlightedTaskId(null);
+              }, 3000);
+            }
+          })
+          .catch(err => console.error("Error fetching single task details:", err));
       }
     }
-  }, [params.taskId, tab1Tasks]);
+  }, [params.taskId, allTasksForSearch]);
 
   // Fetch workspaces & users list
   const fetchWorkspaces = async () => {
@@ -402,28 +464,7 @@ export default function WorkspaceScreen() {
     }
   };
 
-  // Fetch Tab 1 Tasks list
-  const fetchTab1Tasks = async () => {
-    try {
-      setTab1Loading(true);
-      let url = `${API_BASE_URL}/tasks?`;
-      if (activeSubView === 'my_tasks') {
-        url += 'quick_filter=my_tasks';
-      }
-      if (searchQueryTab1.trim()) {
-        url += `&search=${encodeURIComponent(searchQueryTab1.trim())}`;
-      }
-      const res = await fetch(url);
-      const result = await res.json();
-      if (result.status === 'success') {
-        setTab1Tasks(sortTasksStable(result.data || []));
-      }
-    } catch (err) {
-      console.error('Error loading Tab 1 tasks:', err);
-    } finally {
-      setTab1Loading(false);
-    }
-  };
+
 
   // Fetch Tab 2 Accordion tasks
   const fetchAccordionTasks = async (status: string) => {
@@ -549,17 +590,21 @@ export default function WorkspaceScreen() {
         if (selectedWorkspace && task.workspace_id !== selectedWorkspace) return false;
         if (selectedPriority && task.priority !== selectedPriority) return false;
         if (quickFilter && quickFilter !== 'all') {
-          if (quickFilter === 'my_tasks') {
-            const isMine = task.assigned_to === user?.id || task.created_by === user?.id || task.assignees?.some(a => a.user_id === user?.id);
-            if (!isMine) return false;
-          } else if (quickFilter === 'assigned_to_me') {
+          if (quickFilter === 'assigned_to_me') {
             const isAssigned = task.assigned_to === user?.id || task.assignees?.some(a => a.user_id === user?.id);
             if (!isAssigned) return false;
           } else if (quickFilter === 'created_by_me') {
             if (task.created_by !== user?.id) return false;
           } else if (quickFilter === 'overdue') {
-            const isOverdue = task.deadline && new Date(task.deadline).getTime() < Date.now() && !task.completed;
+            const isOverdue = task.deadline && new Date(task.deadline).getTime() < Date.now() && !task.completed && task.approval_status !== 'completed';
             if (!isOverdue) return false;
+          } else if (quickFilter === 'due_soon') {
+            const threeDays = 3 * 24 * 60 * 60 * 1000;
+            const isDueSoon = task.deadline && !task.completed && task.approval_status !== 'completed' && (new Date(task.deadline).getTime() >= Date.now() && new Date(task.deadline).getTime() <= Date.now() + threeDays);
+            if (!isDueSoon) return false;
+          } else if (quickFilter === 'completed') {
+            const isCompleted = task.completed || task.approval_status === 'completed';
+            if (!isCompleted) return false;
           }
         }
         return item.score > 0;
@@ -580,12 +625,6 @@ export default function WorkspaceScreen() {
     fetchWorkspaces();
     fetchUsers();
   }, [user]);
-
-  useEffect(() => {
-    if (activeTab === 'tasks' && activeSubView !== 'workspaces') {
-      fetchTab1Tasks();
-    }
-  }, [activeTab, activeSubView, searchQueryTab1]);
 
   useEffect(() => {
     if (activeTab === 'summary') {
@@ -615,14 +654,15 @@ export default function WorkspaceScreen() {
     if (!socket) return;
 
     const handleTaskCreated = () => {
+      // Refresh workspaces statistics realtime
+      fetchWorkspaces();
+
       if (activeTab === 'summary') {
         fetchKPIStats();
         fetchAllTasksForSearch();
         Object.keys(expandedAccordions).forEach(status => {
           if (expandedAccordions[status]) fetchAccordionTasks(status);
         });
-      } else if (activeTab === 'tasks' && activeSubView !== 'workspaces') {
-        fetchTab1Tasks();
       }
     };
 
@@ -653,32 +693,9 @@ export default function WorkspaceScreen() {
       socket.off('workspace_updated', handleWorkspaceChange);
       socket.off('workspace_deleted', handleWorkspaceChange);
     };
-  }, [socket, activeTab, activeSubView, expandedAccordions]);
+  }, [socket, activeTab, expandedAccordions]);
 
-  // Pending scroll to task handler in Tab 1
-  useEffect(() => {
-    if (pendingScrollTaskId && tab1Tasks.length > 0 && activeTab === 'tasks') {
-      const index = tab1Tasks.findIndex(t => t.id === pendingScrollTaskId);
-      if (index !== -1) {
-        setPendingScrollTaskId(null);
-        setHighlightedTaskId(pendingScrollTaskId);
-        const clickedTask = tab1Tasks[index];
-        setSelectedTask(clickedTask);
-        setIsDetailModalOpen(true);
 
-        setTimeout(() => {
-          flatListRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.5 });
-        }, 200);
-
-        setTimeout(() => {
-          setHighlightedTaskId(null);
-        }, 3000);
-      } else if (activeSubView === 'my_tasks') {
-        // Fallback to all tasks if not found in my_tasks
-        setActiveSubView('all_tasks');
-      }
-    }
-  }, [tab1Tasks, pendingScrollTaskId, activeTab, activeSubView]);
 
   // Workspace controls Handlers
   const handleToggleMember = (userId: number) => {
@@ -803,13 +820,7 @@ export default function WorkspaceScreen() {
     }
   }, [expandedAccordions]);
 
-  // Click task in Tab 2 flow
-  const handleTaskClickFromSummary = useCallback((task: Task) => {
-    const isMine = task.assigned_to === user?.id || task.created_by === user?.id || task.assignees?.some(a => a.user_id === user?.id);
-    setActiveSubView(isMine ? 'my_tasks' : 'all_tasks');
-    setPendingScrollTaskId(task.id);
-    setActiveTab('tasks');
-  }, [user]);
+
 
   const handleKPIPress = useCallback((status: string) => {
     setExpandedAccordions(prev => ({ ...prev, [status]: true }));
@@ -857,9 +868,8 @@ export default function WorkspaceScreen() {
   };
 
   const handleTaskUpdated = useCallback((updated: Task) => {
-    // Refresh both views
+    // Refresh summary view
     fetchKPIStats();
-    fetchTab1Tasks();
     fetchAllTasksForSearch();
     Object.keys(expandedAccordions).forEach(status => {
       if (expandedAccordions[status]) fetchAccordionTasks(status);
@@ -895,156 +905,180 @@ export default function WorkspaceScreen() {
             </Text>
           </TouchableOpacity>
         </View>
-        <TouchableOpacity onPress={openDrawer} style={{ paddingHorizontal: 16, justifyContent: 'center', position: 'relative' }} activeOpacity={0.7}>
-          <Ionicons name="notifications-outline" size={22} color={colors.text} />
-          {unreadCount > 0 && (
+        <TouchableOpacity onPress={openDrawer} style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, justifyContent: 'center', position: 'relative' }} activeOpacity={0.7}>
+          {unreadAssignedCount > 0 && (
             <View style={{
-              position: 'absolute',
-              top: 8,
-              right: 8,
-              backgroundColor: '#ef4444',
+              backgroundColor: '#2563eb',
               borderRadius: 8,
-              minWidth: 16,
+              minWidth: 18,
               height: 16,
               alignItems: 'center',
               justifyContent: 'center',
               paddingHorizontal: 4,
+              marginRight: 4,
             }}>
-              <Text style={{ color: '#ffffff', fontSize: 9, fontWeight: '800' }}>{unreadCount}</Text>
+              <Text style={{ color: '#ffffff', fontSize: 8.5, fontWeight: '800' }}>🎯 {unreadAssignedCount}</Text>
             </View>
           )}
+          <View style={{ position: 'relative' }}>
+            <Ionicons name="notifications-outline" size={22} color={colors.text} />
+            {unreadCount > 0 && (
+              <View style={{
+                position: 'absolute',
+                top: -4,
+                right: -4,
+                backgroundColor: '#ef4444',
+                borderRadius: 8,
+                minWidth: 16,
+                height: 16,
+                alignItems: 'center',
+                justifyContent: 'center',
+                paddingHorizontal: 4,
+              }}>
+                <Text style={{ color: '#ffffff', fontSize: 9, fontWeight: '800' }}>{unreadCount}</Text>
+              </View>
+            )}
+          </View>
         </TouchableOpacity>
       </View>
 
       {/* TAB 1: CÔNG VIỆC */}
       {activeTab === 'tasks' && (
         <View style={{ flex: 1 }}>
+          {/* Original Workspaces list */}
+          <View style={{ flex: 1 }}>
+            <View style={[styles.workspaceHeaderRow, { borderBottomColor: colors.border }]}>
+              <Text style={[styles.workspaceSectionTitle, { color: colors.text }]}>Các không gian làm việc</Text>
+              {isAdmin && (
+                <TouchableOpacity
+                  style={[styles.addWorkspaceBtn, { backgroundColor: colors.tint }]}
+                  onPress={() => setIsWorkspaceModalOpen(true)}
+                >
+                  <Ionicons name="add" size={16} color="#ffffff" style={{ marginRight: 2 }} />
+                  <Text style={styles.addWorkspaceBtnText}>Thêm trang</Text>
+                </TouchableOpacity>
+              )}
+            </View>
 
-
-          {/* Sub-view rendering */}
-          {activeSubView === 'workspaces' ? (
-            /* Original Workspaces list */
-            <View style={{ flex: 1 }}>
-              <View style={[styles.workspaceHeaderRow, { borderBottomColor: colors.border }]}>
-                <Text style={[styles.workspaceSectionTitle, { color: colors.text }]}>Các không gian làm việc</Text>
-                {isAdmin && (
-                  <TouchableOpacity
-                    style={[styles.addWorkspaceBtn, { backgroundColor: colors.tint }]}
-                    onPress={() => setIsWorkspaceModalOpen(true)}
-                  >
-                    <Ionicons name="add" size={16} color="#ffffff" style={{ marginRight: 2 }} />
-                    <Text style={styles.addWorkspaceBtnText}>Thêm trang</Text>
-                  </TouchableOpacity>
-                )}
+            {loadingWorkspaces ? (
+              <View style={styles.centerContainer}>
+                <ActivityIndicator size="large" color={colors.tint} />
               </View>
+            ) : workspaces.length === 0 ? (
+              <View style={styles.centerContainer}>
+                <Text style={{ color: colors.tabIconDefault, fontSize: 13.5 }}>Chưa có không gian làm việc nào.</Text>
+              </View>
+            ) : (
+              <ScrollView contentContainerStyle={{ padding: 16 }}>
+                <View style={{ gap: 10 }}>
+                  {workspaces.map(ws => {
+                    const isDark = colorScheme === 'dark';
+                    const totalBg = 'rgba(37, 99, 235, 0.08)';
+                    const totalText = isDark ? '#60a5fa' : '#2563eb';
 
-              {loadingWorkspaces ? (
-                <View style={styles.centerContainer}>
-                  <ActivityIndicator size="large" color={colors.tint} />
-                </View>
-              ) : workspaces.length === 0 ? (
-                <View style={styles.centerContainer}>
-                  <Text style={{ color: colors.tabIconDefault, fontSize: 13.5 }}>Chưa có không gian làm việc nào.</Text>
-                </View>
-              ) : (
-                <ScrollView contentContainerStyle={{ padding: 16 }}>
-                  <View style={{ gap: 10 }}>
-                    {workspaces.map(ws => (
+                    const completedBg = 'rgba(16, 185, 129, 0.08)';
+                    const completedText = isDark ? '#34d399' : '#059669';
+
+                    const pendingBg = 'rgba(107, 114, 128, 0.08)';
+                    const pendingText = isDark ? '#9ca3af' : '#4b5563';
+
+                    const inProgressBg = 'rgba(245, 158, 11, 0.08)';
+                    const inProgressText = isDark ? '#fbbf24' : '#d97706';
+
+                    const waitingBg = 'rgba(245, 158, 11, 0.08)';
+                    const waitingText = isDark ? '#fbbf24' : '#d97706';
+
+                    const revisionBg = 'rgba(239, 68, 68, 0.08)';
+                    const revisionText = isDark ? '#f87171' : '#dc2626';
+
+                    return (
                       <TouchableOpacity
                         key={ws.id}
-                        style={[styles.workspaceCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+                        style={[
+                          styles.workspaceCard, 
+                          { 
+                            backgroundColor: colors.card, 
+                            borderColor: colors.border,
+                            flexDirection: 'column',
+                            alignItems: 'stretch',
+                            gap: 12,
+                            paddingVertical: 14,
+                          }
+                        ]}
                         onPress={() => router.push(`/workspace/${ws.id}` as any)}
                         activeOpacity={0.7}
                       >
-                        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
-                          <Ionicons name="briefcase-outline" size={18} color={colors.tint} style={{ marginRight: 10 }} />
-                          <Text style={[styles.workspaceNameText, { color: colors.text }]} numberOfLines={1}>
-                            {ws.name}
-                          </Text>
+                        {/* Header Row */}
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+                            <Ionicons name="briefcase-outline" size={18} color={colors.tint} style={{ marginRight: 10 }} />
+                            <Text style={[styles.workspaceNameText, { color: colors.text }]} numberOfLines={1}>
+                              {ws.name}
+                            </Text>
+                          </View>
+                          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            {isAdmin && (
+                              <>
+                                <TouchableOpacity 
+                                  style={{ padding: 6, marginRight: 4 }}
+                                  onPress={(e) => { e.stopPropagation(); handleOpenEditWorkspaceModal(ws); }}
+                                >
+                                  <Ionicons name="create-outline" size={18} color={colors.tint} />
+                                </TouchableOpacity>
+                                <TouchableOpacity 
+                                  style={{ padding: 6, marginRight: 8 }}
+                                  onPress={(e) => { e.stopPropagation(); handleDeleteWorkspace(ws.id, ws.name); }}
+                                >
+                                  <Ionicons name="trash-outline" size={18} color="#ef4444" />
+                                </TouchableOpacity>
+                              </>
+                            )}
+                            <Ionicons name="chevron-forward" size={16} color={colors.tabIconDefault} />
+                          </View>
                         </View>
-                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                          {isAdmin && (
-                            <>
-                              <TouchableOpacity 
-                                style={{ padding: 6, marginRight: 4 }}
-                                onPress={(e) => { e.stopPropagation(); handleOpenEditWorkspaceModal(ws); }}
-                              >
-                                <Ionicons name="create-outline" size={18} color={colors.tint} />
-                              </TouchableOpacity>
-                              <TouchableOpacity 
-                                style={{ padding: 6, marginRight: 8 }}
-                                onPress={(e) => { e.stopPropagation(); handleDeleteWorkspace(ws.id, ws.name); }}
-                              >
-                                <Ionicons name="trash-outline" size={18} color="#ef4444" />
-                              </TouchableOpacity>
-                            </>
-                          )}
-                          <Ionicons name="chevron-forward" size={16} color={colors.tabIconDefault} />
-                        </View>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                </ScrollView>
-              )}
-            </View>
-          ) : (
-            /* Tasks Lists (FlatList) */
-            <View style={{ flex: 1 }}>
-              {/* Simple Tab 1 Search */}
-              <View style={styles.searchBarContainer}>
-                <Ionicons name="search-outline" size={18} color={colors.tabIconDefault} style={{ marginRight: 8 }} />
-                <TextInput
-                  style={[styles.searchBarInput, { color: colors.text }]}
-                  placeholder="Tìm kiếm nhiệm vụ..."
-                  placeholderTextColor={colors.tabIconDefault}
-                  value={searchQueryTab1}
-                  onChangeText={setSearchQueryTab1}
-                />
-                {searchQueryTab1.length > 0 && (
-                  <TouchableOpacity onPress={() => setSearchQueryTab1('')}>
-                    <Ionicons name="close-circle" size={18} color={colors.tabIconDefault} />
-                  </TouchableOpacity>
-                )}
-              </View>
 
-              {tab1Loading ? (
-                <View style={styles.centerContainer}>
-                  <ActivityIndicator size="large" color={colors.tint} />
+                        {/* Task Stats Badges Row */}
+                        {ws.task_stats && (
+                          <View style={styles.workspaceStatsGrid}>
+                            <View style={[styles.workspaceStatItem, { backgroundColor: totalBg }]}>
+                              <Text style={[styles.workspaceStatText, { color: totalText }]}>
+                                📋 {ws.task_stats.total} việc cần làm
+                              </Text>
+                            </View>
+                            <View style={[styles.workspaceStatItem, { backgroundColor: inProgressBg }]}>
+                              <Text style={[styles.workspaceStatText, { color: inProgressText }]}>
+                                🔄 {ws.task_stats.in_progress} đang làm
+                              </Text>
+                            </View>
+                            <View style={[styles.workspaceStatItem, { backgroundColor: pendingBg }]}>
+                              <Text style={[styles.workspaceStatText, { color: pendingText }]}>
+                                ⚪ {ws.task_stats.pending} chưa làm
+                              </Text>
+                            </View>
+                            <View style={[styles.workspaceStatItem, { backgroundColor: waitingBg }]}>
+                              <Text style={[styles.workspaceStatText, { color: waitingText }]}>
+                                🟡 {ws.task_stats.waiting_approval} chờ duyệt
+                              </Text>
+                            </View>
+                            <View style={[styles.workspaceStatItem, { backgroundColor: revisionBg }]}>
+                              <Text style={[styles.workspaceStatText, { color: revisionText }]}>
+                                🔴 {ws.task_stats.revision_required} làm lại
+                              </Text>
+                            </View>
+                            <View style={[styles.workspaceStatItem, { backgroundColor: completedBg }]}>
+                              <Text style={[styles.workspaceStatText, { color: completedText }]}>
+                                ✅ {ws.task_stats.completed} HT
+                              </Text>
+                            </View>
+                          </View>
+                        )}
+                      </TouchableOpacity>
+                    );
+                  })}
                 </View>
-              ) : tab1Tasks.length === 0 ? (
-                <View style={styles.centerContainer}>
-                  <Ionicons name="file-tray-outline" size={48} color={colors.tabIconDefault} style={{ marginBottom: 12 }} />
-                  <Text style={{ color: colors.tabIconDefault, fontSize: 13.5 }}>Không tìm thấy nhiệm vụ nào.</Text>
-                </View>
-              ) : (
-                <FlatList
-                  ref={flatListRef}
-                  data={tab1Tasks}
-                  keyExtractor={item => item.id.toString()}
-                  getItemLayout={(data, index) => ({ length: 95, offset: 95 * index, index })}
-                  onScrollToIndexFailed={(info) => {
-                    const wait = new Promise(resolve => setTimeout(resolve, 50));
-                    wait.then(() => {
-                      flatListRef.current?.scrollToIndex({ index: info.index, animated: true, viewPosition: 0.5 });
-                    });
-                  }}
-                  contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
-                  renderItem={({ item }) => (
-                    <TaskItem
-                      task={item}
-                      colors={colors}
-                      isHighlighted={item.id === highlightedTaskId}
-                      onPress={() => {
-                        setSelectedTask(item);
-                        setIsDetailModalOpen(true);
-                      }}
-                      onPressViews={handleOpenViewsModal}
-                    />
-                  )}
-                />
-              )}
-            </View>
-          )}
+              </ScrollView>
+            )}
+          </View>
         </View>
       )}
 
@@ -1096,38 +1130,45 @@ export default function WorkspaceScreen() {
           {/* Quick Filters */}
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.quickFilterBar} contentContainerStyle={{ gap: 8, paddingRight: 24 }}>
             <TouchableOpacity 
-              style={[styles.quickFilterChip, quickFilter === 'all' && [styles.quickFilterChipActive, { backgroundColor: colors.tint }]]}
+              style={[styles.quickFilterChip, quickFilter === 'all' && [styles.quickFilterChipActive, { backgroundColor: colors.tint, borderColor: 'transparent' }]]}
               onPress={() => setQuickFilter('all')}
             >
               <Text style={{ fontSize: 12, fontWeight: '700', color: quickFilter === 'all' ? '#ffffff' : colors.text }}>Tất cả</Text>
             </TouchableOpacity>
 
             <TouchableOpacity 
-              style={[styles.quickFilterChip, quickFilter === 'my_tasks' && [styles.quickFilterChipActive, { backgroundColor: colors.tint }]]}
-              onPress={() => setQuickFilter('my_tasks')}
-            >
-              <Text style={{ fontSize: 12, fontWeight: '700', color: quickFilter === 'my_tasks' ? '#ffffff' : colors.text }}>Của tôi</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={[styles.quickFilterChip, quickFilter === 'assigned_to_me' && [styles.quickFilterChipActive, { backgroundColor: colors.tint }]]}
+              style={[styles.quickFilterChip, quickFilter === 'assigned_to_me' && [styles.quickFilterChipActive, { backgroundColor: colors.tint, borderColor: 'transparent' }]]}
               onPress={() => setQuickFilter('assigned_to_me')}
             >
-              <Text style={{ fontSize: 12, fontWeight: '700', color: quickFilter === 'assigned_to_me' ? '#ffffff' : colors.text }}>Được giao</Text>
+              <Text style={{ fontSize: 12, fontWeight: '700', color: quickFilter === 'assigned_to_me' ? '#ffffff' : colors.text }}>🎯 Giao cho tôi</Text>
             </TouchableOpacity>
 
             <TouchableOpacity 
-              style={[styles.quickFilterChip, quickFilter === 'created_by_me' && [styles.quickFilterChipActive, { backgroundColor: colors.tint }]]}
+              style={[styles.quickFilterChip, quickFilter === 'created_by_me' && [styles.quickFilterChipActive, { backgroundColor: colors.tint, borderColor: 'transparent' }]]}
               onPress={() => setQuickFilter('created_by_me')}
             >
-              <Text style={{ fontSize: 12, fontWeight: '700', color: quickFilter === 'created_by_me' ? '#ffffff' : colors.text }}>Tôi tạo</Text>
+              <Text style={{ fontSize: 12, fontWeight: '700', color: quickFilter === 'created_by_me' ? '#ffffff' : colors.text }}>📤 Tôi giao</Text>
             </TouchableOpacity>
 
             <TouchableOpacity 
-              style={[styles.quickFilterChip, quickFilter === 'overdue' && [styles.quickFilterChipActive, { backgroundColor: colors.tint }]]}
+              style={[styles.quickFilterChip, quickFilter === 'overdue' && [styles.quickFilterChipActive, { backgroundColor: colors.tint, borderColor: 'transparent' }]]}
               onPress={() => setQuickFilter('overdue')}
             >
-              <Text style={{ fontSize: 12, fontWeight: '700', color: quickFilter === 'overdue' ? '#ffffff' : colors.text }}>Quá hạn ⏳</Text>
+              <Text style={{ fontSize: 12, fontWeight: '700', color: quickFilter === 'overdue' ? '#ffffff' : colors.text }}>⏰ Quá hạn</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={[styles.quickFilterChip, quickFilter === 'due_soon' && [styles.quickFilterChipActive, { backgroundColor: colors.tint, borderColor: 'transparent' }]]}
+              onPress={() => setQuickFilter('due_soon')}
+            >
+              <Text style={{ fontSize: 12, fontWeight: '700', color: quickFilter === 'due_soon' ? '#ffffff' : colors.text }}>🟡 Sắp đến hạn</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={[styles.quickFilterChip, quickFilter === 'completed' && [styles.quickFilterChipActive, { backgroundColor: colors.tint, borderColor: 'transparent' }]]}
+              onPress={() => setQuickFilter('completed')}
+            >
+              <Text style={{ fontSize: 12, fontWeight: '700', color: quickFilter === 'completed' ? '#ffffff' : colors.text }}>✅ Hoàn thành</Text>
             </TouchableOpacity>
           </ScrollView>
 
@@ -1660,6 +1701,23 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     flex: 1,
+  },
+  workspaceStatsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 4,
+  },
+  workspaceStatItem: {
+    paddingHorizontal: 8,
+    paddingVertical: 4.5,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  workspaceStatText: {
+    fontSize: 11,
+    fontWeight: '700',
   },
   searchBarContainer: {
     flexDirection: 'row',

@@ -19,6 +19,7 @@ import { useUser } from './UserContext';
 import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
 import { useConversationStore } from '../store/useConversationStore';
+import { API_BASE_URL } from '@/constants/Config';
 
 export interface NotificationItem {
   id: string;
@@ -38,6 +39,7 @@ export interface NotificationItem {
 interface NotificationContextType {
   notifications: NotificationItem[];
   unreadCount: number;
+  unreadAssignedCount: number;
   isDrawerOpen: boolean;
   openDrawer: () => void;
   closeDrawer: () => void;
@@ -46,6 +48,7 @@ interface NotificationContextType {
   markAllAsRead: () => void;
   clearAll: () => void;
   playNotificationSound: () => void;
+  fetchUnreadAssignedCount: () => Promise<void>;
 }
 
 const NotificationContext = createContext<NotificationContextType | undefined>(undefined);
@@ -123,6 +126,29 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [activePopup, setActivePopup] = useState<NotificationItem | null>(null);
+  const [unreadAssignedCount, setUnreadAssignedCount] = useState(0);
+
+  // Fetch count of unread tasks assigned to me
+  const fetchUnreadAssignedCount = async () => {
+    if (!user) return;
+    try {
+      const res = await fetch(`${API_BASE_URL}/tasks/stats`);
+      const result = await res.json();
+      if (result.status === 'success' && result.data && result.data.assigned_to_me) {
+        setUnreadAssignedCount(result.data.assigned_to_me.unread_assigned_count || 0);
+      }
+    } catch (err) {
+      console.error("Error fetching unread assigned count:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (user) {
+      fetchUnreadAssignedCount();
+    } else {
+      setUnreadAssignedCount(0);
+    }
+  }, [user]);
 
   const slideAnim = useRef(new Animated.Value(-100)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -331,11 +357,25 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     const handleTaskAssigned = (data: any) => {
       if (!data || !data.task) return;
       const creatorId = data.creator?.id || data.task.created_by;
+      
+      // Refresh count
+      fetchUnreadAssignedCount();
+
       if (Number(creatorId) === Number(user.id)) return;
       
+      const creatorName = data.creator?.name || 'Hệ thống';
+      const taskTitle = data.task.title;
+      const dueDate = data.task.deadline ? new Date(data.task.deadline).toLocaleDateString('vi-VN') : 'Không có';
+      
+      let priorityText = 'Thấp';
+      if (data.task.priority === 'high') priorityText = 'Cao';
+      else if (data.task.priority === 'medium') priorityText = 'Trung bình';
+
+      const bodyText = `Người giao: ${creatorName}\nTiêu đề: ${taskTitle}\nHạn: ${dueDate}\nƯu tiên: ${priorityText}`;
+
       addNotification({
-        title: `📌 Nhiệm vụ mới`,
-        body: data.task.title || 'Bạn vừa được giao nhiệm vụ mới',
+        title: `🎯 Bạn được giao nhiệm vụ mới`,
+        body: bodyText,
         type: 'task_assigned',
         created_by: creatorId,
         data: {
@@ -348,6 +388,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     // C. Hối thúc nhiệm vụ
     const handleTaskUrged = (data: any) => {
       if (!data || !data.task) return;
+      fetchUnreadAssignedCount();
       // Socket urges are emitted to recipient. Creator urged it.
       addNotification({
         title: `⚡ Hối thúc nhiệm vụ`,
@@ -378,6 +419,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
     // E. Nhiệm vụ được duyệt
     const handleTaskApproved = (task: any) => {
+      fetchUnreadAssignedCount();
       if (!task || Number(task.approved_by) === Number(user.id)) return;
       // Target assignee gets alert
       const isAssignee = task.assigned_to === user.id || task.assignees?.some((a: any) => a.user_id === user.id);
@@ -397,6 +439,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
     // F. Nhiệm vụ bị trả lại sửa
     const handleTaskRejected = (task: any) => {
+      fetchUnreadAssignedCount();
       if (!task || Number(task.created_by) === Number(user.id)) return; // Wait, rejected by admin
       const isAssignee = task.assigned_to === user.id || task.assignees?.some((a: any) => a.user_id === user.id);
       if (!isAssignee) return;
@@ -413,6 +456,10 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       });
     };
 
+    const handleTaskChangeGlobal = () => {
+      fetchUnreadAssignedCount();
+    };
+
     socket.on('receive_message', handleReceiveMessage);
     socket.on('task_assigned', handleTaskAssigned);
     socket.on('task_assigned_notification', handleTaskAssigned);
@@ -420,6 +467,12 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     socket.on('task_comment_created', handleCommentCreated);
     socket.on('task_approved', handleTaskApproved);
     socket.on('task_rejected', handleTaskRejected);
+    
+    socket.on('task_created', handleTaskChangeGlobal);
+    socket.on('task_updated', handleTaskChangeGlobal);
+    socket.on('task_deleted', handleTaskChangeGlobal);
+    socket.on('task_completed', handleTaskChangeGlobal);
+    socket.on('task_viewed', handleTaskChangeGlobal);
 
     return () => {
       socket.off('receive_message', handleReceiveMessage);
@@ -429,6 +482,12 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       socket.off('task_comment_created', handleCommentCreated);
       socket.off('task_approved', handleTaskApproved);
       socket.off('task_rejected', handleTaskRejected);
+      
+      socket.off('task_created', handleTaskChangeGlobal);
+      socket.off('task_updated', handleTaskChangeGlobal);
+      socket.off('task_deleted', handleTaskChangeGlobal);
+      socket.off('task_completed', handleTaskChangeGlobal);
+      socket.off('task_viewed', handleTaskChangeGlobal);
     };
   }, [socket, user]);
 
@@ -475,6 +534,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     <NotificationContext.Provider value={{
       notifications,
       unreadCount,
+      unreadAssignedCount,
       isDrawerOpen,
       openDrawer,
       closeDrawer,
@@ -482,7 +542,8 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       markAsRead,
       markAllAsRead,
       clearAll,
-      playNotificationSound
+      playNotificationSound,
+      fetchUnreadAssignedCount
     }}>
       {children}
 

@@ -78,7 +78,7 @@ export default function PageTasksScreen() {
   const colors = Colors[colorScheme ?? 'light'];
   const { user } = useUser();
   const { socket } = useSocket();
-  const { unreadCount, openDrawer } = useNotifications();
+  const { unreadCount, unreadAssignedCount, openDrawer } = useNotifications();
 
   const [highlightedTaskId, setHighlightedTaskId] = useState<number | null>(null);
   const taskYRefs = useRef<{[key: number]: number}>({});
@@ -1125,24 +1125,40 @@ export default function PageTasksScreen() {
         </View>
 
         <View style={styles.headerRightMenu}>
-          <TouchableOpacity onPress={openDrawer} style={{ position: 'relative', padding: 6, marginRight: 12, justifyContent: 'center' }} activeOpacity={0.7}>
-            <Ionicons name="notifications-outline" size={20} color={colors.text} />
-            {unreadCount > 0 && (
+          <TouchableOpacity onPress={openDrawer} style={{ flexDirection: 'row', alignItems: 'center', position: 'relative', padding: 6, marginRight: 12, justifyContent: 'center' }} activeOpacity={0.7}>
+            {unreadAssignedCount > 0 && (
               <View style={{
-                position: 'absolute',
-                top: 2,
-                right: 2,
-                backgroundColor: '#ef4444',
+                backgroundColor: '#2563eb',
                 borderRadius: 8,
-                minWidth: 14,
-                height: 14,
+                minWidth: 18,
+                height: 16,
                 alignItems: 'center',
                 justifyContent: 'center',
-                paddingHorizontal: 3,
+                paddingHorizontal: 4,
+                marginRight: 4,
               }}>
-                <Text style={{ color: '#ffffff', fontSize: 8, fontWeight: '800' }}>{unreadCount}</Text>
+                <Text style={{ color: '#ffffff', fontSize: 8.5, fontWeight: '800' }}>🎯 {unreadAssignedCount}</Text>
               </View>
             )}
+            <View style={{ position: 'relative' }}>
+              <Ionicons name="notifications-outline" size={20} color={colors.text} />
+              {unreadCount > 0 && (
+                <View style={{
+                  position: 'absolute',
+                  top: -4,
+                  right: -4,
+                  backgroundColor: '#ef4444',
+                  borderRadius: 8,
+                  minWidth: 14,
+                  height: 14,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  paddingHorizontal: 3,
+                }}>
+                  <Text style={{ color: '#ffffff', fontSize: 8, fontWeight: '800' }}>{unreadCount}</Text>
+                </View>
+              )}
+            </View>
           </TouchableOpacity>
           <Text style={[styles.lastEditedText, { color: colors.tabIconDefault }]}>Đã chỉnh sửa 3 phút trước</Text>
           <TouchableOpacity 
@@ -1279,9 +1295,14 @@ export default function PageTasksScreen() {
             {filteredTasks.map(task => {
               const statusColor = getStatusColor(task.approval_status || task.status);
               const priorityColor = getPriorityColor(task.priority);
-              const isAssignedToMe = task.assigned_to === user?.id;
+              const isAssignedToMe = task.assigned_to === user?.id || task.assignees?.some(a => a.user_id === user?.id);
               const canEditStatus = isAdmin; // Chỉ Admin được đổi trực tiếp, User phải dùng workflow modal
               const canUrge = isAdmin || (task.created_by !== null && task.created_by === user?.id);
+              const rowBg = task.id === highlightedTaskId 
+                ? '#fef08a' 
+                : (isAssignedToMe 
+                    ? (colorScheme === 'dark' ? '#1E293B' : '#EFF6FF') 
+                    : colors.card);
 
               return (
                 <View
@@ -1292,9 +1313,11 @@ export default function PageTasksScreen() {
                   style={[
                     styles.tableRow,
                     { 
-                      backgroundColor: task.id === highlightedTaskId ? '#fef08a' : colors.card, 
+                      backgroundColor: rowBg, 
                       borderBottomColor: task.id === highlightedTaskId ? '#eab308' : colors.border,
                       opacity: task.is_reviewed ? 0.4 : 1,
+                      borderLeftWidth: isAssignedToMe ? 4 : 0,
+                      borderLeftColor: isAssignedToMe ? '#2563EB' : 'transparent',
                       ...(task.id === highlightedTaskId && {
                         borderColor: '#eab308',
                         borderWidth: 1.5,
@@ -1304,7 +1327,7 @@ export default function PageTasksScreen() {
                 >
                   <View style={[styles.colCell, styles.colTitle, { borderRightColor: colors.border }]}>
                     <TouchableOpacity
-                      style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
+                      style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}
                       onPress={() => {
                         setSelectedTask(task);
                         setIsDetailModalOpen(true);
@@ -1314,12 +1337,52 @@ export default function PageTasksScreen() {
                       <Text
                         style={[
                           styles.taskTitleText,
-                          { color: colors.text, textDecorationLine: task.completed ? 'line-through' : 'none', flex: 1 }
+                          { color: colors.text, textDecorationLine: task.completed ? 'line-through' : 'none', flexShrink: 1 }
                         ]}
                         numberOfLines={1}
                       >
                         {task.title}
                       </Text>
+                      {/* Priority Badge */}
+                      {(() => {
+                        let label = '';
+                        let bg = '';
+                        let textCol = '';
+                        if (task.priority === 'high') {
+                          label = '🔴 Cao';
+                          bg = '#fee2e2';
+                          textCol = '#dc2626';
+                        } else if (task.priority === 'medium') {
+                          label = '🟡 Trung bình';
+                          bg = '#fffbeb';
+                          textCol = '#d97706';
+                        } else {
+                          label = '🟢 Thấp';
+                          bg = '#d1fae5';
+                          textCol = '#065f46';
+                        }
+                        return (
+                          <View style={{
+                            backgroundColor: bg,
+                            paddingHorizontal: 6,
+                            paddingVertical: 1.5,
+                            borderRadius: 4,
+                          }}>
+                            <Text style={{ fontSize: 9.5, fontWeight: '700', color: textCol }}>{label}</Text>
+                          </View>
+                        );
+                      })()}
+                      {/* Giao cho tôi Badge */}
+                      {isAssignedToMe && (
+                        <View style={{
+                          backgroundColor: '#DBEAFE',
+                          paddingHorizontal: 8,
+                          paddingVertical: 2,
+                          borderRadius: 9999,
+                        }}>
+                          <Text style={{ fontSize: 9.5, color: '#2563EB', fontWeight: '600' }}>🎯 Giao cho tôi</Text>
+                        </View>
+                      )}
                     </TouchableOpacity>
                     {task.total_assignees !== undefined && task.total_assignees > 0 && (
                       <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.border + '30', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8, marginLeft: 8, gap: 6 }}>

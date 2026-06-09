@@ -58,10 +58,17 @@ router.get('/', async (req, res) => {
   } = req.query;
 
   try {
-    let queryText = `
-      SELECT DISTINCT t.*, 
+    const isAssignedFilter = quick_filter === 'assigned_to_me' || !!assignee_id;
+    let selectFields = `DISTINCT t.*, 
              w.name AS workspace_name,
-             c.name AS creator_name, c.avatar AS creator_avatar 
+             c.name AS creator_name, c.avatar AS creator_avatar`;
+
+    if (isAssignedFilter) {
+      selectFields += `, COALESCE(ta.created_at, t.created_at) AS assigned_at`;
+    }
+
+    let queryText = `
+      SELECT ${selectFields}
       FROM tasks t 
       LEFT JOIN workspaces w ON t.workspace_id = w.id
       LEFT JOIN users c ON t.created_by = c.id
@@ -159,10 +166,18 @@ router.get('/', async (req, res) => {
         paramIndex++;
       } else if (quick_filter === 'overdue') {
         queryText += ` AND t.deadline < NOW() AND (t.approval_status != 'completed' AND t.status != 'completed')`;
+      } else if (quick_filter === 'due_soon') {
+        queryText += ` AND t.deadline >= NOW() AND t.deadline <= NOW() + INTERVAL '3 days' AND (t.approval_status != 'completed' AND t.status != 'completed')`;
+      } else if (quick_filter === 'completed') {
+        queryText += ` AND (t.approval_status = 'completed' OR t.status = 'completed')`;
       }
     }
 
-    queryText += ` ORDER BY t.id DESC`;
+    if (isAssignedFilter) {
+      queryText += ` ORDER BY assigned_at DESC, t.id DESC`;
+    } else {
+      queryText += ` ORDER BY t.id DESC`;
+    }
 
     const result = await query(queryText, queryParams);
     const tasks = result.rows;
@@ -256,6 +271,111 @@ router.get('/', async (req, res) => {
     return res.status(200).json({ status: 'success', data: tasks });
   } catch (err) {
     return res.status(500).json({ status: 'error', message: 'Lỗi lấy danh sách nhiệm vụ: ' + err.message });
+  }
+});
+
+// GET /api/tasks/tasks/:taskId — Lấy chi tiết một nhiệm vụ
+router.get('/tasks/:taskId', async (req, res) => {
+  const user = getAuthUser(req);
+  if (!user) {
+    return res.status(401).json({ status: 'error', message: 'Không thể xác thực người dùng.' });
+  }
+
+  const taskId = parseInt(req.params.taskId);
+  if (isNaN(taskId)) {
+    return res.status(400).json({ status: 'error', message: 'ID nhiệm vụ không hợp lệ.' });
+  }
+
+  try {
+    let queryText = `
+      SELECT t.*, 
+             w.name AS workspace_name,
+             c.name AS creator_name, c.avatar AS creator_avatar 
+      FROM tasks t 
+      LEFT JOIN workspaces w ON t.workspace_id = w.id
+      LEFT JOIN users c ON t.created_by = c.id
+      WHERE t.id = $1 AND (t.is_deleted = FALSE OR t.is_deleted IS NULL)
+    `;
+
+    const result = await query(queryText, [taskId]);
+    const task = result.rows[0];
+
+    if (!task) {
+      return res.status(404).json({ status: 'error', message: 'Nhiệm vụ không tồn tại.' });
+    }
+
+    // Permission check for non-admin users
+    if (user.role !== 'admin') {
+      const accessCheck = await query(
+        `SELECT 1 FROM tasks t
+         LEFT JOIN task_assignments ta ON ta.task_id = t.id
+         LEFT JOIN workspace_members wm ON wm.workspace_id = t.workspace_id
+         WHERE t.id = $1 AND (
+           t.created_by = $2 OR
+           t.assigned_to = $2 OR
+           ta.user_id = $2 OR
+           wm.user_id = $2
+         )`,
+        [taskId, user.id]
+      );
+      if (accessCheck.rows.length === 0) {
+        return res.status(403).json({ status: 'error', message: 'Bạn không có quyền xem nhiệm vụ này.' });
+      }
+    }
+
+    // Load assignees
+    const assigneesRes = await query(
+      `SELECT ta.task_id, ta.user_id, ta.status, ta.started_at, ta.completed_at, u.name, u.avatar, u.avatar AS avatar_url
+       FROM task_assignments ta
+       JOIN users u ON ta.user_id = u.id
+       WHERE ta.task_id = $1`,
+      [taskId]
+    );
+
+    task.assignees = assigneesRes.rows.map(row => ({
+      user_id: row.user_id,
+      status: row.status,
+      started_at: row.started_at,
+      completed_at: row.completed_at,
+      name: row.name,
+      avatar: row.avatar,
+      avatar_url: row.avatar_url
+    }));
+
+    // Load views
+    const viewsRes = await query(
+      `SELECT user_id FROM task_views WHERE task_id = $1`,
+      [taskId]
+    );
+    const taskViews = new Set(viewsRes.rows.map(row => parseInt(row.user_id)));
+
+    // Load reports count
+    const reportsRes = await query(
+      `SELECT COUNT(*)::int AS reports_count FROM task_reports WHERE task_id = $1`,
+      [taskId]
+    );
+    task.total_reports_count = reportsRes.rows[0]?.reports_count || 0;
+
+    // Calculate totals
+    const uniqueAssigneeIds = new Set(task.assignees.map(a => a.user_id));
+    if (task.assigned_to) {
+      uniqueAssigneeIds.add(parseInt(task.assigned_to));
+    }
+
+    let viewedCount = 0;
+    uniqueAssigneeIds.forEach(uid => {
+      if (taskViews.has(uid)) {
+        viewedCount++;
+      }
+    });
+
+    task.total_assignees = uniqueAssigneeIds.size;
+    task.viewed_assignees_count = viewedCount;
+    task.completed_assignees_count = task.assignees.filter(a => a.status === 'completed').length;
+
+    return res.status(200).json({ status: 'success', data: task });
+  } catch (err) {
+    return res.status(500).json({ status: 'error', message: 'Lỗi lấy chi tiết nhiệm vụ: ' + err.message });
   }
 });
 
@@ -389,20 +509,74 @@ router.get('/workspaces', async (req, res) => {
 
   try {
     let result;
+    const statsSubquery = `
+      SELECT 
+        workspace_id,
+        COUNT(CASE WHEN COALESCE(approval_status, '') != 'completed' AND COALESCE(status, '') != 'completed' THEN 1 END)::int AS total,
+        COUNT(CASE WHEN approval_status = 'completed' OR status = 'completed' THEN 1 END)::int AS completed,
+        COUNT(CASE WHEN approval_status = 'pending' OR approval_status IS NULL THEN 1 END)::int AS pending,
+        COUNT(CASE WHEN approval_status = 'in_progress' THEN 1 END)::int AS in_progress,
+        COUNT(CASE WHEN approval_status = 'waiting_approval' THEN 1 END)::int AS waiting_approval,
+        COUNT(CASE WHEN approval_status = 'revision_required' THEN 1 END)::int AS revision_required
+      FROM tasks
+      WHERE is_deleted = FALSE OR is_deleted IS NULL
+      GROUP BY workspace_id
+    `;
+
     if (user.role === 'admin') {
-      result = await query('SELECT * FROM workspaces ORDER BY id ASC');
+      result = await query(`
+        SELECT 
+          w.*,
+          COALESCE(ts.total, 0)::int AS total_tasks,
+          COALESCE(ts.completed, 0)::int AS completed_tasks,
+          COALESCE(ts.pending, 0)::int AS pending_tasks,
+          COALESCE(ts.in_progress, 0)::int AS in_progress_tasks,
+          COALESCE(ts.waiting_approval, 0)::int AS waiting_approval_tasks,
+          COALESCE(ts.revision_required, 0)::int AS revision_required_tasks
+        FROM workspaces w
+        LEFT JOIN (${statsSubquery}) ts ON w.id = ts.workspace_id
+        ORDER BY w.id ASC
+      `);
     } else {
-      // User thường chỉ thấy trang họ được gán làm thành viên (trong workspace_members) HOÀN TOÀN khớp hoặc có task gán cho họ
-      result = await query(
-        `SELECT DISTINCT w.* FROM workspaces w 
-         LEFT JOIN tasks t ON t.workspace_id = w.id AND t.assigned_to = $1
-         LEFT JOIN workspace_members wm ON wm.workspace_id = w.id AND wm.user_id = $1
-         WHERE t.assigned_to = $1 OR wm.user_id = $1
-         ORDER BY w.id ASC`,
-        [user.id]
-      );
+      // User thường chỉ thấy trang họ được gán làm thành viên (trong workspace_members) hoặc có task gán cho họ
+      result = await query(`
+        WITH user_workspaces AS (
+          SELECT DISTINCT w.id, w.name, w.created_by, w.created_at
+          FROM workspaces w
+          LEFT JOIN tasks t ON t.workspace_id = w.id AND t.assigned_to = $1
+          LEFT JOIN workspace_members wm ON wm.workspace_id = w.id AND wm.user_id = $1
+          WHERE t.assigned_to = $1 OR wm.user_id = $1
+        )
+        SELECT 
+          uw.*,
+          COALESCE(ts.total, 0)::int AS total_tasks,
+          COALESCE(ts.completed, 0)::int AS completed_tasks,
+          COALESCE(ts.pending, 0)::int AS pending_tasks,
+          COALESCE(ts.in_progress, 0)::int AS in_progress_tasks,
+          COALESCE(ts.waiting_approval, 0)::int AS waiting_approval_tasks,
+          COALESCE(ts.revision_required, 0)::int AS revision_required_tasks
+        FROM user_workspaces uw
+        LEFT JOIN (${statsSubquery}) ts ON uw.id = ts.workspace_id
+        ORDER BY uw.id ASC
+      `, [user.id]);
     }
-    return res.status(200).json({ status: 'success', data: result.rows });
+
+    const mappedWorkspaces = result.rows.map(row => ({
+      id: row.id,
+      name: row.name,
+      created_by: row.created_by,
+      created_at: row.created_at,
+      task_stats: {
+        total: row.total_tasks || 0,
+        completed: row.completed_tasks || 0,
+        pending: row.pending_tasks || 0,
+        in_progress: row.in_progress_tasks || 0,
+        waiting_approval: row.waiting_approval_tasks || 0,
+        revision_required: row.revision_required_tasks || 0
+      }
+    }));
+
+    return res.status(200).json({ status: 'success', data: mappedWorkspaces });
   } catch (err) {
     return res.status(500).json({ status: 'error', message: 'Lỗi truy vấn danh sách trang: ' + err.message });
   }
@@ -1498,6 +1672,32 @@ router.get('/stats', async (req, res) => {
       completed_assignments: 0
     };
 
+    // Thống kê bổ sung cho tính năng "Việc giao cho tôi"
+    const assignedToMeRes = await query(`
+      SELECT 
+        COUNT(DISTINCT t.id)::int AS total,
+        COUNT(DISTINCT CASE WHEN (t.approval_status = 'completed' OR t.status = 'completed') THEN t.id END)::int AS completed,
+        COUNT(DISTINCT CASE WHEN (t.approval_status != 'completed' AND t.status != 'completed') AND t.deadline < NOW() THEN t.id END)::int AS overdue,
+        COUNT(DISTINCT CASE WHEN (t.approval_status != 'completed' AND t.status != 'completed') AND (t.deadline >= NOW() AND t.deadline <= NOW() + INTERVAL '3 days') THEN t.id END)::int AS due_soon,
+        COUNT(DISTINCT CASE WHEN (t.approval_status != 'completed' AND t.status != 'completed') AND (t.approval_status IN ('in_progress', 'waiting_approval', 'revision_required') OR t.status = 'in_progress') AND (t.deadline IS NULL OR t.deadline > NOW() + INTERVAL '3 days') THEN t.id END)::int AS in_progress,
+        COUNT(DISTINCT CASE WHEN tv.task_id IS NULL THEN t.id END)::int AS unread_assigned_count
+      FROM tasks t
+      LEFT JOIN task_assignments ta ON ta.task_id = t.id
+      LEFT JOIN task_views tv ON tv.task_id = t.id AND tv.user_id = $1
+      WHERE (t.is_deleted = FALSE OR t.is_deleted IS NULL)
+        AND (t.assigned_to = $1 OR ta.user_id = $1)
+    `, [user.id]);
+
+    const createdByMeRes = await query(`
+      SELECT COUNT(*)::int AS total
+      FROM tasks t
+      WHERE (t.is_deleted = FALSE OR t.is_deleted IS NULL)
+        AND t.created_by = $1
+    `, [user.id]);
+
+    const assignedToMeStats = assignedToMeRes.rows[0] || { total: 0, completed: 0, overdue: 0, due_soon: 0, in_progress: 0, unread_assigned_count: 0 };
+    const createdByMeStats = createdByMeRes.rows[0] || { total: 0 };
+
     const statsData = {
       total,
       pending: row.pending || 0,
@@ -1512,7 +1712,22 @@ router.get('/stats', async (req, res) => {
       reported_assignments: assRow.reported_assignments || 0,
       unreported_assignments: (assRow.total_assignments || 0) - (assRow.reported_assignments || 0),
       in_progress_assignments: assRow.in_progress_assignments || 0,
-      completed_assignments: assRow.completed_assignments || 0
+      completed_assignments: assRow.completed_assignments || 0,
+      
+      // Tính năng mới "Việc giao cho tôi"
+      assigned_to_me: {
+        total: assignedToMeStats.total || 0,
+        in_progress: assignedToMeStats.in_progress || 0,
+        overdue: assignedToMeStats.overdue || 0,
+        due_soon: assignedToMeStats.due_soon || 0,
+        completed: assignedToMeStats.completed || 0,
+        unread_assigned_count: assignedToMeStats.unread_assigned_count || 0
+      },
+      created_by_me: {
+        total: createdByMeStats.total || 0
+      },
+      overdue: assignedToMeStats.overdue || 0,
+      user_completed: assignedToMeStats.completed || 0
     };
 
     return res.status(200).json({ status: 'success', data: statsData });

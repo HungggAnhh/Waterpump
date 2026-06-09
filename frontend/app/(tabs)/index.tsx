@@ -30,6 +30,21 @@ interface User {
   created_at: string;
 }
 
+interface Task {
+  id: number;
+  title: string;
+  description: string | null;
+  status: 'todo' | 'in_progress' | 'completed';
+  priority: 'low' | 'medium' | 'high';
+  assigned_to: number | null;
+  creator_name?: string;
+  deadline: string | null;
+  completed: boolean;
+  approval_status?: 'pending' | 'in_progress' | 'waiting_approval' | 'completed' | 'revision_required';
+  created_at: string;
+  workspace_id?: number;
+}
+
 interface KPIStats {
   total: number;
   pending: number;
@@ -45,6 +60,20 @@ interface KPIStats {
   unreported_assignments?: number;
   in_progress_assignments?: number;
   completed_assignments?: number;
+  
+  assigned_to_me?: {
+    total: number;
+    in_progress: number;
+    overdue: number;
+    due_soon: number;
+    completed: number;
+    unread_assigned_count: number;
+  };
+  created_by_me?: {
+    total: number;
+  };
+  overdue?: number;
+  user_completed?: number;
 }
 
 export default function HomeScreen() {
@@ -52,7 +81,7 @@ export default function HomeScreen() {
   const colors = Colors[colorScheme ?? 'light'];
   const { user } = useUser();
   const { socket } = useSocket();
-  const { unreadCount, openDrawer } = useNotifications();
+  const { unreadCount, unreadAssignedCount, openDrawer } = useNotifications();
 
   const [onlineUsers, setOnlineUsers] = useState<User[]>([]);
   const [stats, setStats] = useState<KPIStats>({
@@ -70,8 +99,25 @@ export default function HomeScreen() {
     unreported_assignments: 0,
     in_progress_assignments: 0,
     completed_assignments: 0,
+    assigned_to_me: {
+      total: 0,
+      in_progress: 0,
+      overdue: 0,
+      due_soon: 0,
+      completed: 0,
+      unread_assigned_count: 0
+    },
+    created_by_me: {
+      total: 0
+    },
+    overdue: 0,
+    user_completed: 0
   });
   const [statsLoading, setStatsLoading] = useState(true);
+
+  const [miniTasks, setMiniTasks] = useState<Task[]>([]);
+  const [miniTasksLoading, setMiniTasksLoading] = useState(true);
+  const [visibleMiniTasksCount, setVisibleMiniTasksCount] = useState(5);
 
   // Fetch users list to show active company directory
   const fetchUsers = async () => {
@@ -97,7 +143,13 @@ export default function HomeScreen() {
       const res = await fetch(`${API_BASE_URL}/tasks/stats`);
       const result = await res.json();
       if (result.status === 'success') {
-        setStats(result.data || { total: 0, pending: 0, in_progress: 0, waiting_approval: 0, revision_required: 0, completed: 0, completion_rate: 0, viewed: 0 });
+        setStats(result.data || { 
+          total: 0, pending: 0, in_progress: 0, waiting_approval: 0, revision_required: 0, completed: 0, completion_rate: 0, viewed: 0,
+          assigned_to_me: { total: 0, in_progress: 0, overdue: 0, due_soon: 0, completed: 0, unread_assigned_count: 0 },
+          created_by_me: { total: 0 },
+          overdue: 0,
+          user_completed: 0
+        });
       }
     } catch (err) {
       console.error('⚠️ [Home] Lỗi lấy KPI thống kê:', err);
@@ -106,17 +158,67 @@ export default function HomeScreen() {
     }
   };
 
+  // Fetch Top 5 important tasks assigned to me
+  const fetchMiniTasks = async () => {
+    try {
+      setMiniTasksLoading(true);
+      const res = await fetch(`${API_BASE_URL}/tasks?quick_filter=assigned_to_me`);
+      const result = await res.json();
+      if (result.status === 'success') {
+        const rawTasks = result.data || [];
+        
+        // Sắp xếp:
+        // 1. Overdue: deadline < NOW() and not completed
+        // 2. Due soon: deadline >= NOW() and <= NOW() + 3 days and not completed
+        // 3. High priority: priority === 'high'
+        // 4. Newest: created_at descending
+        const sorted = [...rawTasks].sort((a, b) => {
+          const isACompleted = a.completed || a.approval_status === 'completed';
+          const isBCompleted = b.completed || b.approval_status === 'completed';
+          
+          const isAOverdue = a.deadline && new Date(a.deadline).getTime() < Date.now() && !isACompleted;
+          const isBOverdue = b.deadline && new Date(b.deadline).getTime() < Date.now() && !isBCompleted;
+          
+          if (isAOverdue && !isBOverdue) return -1;
+          if (!isAOverdue && isBOverdue) return 1;
+          
+          const threeDays = 3 * 24 * 60 * 60 * 1000;
+          const isADueSoon = a.deadline && !isACompleted && (new Date(a.deadline).getTime() >= Date.now() && new Date(a.deadline).getTime() <= Date.now() + threeDays);
+          const isBDueSoon = b.deadline && !isBCompleted && (new Date(b.deadline).getTime() >= Date.now() && new Date(b.deadline).getTime() <= Date.now() + threeDays);
+          
+          if (isADueSoon && !isBDueSoon) return -1;
+          if (!isADueSoon && isBDueSoon) return 1;
+          
+          const aPriorityVal = a.priority === 'high' ? 3 : (a.priority === 'medium' ? 2 : 1);
+          const bPriorityVal = b.priority === 'high' ? 3 : (b.priority === 'medium' ? 2 : 1);
+          
+          if (aPriorityVal !== bPriorityVal) return bPriorityVal - aPriorityVal;
+          
+          return new Date(b.assigned_at || b.created_at).getTime() - new Date(a.assigned_at || a.created_at).getTime();
+        });
+        
+        setMiniTasks(sorted);
+      }
+    } catch (err) {
+      console.error('⚠️ [Home] Lỗi lấy danh sách task rút gọn:', err);
+    } finally {
+      setMiniTasksLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchKPIStats();
+    fetchMiniTasks();
   }, [user]);
 
-  // Realtime Socket updates for KPIs and User Directory
+  // Realtime Socket updates for KPIs, User Directory, and Mini Tasks
   useEffect(() => {
     if (!socket) return;
 
     const handleTaskChange = () => {
-      console.log('📡 [SOCKET] Realtime: Cập nhật lại số liệu KPI trang chủ');
+      console.log('📡 [SOCKET] Realtime: Cập nhật số liệu KPI & Task trang chủ');
       fetchKPIStats();
+      fetchMiniTasks();
     };
 
     const handleUserChange = () => {
@@ -167,24 +269,40 @@ export default function HomeScreen() {
             <Text style={[styles.welcomeTitle, { color: colors.text }]}>{user?.name || 'Thành viên'} 👋</Text>
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-            <TouchableOpacity onPress={openDrawer} style={{ position: 'relative', padding: 6 }} activeOpacity={0.7}>
-              <Ionicons name="notifications-outline" size={24} color={colors.text} />
-              {unreadCount > 0 && (
+            <TouchableOpacity onPress={openDrawer} style={{ flexDirection: 'row', alignItems: 'center', position: 'relative', padding: 6 }} activeOpacity={0.7}>
+              {unreadAssignedCount > 0 && (
                 <View style={{
-                  position: 'absolute',
-                  top: 2,
-                  right: 2,
-                  backgroundColor: '#ef4444',
+                  backgroundColor: '#2563eb',
                   borderRadius: 8,
-                  minWidth: 16,
+                  minWidth: 18,
                   height: 16,
                   alignItems: 'center',
                   justifyContent: 'center',
                   paddingHorizontal: 4,
+                  marginRight: 2,
                 }}>
-                  <Text style={{ color: '#ffffff', fontSize: 9, fontWeight: '800' }}>{unreadCount}</Text>
+                  <Text style={{ color: '#ffffff', fontSize: 8.5, fontWeight: '800' }}>🎯 {unreadAssignedCount}</Text>
                 </View>
               )}
+              <View style={{ position: 'relative' }}>
+                <Ionicons name="notifications-outline" size={24} color={colors.text} />
+                {unreadCount > 0 && (
+                  <View style={{
+                    position: 'absolute',
+                    top: -4,
+                    right: -4,
+                    backgroundColor: '#ef4444',
+                    borderRadius: 8,
+                    minWidth: 16,
+                    height: 16,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    paddingHorizontal: 4,
+                  }}>
+                    <Text style={{ color: '#ffffff', fontSize: 9, fontWeight: '800' }}>{unreadCount}</Text>
+                  </View>
+                )}
+              </View>
             </TouchableOpacity>
             <Image
               source={{ uri: user?.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150&q=80' }}
@@ -192,6 +310,254 @@ export default function HomeScreen() {
             />
           </View>
         </View>
+
+        {/* WIDGET: VIỆC GIAO CHO TÔI */}
+        <View style={[styles.widgetContainer, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.widgetHeader}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Text style={[styles.widgetTitle, { color: colors.text }]}>🎯 Việc giao cho tôi</Text>
+              {stats.assigned_to_me && stats.assigned_to_me.unread_assigned_count > 0 && (
+                <View style={styles.unreadBadge}>
+                  <Text style={styles.unreadBadgeText}>
+                    {stats.assigned_to_me.unread_assigned_count} mới
+                  </Text>
+                </View>
+              )}
+            </View>
+            <TouchableOpacity 
+              onPress={() => router.push({ pathname: '/tasks', params: { tab: 'summary', filter: 'assigned_to_me' } })}
+              activeOpacity={0.6}
+            >
+              <Text style={{ fontSize: 13, fontWeight: '700', color: colors.tint }}>Xem tất cả</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.widgetGrid}>
+            {/* 1. Tổng việc */}
+            <TouchableOpacity 
+              style={[styles.widgetItem, { backgroundColor: colors.background }]} 
+              onPress={() => router.push({ pathname: '/tasks', params: { tab: 'summary', filter: 'assigned_to_me' } })}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.widgetIconBg, { backgroundColor: '#EFF6FF' }]}>
+                <Ionicons name="briefcase" size={16} color="#2563EB" />
+              </View>
+              <Text style={[styles.widgetItemLabel, { color: colors.tabIconDefault }]}>Tổng việc</Text>
+              <Text style={[styles.widgetItemValue, { color: colors.text }]}>
+                {stats.assigned_to_me?.total || 0}
+              </Text>
+            </TouchableOpacity>
+
+            {/* 2. Đang thực hiện */}
+            <TouchableOpacity 
+              style={[styles.widgetItem, { backgroundColor: colors.background }]} 
+              onPress={() => router.push({ pathname: '/tasks', params: { tab: 'summary', filter: 'assigned_to_me', status: 'in_progress' } })}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.widgetIconBg, { backgroundColor: '#EFF6FF' }]}>
+                <Ionicons name="sync" size={16} color="#2563EB" />
+              </View>
+              <Text style={[styles.widgetItemLabel, { color: colors.tabIconDefault }]}>Đang làm</Text>
+              <Text style={[styles.widgetItemValue, { color: '#2563EB' }]}>
+                {stats.assigned_to_me?.in_progress || 0}
+              </Text>
+            </TouchableOpacity>
+
+            {/* 3. Quá hạn */}
+            <TouchableOpacity 
+              style={[styles.widgetItem, { backgroundColor: colors.background }]} 
+              onPress={() => router.push({ pathname: '/tasks', params: { tab: 'summary', filter: 'overdue' } })}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.widgetIconBg, { backgroundColor: '#FEF2F2' }]}>
+                <Ionicons name="time" size={16} color="#EF4444" />
+              </View>
+              <Text style={[styles.widgetItemLabel, { color: colors.tabIconDefault }]}>Quá hạn</Text>
+              <Text style={[styles.widgetItemValue, { color: '#EF4444' }]}>
+                {stats.assigned_to_me?.overdue || 0}
+              </Text>
+            </TouchableOpacity>
+
+            {/* 4. Sắp đến hạn */}
+            <TouchableOpacity 
+              style={[styles.widgetItem, { backgroundColor: colors.background }]} 
+              onPress={() => router.push({ pathname: '/tasks', params: { tab: 'summary', filter: 'due_soon' } })}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.widgetIconBg, { backgroundColor: '#FFFBEB' }]}>
+                <Ionicons name="alert-circle" size={16} color="#D97706" />
+              </View>
+              <Text style={[styles.widgetItemLabel, { color: colors.tabIconDefault }]}>Sắp đến hạn</Text>
+              <Text style={[styles.widgetItemValue, { color: '#D97706' }]}>
+                {stats.assigned_to_me?.due_soon || 0}
+              </Text>
+            </TouchableOpacity>
+
+            {/* 5. Hoàn thành */}
+            <TouchableOpacity 
+              style={[styles.widgetItem, { backgroundColor: colors.background }]} 
+              onPress={() => router.push({ pathname: '/tasks', params: { tab: 'summary', filter: 'completed' } })}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.widgetIconBg, { backgroundColor: '#ECFDF5' }]}>
+                <Ionicons name="checkmark-done-circle" size={16} color="#10B981" />
+              </View>
+              <Text style={[styles.widgetItemLabel, { color: colors.tabIconDefault }]}>Hoàn thành</Text>
+              <Text style={[styles.widgetItemValue, { color: '#10B981' }]}>
+                {stats.assigned_to_me?.completed || 0}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* MINI TASK PREVIEW SECTION */}
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>🔥 Nhiệm vụ cần xử lý ngay</Text>
+        {miniTasksLoading ? (
+          <View style={styles.statsLoader}>
+            <ActivityIndicator size="small" color={colors.tint} />
+            <Text style={[styles.statsLoaderText, { color: colors.tabIconDefault }]}>Đang tải nhiệm vụ quan trọng...</Text>
+          </View>
+        ) : miniTasks.length === 0 ? (
+          <View style={[styles.statusCard, { backgroundColor: colors.card, borderColor: colors.border, alignItems: 'center', padding: 20 }]}>
+            <Ionicons name="checkmark-done" size={32} color="#10b981" style={{ marginBottom: 8 }} />
+            <Text style={{ fontSize: 13.5, fontWeight: '700', color: colors.text }}>Tuyệt vời! Bạn đã hoàn thành tất cả nhiệm vụ.</Text>
+          </View>
+        ) : (
+          <View style={{ marginBottom: 24 }}>
+            <View style={{ gap: 10 }}>
+              {miniTasks.slice(0, visibleMiniTasksCount).map(task => {
+                const isCompleted = task.completed || task.approval_status === 'completed';
+                const isOverdue = task.deadline && new Date(task.deadline).getTime() < Date.now() && !isCompleted;
+                const threeDays = 3 * 24 * 60 * 60 * 1000;
+                const isDueSoon = task.deadline && !isCompleted && (new Date(task.deadline).getTime() >= Date.now() && new Date(task.deadline).getTime() <= Date.now() + threeDays);
+                
+                let statusLabel = 'Chưa làm';
+                let statusColor = '#475569';
+                let statusBg = '#f1f5f9';
+                if (task.approval_status === 'in_progress' || task.status === 'in_progress') {
+                  statusLabel = 'Đang làm';
+                  statusColor = '#0284c7';
+                  statusBg = '#e0f2fe';
+                } else if (task.approval_status === 'waiting_approval') {
+                  statusLabel = 'Chờ duyệt';
+                  statusColor = '#d97706';
+                  statusBg = '#fef3c7';
+                } else if (task.approval_status === 'revision_required') {
+                  statusLabel = 'Làm lại';
+                  statusColor = '#dc2626';
+                  statusBg = '#fee2e2';
+                } else if (isCompleted) {
+                  statusLabel = 'Hoàn thành';
+                  statusColor = '#059669';
+                  statusBg = '#d1fae5';
+                }
+
+                let priorityLabel = '🟢 Thấp';
+                if (task.priority === 'high') priorityLabel = '🔴 Cao';
+                else if (task.priority === 'medium') priorityLabel = '🟡 T.Bình';
+
+                return (
+                  <TouchableOpacity
+                    key={task.id}
+                    style={[
+                      styles.miniTaskCard, 
+                      { 
+                        backgroundColor: colors.card, 
+                        borderColor: isOverdue ? '#ef4444' : (isDueSoon ? '#f59e0b' : colors.border),
+                        borderLeftColor: isOverdue ? '#ef4444' : (isDueSoon ? '#f59e0b' : '#2563EB'),
+                        borderLeftWidth: 4
+                      }
+                    ]}
+                    onPress={() => router.push({ pathname: '/tasks', params: { taskId: task.id.toString() } })}
+                    activeOpacity={0.7}
+                  >
+                    <View style={{ flex: 1, marginRight: 12 }}>
+                      <Text style={[styles.miniTaskTitle, { color: colors.text }]} numberOfLines={1}>
+                        {task.title}
+                      </Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 4, flexWrap: 'wrap' }}>
+                        {task.creator_name && (
+                          <Text style={{ fontSize: 11, color: colors.tabIconDefault }}>
+                            👤 Giao: {task.creator_name}
+                          </Text>
+                        )}
+                        {task.deadline && (
+                          <Text style={{ fontSize: 11, fontWeight: '600', color: isOverdue ? '#ef4444' : (isDueSoon ? '#d97706' : colors.tabIconDefault) }}>
+                            📅 Hạn: {new Date(task.deadline).toLocaleDateString('vi-VN')}
+                          </Text>
+                        )}
+                      </View>
+                    </View>
+                    <View style={{ alignItems: 'flex-end', gap: 6 }}>
+                      <View style={[styles.miniTaskBadge, { backgroundColor: statusBg }]}>
+                        <Text style={{ fontSize: 9.5, fontWeight: '700', color: statusColor }}>{statusLabel}</Text>
+                      </View>
+                      <Text style={{ fontSize: 10, fontWeight: '700', color: colors.tabIconDefault }}>{priorityLabel}</Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {miniTasks.length > 5 && (
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+                {miniTasks.length > visibleMiniTasksCount ? (
+                  <TouchableOpacity
+                    style={{
+                      flex: 1,
+                      paddingVertical: 12,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: colors.card,
+                      borderColor: colors.border,
+                      borderWidth: 1,
+                      borderRadius: 14,
+                      ...Platform.select({
+                        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.02, shadowRadius: 2 },
+                        android: { elevation: 1 }
+                      })
+                    }}
+                    onPress={() => setVisibleMiniTasksCount(prev => prev + 5)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Ionicons name="chevron-down" size={16} color={colors.tint} />
+                      <Text style={{ fontSize: 13, fontWeight: '700', color: colors.tint }}>
+                        Xem tiếp ({miniTasks.length - visibleMiniTasksCount} nhiệm vụ khác)
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    style={{
+                      flex: 1,
+                      paddingVertical: 12,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: colors.card,
+                      borderColor: colors.border,
+                      borderWidth: 1,
+                      borderRadius: 14,
+                      ...Platform.select({
+                        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.02, shadowRadius: 2 },
+                        android: { elevation: 1 }
+                      })
+                    }}
+                    onPress={() => setVisibleMiniTasksCount(5)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Ionicons name="chevron-up" size={16} color={colors.tabIconDefault} />
+                      <Text style={{ fontSize: 13, fontWeight: '700', color: colors.tabIconDefault }}>
+                        Thu gọn danh sách
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+          </View>
+        )}
 
         {/* 2. PREMIUM KPI STATS CARDS */}
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Số liệu công việc {user?.role === 'admin' ? '(Toàn cục)' : '(Được giao)'}</Text>
@@ -836,5 +1202,84 @@ const styles = StyleSheet.create({
   roleBadgeText: {
     fontSize: 10,
     fontWeight: '700',
+  },
+  widgetContainer: {
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 24,
+  },
+  widgetHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  widgetTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  unreadBadge: {
+    backgroundColor: '#EF4444',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  unreadBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 9.5,
+    fontWeight: '800',
+  },
+  widgetGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    justifyContent: 'space-between',
+  },
+  widgetItem: {
+    flex: 1,
+    minWidth: 80,
+    padding: 10,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  widgetIconBg: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  widgetItemLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    marginBottom: 2,
+    textAlign: 'center',
+  },
+  widgetItemValue: {
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  miniTaskCard: {
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.02, shadowRadius: 2 },
+      android: { elevation: 1 }
+    })
+  },
+  miniTaskTitle: {
+    fontSize: 13.5,
+    fontWeight: '700',
+  },
+  miniTaskBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2.5,
+    borderRadius: 6,
   },
 });

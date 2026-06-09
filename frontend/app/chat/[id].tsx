@@ -137,6 +137,9 @@ export default function ChatRoomScreen() {
         roomQueue.forEach(q => {
           const existingIdx = updated.findIndex(m => m.client_message_id === q.client_message_id || m.id === q.localId);
           if (existingIdx !== -1) {
+            if (typeof updated[existingIdx].id === 'number') {
+              return;
+            }
             updated[existingIdx] = {
               ...updated[existingIdx],
               status: q.status,
@@ -161,6 +164,14 @@ export default function ChatRoomScreen() {
               uploadProgress: q.uploadProgress,
               client_message_id: q.client_message_id
             };
+            console.log('[VOICE_OPTIMISTIC_INSERT]', {
+              id: optimisticMsg.id,
+              client_message_id: optimisticMsg.client_message_id,
+              conversation_id: optimisticMsg.conversation_id,
+              attachment_url: optimisticMsg.attachment_url,
+              status: optimisticMsg.status,
+              created_at: optimisticMsg.created_at
+            });
             updated = [optimisticMsg, ...updated];
           }
         });
@@ -412,15 +423,26 @@ export default function ChatRoomScreen() {
     const handleReceiveMessage = (msg: Message) => {
       if (String(msg.conversation_id) !== conversationId) return;
       if (msg.type === 'voice') {
-        const message = msg;
-        console.log(
-          '[VOICE_DEBUG] SOCKET_RECEIVE_VOICE',
-          message
-        );
+        console.log('[VOICE_SOCKET_RECEIVED]', {
+          id: msg.id,
+          client_message_id: msg.client_message_id,
+          conversation_id: msg.conversation_id,
+          attachment_url: msg.attachment_url,
+          status: msg.status,
+          created_at: msg.created_at
+        });
       }
 
       setMessages((prev) => {
+        // 1. Check if we already have this message by ID
         if (prev.some(m => m.id === msg.id)) return prev;
+
+        // 2. Check if we have an optimistic message with the same client_message_id
+        if (msg.client_message_id && prev.some(m => m.client_message_id === msg.client_message_id)) {
+          return prev.map(m => m.client_message_id === msg.client_message_id ? msg : m);
+        }
+
+        // 3. Otherwise, append to the list
         return [msg, ...prev];
       });
 
@@ -617,10 +639,16 @@ export default function ChatRoomScreen() {
       const result = await response.json();
       
       if (response.ok && result.status === 'success') {
+        const fetchedMessages = result.data;
         if (append) {
-          setMessages(prev => [...prev, ...result.data]);
+          setMessages(prev => {
+            const merged = [...prev, ...fetchedMessages];
+            console.log('[VOICE_HISTORY_FETCH]', merged.length);
+            return merged;
+          });
         } else {
-          setMessages(result.data);
+          setMessages(fetchedMessages);
+          console.log('[VOICE_HISTORY_FETCH]', fetchedMessages.length);
         }
         setHasMoreMessages(result.has_more);
       }

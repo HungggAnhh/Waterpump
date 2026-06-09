@@ -579,15 +579,28 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                   </View>
                 </View>
               ) : item.type === 'voice' && item.attachment_url ? (
-                <VoiceMessage
-                  messageId={item.id}
-                  attachmentUrl={item.attachment_url}
-                  attachmentMimeType={item.attachment_mime_type}
-                  duration={item.attachment_duration || 0}
-                  currentUserId={currentUserId}
-                  isMine={isMine}
-                  colors={colors}
-                />
+                (() => {
+                  console.log('[VOICE_RENDER]', {
+                    id: item.id,
+                    client_message_id: item.client_message_id,
+                    conversation_id: item.conversation_id,
+                    attachment_url: item.attachment_url,
+                    status: item.status,
+                    pending: item.status === 'pending' || item.status === 'uploading',
+                    created_at: item.created_at
+                  });
+                  return (
+                    <VoiceMessage
+                      messageId={item.id}
+                      attachmentUrl={item.attachment_url}
+                      attachmentMimeType={item.attachment_mime_type}
+                      duration={item.attachment_duration || 0}
+                      currentUserId={currentUserId}
+                      isMine={isMine}
+                      colors={colors}
+                    />
+                  );
+                })()
               ) : item.type === 'file' && item.file_url ? (
                 <View style={styles.videoAttachmentCard}>
                   <Ionicons name="play-circle-outline" size={32} color={(isMine && !isHighlighted) ? '#fff' : colors.tint} />
