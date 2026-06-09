@@ -782,4 +782,184 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+const jwt = require('jsonwebtoken');
+const multer = require('multer');
+const { createClient } = require('@supabase/supabase-js');
+const WebSocket = require('ws');
+require('dotenv').config({ path: __dirname + '/../.env' });
+
+const supabaseUrl = process.env.SUPABASE_URL || '';
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY || '';
+const bucketName = process.env.SUPABASE_BUCKET || 'media';
+
+const cleanSupabaseUrl = supabaseUrl ? supabaseUrl.replace(/\/rest\/v1\/?$/, '') : '';
+
+const supabaseClient = cleanSupabaseUrl && supabaseKey 
+  ? createClient(cleanSupabaseUrl, supabaseKey, {
+      auth: { persistSession: false },
+      realtime: { transport: WebSocket }
+    })
+  : null;
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Chỉ chấp nhận định dạng ảnh JPG, JPEG, PNG, WEBP.'));
+    }
+  }
+});
+
+const getAuthUser = (req) => {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  const JWT_SECRET = process.env.JWT_SECRET || 'SecretCompanyKeySecret_9988';
+  if (token) {
+    try {
+      return jwt.verify(token, JWT_SECRET);
+    } catch (e) {
+      console.warn("⚠️ JWT verification failed in conversations route:", e.message);
+    }
+  }
+  const fallbackId = parseInt(req.query.user_id || req.body.user_id || req.body.requester_id);
+  const fallbackRole = req.query.user_role || req.body.user_role || 'user';
+  if (fallbackId) {
+    return { id: fallbackId, role: fallbackRole };
+  }
+  return null;
+};
+
+const deleteOldConversationAvatar = async (avatarUrl) => {
+  if (!avatarUrl || !supabaseClient) return;
+  
+  const marker = `/storage/v1/object/public/${bucketName}/`;
+  const markerIdx = avatarUrl.indexOf(marker);
+  
+  if (markerIdx !== -1) {
+    const filePath = avatarUrl.substring(markerIdx + marker.length);
+    console.log(`🧹 [GROUP_AVATAR_CLEANUP] Cleaning up old avatar: ${filePath}`);
+    try {
+      const { error } = await supabaseClient.storage.from(bucketName).remove([filePath]);
+      if (error) {
+        console.error(`⚠️ [GROUP_AVATAR_CLEANUP:ERROR] Cannot delete old avatar: ${error.message}`);
+      }
+    } catch (err) {
+      console.error(`⚠️ [GROUP_AVATAR_CLEANUP:CRITICAL] Exception: ${err.message}`);
+    }
+  }
+};
+
+// POST /api/conversations/:conversationId/avatar
+router.post('/:conversationId/avatar', (req, res, next) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({ status: 'error', message: 'Lỗi tải ảnh nhóm: ' + err.message });
+    }
+    next();
+  });
+}, async (req, res) => {
+  const conversationId = parseInt(req.params.conversationId);
+  const requester = getAuthUser(req);
+  if (!requester) {
+    return res.status(401).json({ status: 'error', message: 'Yêu cầu xác thực token (Unauthorized).' });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ status: 'error', message: 'Không tìm thấy tệp ảnh.' });
+  }
+
+  if (!supabaseClient) {
+    return res.status(500).json({ status: 'error', message: 'Lưu trữ chưa được cấu hình.' });
+  }
+
+  const client = await pool.connect();
+  try {
+    const convRes = await client.query(
+      "SELECT id, type, created_by, avatar FROM conversations WHERE id = $1 LIMIT 1",
+      [conversationId]
+    );
+
+    if (convRes.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'Không tìm thấy nhóm.' });
+    }
+
+    const conversation = convRes.rows[0];
+    if (conversation.type !== 'group') {
+      return res.status(400).json({ status: 'error', message: 'Chỉ cập nhật ảnh cho nhóm.' });
+    }
+
+    const isCreator = parseInt(conversation.created_by) === requester.id;
+    const isAdmin = requester.role === 'admin';
+
+    if (!isCreator && !isAdmin) {
+      return res.status(403).json({ status: 'error', message: 'Không có quyền cập nhật ảnh đại diện của nhóm này.' });
+    }
+
+    const file = req.file;
+    const ext = file.originalname.split('.').pop()?.toLowerCase() || 'jpg';
+    const dangerousExts = ['exe', 'sh', 'js', 'php', 'py', 'pl', 'html', 'htm', 'xml'];
+    if (dangerousExts.includes(ext)) {
+      return res.status(400).json({ status: 'error', message: 'Tệp không hợp lệ.' });
+    }
+
+    const fileName = `group_avatars/${conversationId}_${Date.now()}.${ext}`;
+    const oldAvatarUrl = conversation.avatar;
+
+    const { error: uploadError } = await supabaseClient.storage
+      .from(bucketName)
+      .upload(fileName, file.buffer, {
+        contentType: file.mimetype,
+        upsert: true
+      });
+
+    if (uploadError) {
+      return res.status(500).json({ status: 'error', message: 'Lỗi Supabase Storage: ' + uploadError.message });
+    }
+
+    const { data: publicData } = supabaseClient.storage.from(bucketName).getPublicUrl(fileName);
+    const newAvatarUrl = publicData.publicUrl;
+
+    await client.query('UPDATE conversations SET avatar = $1 WHERE id = $2', [newAvatarUrl, conversationId]);
+
+    if (oldAvatarUrl && !oldAvatarUrl.includes('unsplash.com')) {
+      await deleteOldConversationAvatar(oldAvatarUrl);
+    }
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`room_${conversationId}`).emit('group_avatar_updated', {
+        conversation_id: String(conversationId),
+        avatar: newAvatarUrl
+      });
+
+      const membersResult = await client.query(
+        "SELECT user_id FROM conversation_users WHERE conversation_id = $1",
+        [conversationId]
+      );
+      membersResult.rows.forEach(({ user_id }) => {
+        io.to(`user_${user_id}`).emit('conversation_updated_avatar', {
+          conversation_id: String(conversationId),
+          avatar: newAvatarUrl
+        });
+      });
+    }
+
+    return res.status(200).json({
+      status: 'success',
+      message: 'Cập nhật ảnh đại diện nhóm thành công.',
+      avatar: newAvatarUrl
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ status: 'error', message: 'Lỗi hệ thống: ' + err.message });
+  } finally {
+    client.release();
+  }
+});
+
 module.exports = router;
+

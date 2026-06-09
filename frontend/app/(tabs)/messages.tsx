@@ -13,6 +13,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   TextInput,
+  Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -48,18 +49,25 @@ interface Message {
   created_at: string;
 }
 
+const isDefaultAvatar = (url: string | null | undefined): boolean => {
+  if (!url) return true;
+  return url.includes('unsplash.com');
+};
+
 const ConversationItem = React.memo(({ 
   item, 
   colors, 
   currentUser, 
   onPress, 
-  onLongPress 
+  onLongPress,
+  onAvatarPress
 }: { 
   item: ChatThread; 
   colors: any; 
   currentUser: any; 
   onPress: (item: ChatThread) => void; 
   onLongPress: (item: ChatThread) => void; 
+  onAvatarPress: (item: ChatThread) => void;
 }) => {
   // Subscribe specifically to this user's online status
   const isOnline = useOnlineStore(state => 
@@ -67,6 +75,12 @@ const ConversationItem = React.memo(({
       ? !!state.onlineUsers[item.otherUser.user_id] 
       : false
   );
+
+  const displayAvatar = item.avatar || (item.type === 'group'
+    ? 'https://images.unsplash.com/photo-1522071820081-009f0129c71c?auto=format&fit=crop&w=150&h=150&q=80'
+    : 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150&q=80');
+
+  const hasAvatar = item.avatar && !isDefaultAvatar(item.avatar);
 
   return (
     <TouchableOpacity
@@ -76,7 +90,13 @@ const ConversationItem = React.memo(({
       delayLongPress={500}
     >
       <View style={styles.avatarWrapper}>
-        <Image source={{ uri: item.avatar }} style={styles.threadAvatar} />
+        {hasAvatar ? (
+          <TouchableOpacity onPress={() => onAvatarPress(item)} activeOpacity={0.85}>
+            <Image source={{ uri: displayAvatar }} style={styles.threadAvatar} />
+          </TouchableOpacity>
+        ) : (
+          <Image source={{ uri: displayAvatar }} style={styles.threadAvatar} />
+        )}
         {isOnline && (
           <View style={[styles.onlineIndicator, { borderColor: colors.card }]} />
         )}
@@ -129,6 +149,232 @@ const ConversationItem = React.memo(({
   );
 });
 
+// Full Screen Zoomable Avatar Preview Modal
+interface AvatarPreviewModalProps {
+  visible: boolean;
+  imageUrl: string | null;
+  title: string;
+  onClose: () => void;
+  colors: any;
+}
+
+const AvatarPreviewModal = ({ visible, imageUrl, title, onClose, colors }: AvatarPreviewModalProps) => {
+  const [scale, setScale] = useState(1);
+  const [translateX, setTranslateX] = useState(0);
+  const [translateY, setTranslateY] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+
+  useEffect(() => {
+    if (visible) {
+      setScale(1);
+      setTranslateX(0);
+      setTranslateY(0);
+      setIsDragging(false);
+    }
+  }, [visible]);
+
+  const lastTouchTimeRef = React.useRef(0);
+  const initialTouchDistanceRef = React.useRef(0);
+  const initialScaleRef = React.useRef(1);
+  const touchStartRef = React.useRef({ x: 0, y: 0 });
+  const touchStartPosRef = React.useRef({ x: 0, y: 0 });
+  const touchStartTimeRef = React.useRef(0);
+
+  if (!visible || !imageUrl) return null;
+
+  const getDistance = (touches: any[]) => {
+    if (touches.length < 2) return 0;
+    const dx = touches[0].pageX - touches[1].pageX;
+    const dy = touches[0].pageY - touches[1].pageY;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+
+  const isTouchOnImage = (x: number, y: number) => {
+    const { width: W, height: H } = Dimensions.get('window');
+    const imageHeight = Math.min(H * 0.7, 500);
+    const imageWidth = W * 0.9;
+    
+    const left = (W - imageWidth) / 2;
+    const right = (W + imageWidth) / 2;
+    const top = (H - imageHeight) / 2;
+    const bottom = (H + imageHeight) / 2;
+    
+    return x >= left && x <= right && y >= top && y <= bottom;
+  };
+
+  const handleWheel = (e: any) => {
+    if (Platform.OS === 'web') {
+      const zoomSpeed = 0.15;
+      const direction = e.deltaY < 0 ? 1 : -1;
+      const newScale = Math.min(5, Math.max(1, scale + direction * zoomSpeed));
+      setScale(newScale);
+      if (newScale === 1) {
+        setTranslateX(0);
+        setTranslateY(0);
+      }
+    }
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (Platform.OS === 'web' && scale > 1) {
+      setIsDragging(true);
+      touchStartRef.current = { x: e.clientX - translateX, y: e.clientY - translateY };
+    }
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (Platform.OS === 'web' && isDragging && scale > 1) {
+      setTranslateX(e.clientX - touchStartRef.current.x);
+      setTranslateY(e.clientY - touchStartRef.current.y);
+    }
+  };
+
+  const handleMouseUp = () => {
+    if (Platform.OS === 'web') {
+      setIsDragging(false);
+    }
+  };
+
+  const handleContainerClick = (e: React.MouseEvent) => {
+    if (Platform.OS === 'web' && e.target === e.currentTarget) {
+      onClose();
+    }
+  };
+
+  const handleTouchStart = (e: any) => {
+    const touches = e.nativeEvent.touches || [];
+    if (touches.length === 1) {
+      const pageX = touches[0].pageX;
+      const pageY = touches[0].pageY;
+      touchStartPosRef.current = { x: pageX, y: pageY };
+      touchStartTimeRef.current = Date.now();
+
+      const now = Date.now();
+      if (now - lastTouchTimeRef.current < 300) {
+        if (isTouchOnImage(pageX, pageY)) {
+          const newScale = scale > 1 ? 1 : 2.5;
+          setScale(newScale);
+          setTranslateX(0);
+          setTranslateY(0);
+        }
+      } else {
+        setIsDragging(true);
+        touchStartRef.current = { 
+          x: pageX - translateX, 
+          y: pageY - translateY 
+        };
+      }
+      lastTouchTimeRef.current = now;
+    } else if (touches.length === 2) {
+      setIsDragging(false);
+      initialTouchDistanceRef.current = getDistance(touches);
+      initialScaleRef.current = scale;
+    }
+  };
+
+  const handleTouchMove = (e: any) => {
+    const touches = e.nativeEvent.touches || [];
+    if (touches.length === 1 && scale > 1 && isDragging) {
+      setTranslateX(touches[0].pageX - touchStartRef.current.x);
+      setTranslateY(touches[0].pageY - touchStartRef.current.y);
+    } else if (touches.length === 2) {
+      const currentDistance = getDistance(touches);
+      const initialDistance = initialTouchDistanceRef.current;
+      if (initialDistance > 0 && currentDistance > 0) {
+        const ratio = currentDistance / initialDistance;
+        const newScale = Math.min(5, Math.max(1, initialScaleRef.current * ratio));
+        setScale(newScale);
+        if (newScale === 1) {
+          setTranslateX(0);
+          setTranslateY(0);
+        }
+      }
+    }
+  };
+
+  const handleTouchEnd = (e: any) => {
+    setIsDragging(false);
+    initialTouchDistanceRef.current = 0;
+
+    const changedTouches = e.nativeEvent.changedTouches || [];
+    if (changedTouches.length === 1 && scale === 1) {
+      const endX = changedTouches[0].pageX;
+      const endY = changedTouches[0].pageY;
+      const startX = touchStartPosRef.current.x;
+      const startY = touchStartPosRef.current.y;
+      
+      const dx = endX - startX;
+      const dy = endY - startY;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      const duration = Date.now() - touchStartTimeRef.current;
+
+      if (distance < 15 && duration < 250) {
+        if (!isTouchOnImage(endX, endY)) {
+          onClose();
+        }
+      }
+    }
+  };
+
+  return (
+    <Modal
+      visible={visible}
+      transparent={true}
+      animationType="fade"
+      onRequestClose={onClose}
+    >
+      <View style={styles.previewOverlay}>
+        <TouchableOpacity 
+          style={StyleSheet.absoluteFill} 
+          activeOpacity={1} 
+          onPress={onClose} 
+        />
+
+        <TouchableOpacity style={styles.previewCloseBtn} onPress={onClose} activeOpacity={0.7}>
+          <Ionicons name="close" size={28} color="#ffffff" />
+        </TouchableOpacity>
+
+        <View 
+          style={styles.previewImageContainer}
+          {...(Platform.OS === 'web' ? {
+            onWheel: handleWheel,
+            onMouseDown: handleMouseDown,
+            onMouseMove: handleMouseMove,
+            onMouseUp: handleMouseUp,
+            onMouseLeave: handleMouseUp,
+            onClick: handleContainerClick
+          } as any : {
+            onTouchStart: handleTouchStart,
+            onTouchMove: handleTouchMove,
+            onTouchEnd: handleTouchEnd
+          })}
+        >
+          <Image
+            source={{ uri: imageUrl }}
+            style={[
+              styles.previewImage,
+              {
+                transform: [
+                  { scale },
+                  { translateX },
+                  { translateY }
+                ] as any
+              }
+            ]}
+            resizeMode="contain"
+          />
+        </View>
+
+        {scale === 1 && (
+          <View style={styles.previewFooter}>
+            <Text style={styles.previewFooterText}>{title}</Text>
+          </View>
+        )}
+      </View>
+    </Modal>
+  );
+};
+
 export default function MessagesScreen() {
   const router = useRouter();
   const colorScheme = useColorScheme();
@@ -147,6 +393,11 @@ export default function MessagesScreen() {
   const [loadingThreads, setLoadingThreads] = useState(true);
   const [selectedThreadForMenu, setSelectedThreadForMenu] = useState<ChatThread | null>(null);
   const [threadMenuVisible, setThreadMenuVisible] = useState(false);
+
+  // Avatar Preview Modal States
+  const [previewVisible, setPreviewVisible] = useState(false);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [previewTitle, setPreviewTitle] = useState('');
 
   // Modal chọn user bắt đầu chat
   const [newChatModalVisible, setNewChatModalVisible] = useState(false);
@@ -348,6 +599,12 @@ export default function MessagesScreen() {
     }
   };
 
+  const handleAvatarPress = useCallback((thread: ChatThread) => {
+    setPreviewImageUrl(thread.avatar);
+    setPreviewTitle(thread.name);
+    setPreviewVisible(true);
+  }, []);
+
   const renderThreadItem = useCallback(({ item }: { item: ChatThread }) => (
     <ConversationItem
       item={item}
@@ -355,8 +612,9 @@ export default function MessagesScreen() {
       currentUser={currentUser}
       onPress={handleSelectThread}
       onLongPress={handleLongPressThread}
+      onAvatarPress={handleAvatarPress}
     />
-  ), [colors, currentUser, handleSelectThread, handleLongPressThread]);
+  ), [colors, currentUser, handleSelectThread, handleLongPressThread, handleAvatarPress]);
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
@@ -652,6 +910,14 @@ export default function MessagesScreen() {
           </View>
         </TouchableOpacity>
       </Modal>
+
+      <AvatarPreviewModal
+        visible={previewVisible}
+        imageUrl={previewImageUrl}
+        title={previewTitle}
+        onClose={() => setPreviewVisible(false)}
+        colors={colors}
+      />
     </SafeAreaView>
   );
 }
@@ -900,5 +1166,48 @@ const styles = StyleSheet.create({
   sheetCancelText: {
     fontSize: 14,
     fontWeight: '600',
+  },
+  previewOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.95)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+  },
+  previewCloseBtn: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 60 : 30,
+    right: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1010,
+  },
+  previewImageContainer: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  previewImage: {
+    width: '90%',
+    height: '70%',
+    maxHeight: 500,
+  },
+  previewFooter: {
+    position: 'absolute',
+    bottom: Platform.OS === 'ios' ? 60 : 40,
+    width: '100%',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  previewFooterText: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: '700',
+    textAlign: 'center',
   },
 });

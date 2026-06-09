@@ -2517,12 +2517,19 @@ router.get('/tasks/:taskId/recipients', async (req, res) => {
 // POST /api/tasks/tasks/:taskId/reports — Tạo báo cáo mới
 router.post('/tasks/:taskId/reports', async (req, res) => {
   const user = getAuthUser(req);
+  console.log('[REPORTS_API:AUTH] Request received. user =', user);
+  if (user) {
+    console.log('[REPORTS_API:AUTH] Authenticated User ID =', user.id);
+  }
+
   if (!user) {
-    return res.status(401).json({ status: 'error', message: 'Không thể xác thực người dùng.' });
+    console.warn('[REPORTS_API:UNAUTHORIZED] 401 Unauthorized - Authentication failed');
+    return res.status(401).json({ status: 'error', message: 'Không thể xác thực người dùng (401 Unauthorized).' });
   }
 
   const taskId = parseInt(req.params.taskId);
   const { report_type = 'progress', content, progress_percent = 0, attachments = [] } = req.body;
+  console.log('[REPORTS_API:BODY] taskId =', taskId, 'body =', { report_type, content, progress_percent, attachments });
 
   if (!content || !content.trim()) {
     return res.status(400).json({ status: 'error', message: 'Nội dung báo cáo không được để trống.' });
@@ -2547,7 +2554,8 @@ router.post('/tasks/:taskId/reports', async (req, res) => {
     );
     const isAssigned = checkAssignment.rows.length > 0 || task.assigned_to === user.id;
     if (user.role !== 'admin' && !isAssigned) {
-      return res.status(403).json({ status: 'error', message: 'Bạn không được phân quyền trong nhiệm vụ này.' });
+      console.warn(`[REPORTS_API:FORBIDDEN] 403 Forbidden - User ID ${user.id} has no permission for task ${taskId}`);
+      return res.status(403).json({ status: 'error', message: 'Bạn không có quyền gửi báo cáo cho nhiệm vụ này' });
     }
 
     // Nếu chưa có dòng phân công trong task_assignments (ví dụ là primary assignee cũ), tự chèn vào

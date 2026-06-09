@@ -147,6 +147,13 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
 
     socket.on('receive_message', (msg: any) => {
+      if (msg.type === 'voice') {
+        const message = msg;
+        console.log(
+          '[VOICE_DEBUG] SOCKET_RECEIVE_VOICE',
+          message
+        );
+      }
       const activeConversationId = useConversationStore.getState().activeConversationId;
       useConversationStore.getState().receiveMessage(msg, activeConversationId, user.id);
       
@@ -208,6 +215,14 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     socket.on('conversation_updated_name', (data: { conversation_id: string | number, name: string }) => {
       useConversationStore.getState().updateGroupName(String(data.conversation_id), data.name);
+    });
+
+    socket.on('conversation_updated_avatar', (data: { conversation_id: string | number, avatar: string }) => {
+      useConversationStore.getState().updateConversationAvatar(String(data.conversation_id), data.avatar);
+    });
+
+    socket.on('group_avatar_updated', (data: { conversation_id: string | number, avatar: string }) => {
+      useConversationStore.getState().updateConversationAvatar(String(data.conversation_id), data.avatar);
     });
 
     socket.on('creator_transferred', (data: { conversation_id: string | number, created_by: string | number }) => {

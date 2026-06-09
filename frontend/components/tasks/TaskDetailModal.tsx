@@ -21,6 +21,7 @@ import { API_BASE_URL } from '@/constants/Config';
 import { useUser } from '@/context/UserContext';
 import { useSocket } from '@/context/SocketContext';
 import * as DocumentPicker from 'expo-document-picker';
+import * as ImagePicker from 'expo-image-picker';
 import { formatDateTime, formatConversationTime, getMessageDayLabel, formatMessageTime } from '../../utils/dateTime';
 
 const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
@@ -145,10 +146,10 @@ export default function TaskDetailModal({
   const [isCreatingReport, setIsCreatingReport] = useState(false);
 
   // Report Form states
-  const [reportType, setReportType] = useState<'progress' | 'issue' | 'material_request' | 'completion'>('progress');
-  const [reportContent, setReportContent] = useState('');
-  const [reportProgress, setReportProgress] = useState(0);
-  const [reportAttachments, setReportAttachments] = useState<Array<{ url: string; type: string; name: string }>>([]);
+  const [newReportType, setNewReportType] = useState<'progress' | 'issue' | 'material_request' | 'completion'>('progress');
+  const [newReportContent, setNewReportContent] = useState('');
+  const [newReportProgress, setNewReportProgress] = useState(0);
+  const [newReportAttachments, setNewReportAttachments] = useState<Array<{ url: string; type: string; name: string }>>([]);
   const [submittingReport, setSubmittingReport] = useState(false);
   const [uploadingReportFile, setUploadingReportFile] = useState(false);
   const [expandedUsers, setExpandedUsers] = useState<{ [key: string]: boolean }>({});
@@ -168,92 +169,217 @@ export default function TaskDetailModal({
     }
   }
 
-  const handlePickReportFile = async () => {
-    try {
-      setUploadingReportFile(true);
-      const res = await DocumentPicker.getDocumentAsync({
-        type: '*/*',
-        copyToCacheDirectory: true,
-      });
+  const handleRemoveReportAttachment = (index: number) => {
+    setNewReportAttachments(prev => prev.filter((_, i) => i !== index));
+  };
 
-      if (res.canceled || !res.assets || res.assets.length === 0) {
-        setUploadingReportFile(false);
+  const handlePickReportImage = async () => {
+    try {
+      console.log('--- Launching Image Picker ---');
+      const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      console.log('Permission granted:', permissionResult.granted);
+      if (!permissionResult.granted) {
+        Alert.alert('Quyền truy cập bị từ chối', 'Bạn cần cấp quyền truy cập thư viện ảnh để tải lên ảnh báo cáo.');
         return;
       }
 
-      const pickedAsset = res.assets[0];
-      const formData = new FormData();
-      const fileName = pickedAsset.name || `report_${Date.now()}`;
-      const fileType = pickedAsset.mimeType || 'application/octet-stream';
+      const pickerResult = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.8,
+      });
 
+      console.log('ImagePicker result:', pickerResult);
+      if (pickerResult.canceled || !pickerResult.assets || pickerResult.assets.length === 0) {
+        console.log('Image picking canceled.');
+        return;
+      }
+
+      setUploadingReportFile(true);
+      const pickedAsset = pickerResult.assets[0];
+      const fileUri = pickedAsset.uri;
+      const fileName = fileUri.split('/').pop() || `report_image_${Date.now()}.jpg`;
+      const fileType = pickedAsset.mimeType || 'image/jpeg';
+
+      console.log('Selected image metadata:', { name: fileName, type: fileType, uri: fileUri });
+
+      const formData = new FormData();
       if (Platform.OS === 'web') {
-        const response = await fetch(pickedAsset.uri);
+        const response = await fetch(fileUri);
         const blob = await response.blob();
         formData.append('file', blob, fileName);
       } else {
         formData.append('file', {
-          uri: pickedAsset.uri,
+          uri: fileUri,
           name: fileName,
           type: fileType,
         } as any);
       }
 
+      console.log('Uploading image to:', `${API_BASE_URL}/upload`);
       const uploadRes = await fetch(`${API_BASE_URL}/upload`, {
         method: 'POST',
         body: formData,
       });
       const uploadResult = await uploadRes.json();
+      console.log('Upload API response:', uploadResult);
 
-      if (uploadResult.status === 'success' && uploadResult.url) {
-        setReportAttachments(prev => [
-          ...prev,
-          { url: uploadResult.url, type: fileType, name: fileName }
-        ]);
+      const fileUrl = uploadResult.file_url || uploadResult.url;
+      if (uploadResult.status === 'success' && fileUrl) {
+        setNewReportAttachments(prev => {
+          const next = [...prev, { url: fileUrl, type: fileType, name: fileName }];
+          console.log('Updated newReportAttachments after image upload:', next);
+          return next;
+        });
       } else {
-        Alert.alert('Lỗi', uploadResult.message || 'Lỗi tải tệp lên server.');
+        Alert.alert('Lỗi', uploadResult.message || 'Lỗi tải ảnh lên server.');
       }
     } catch (err) {
-      console.error(err);
+      console.error('Error in handlePickReportImage:', err);
       Alert.alert('Lỗi', 'Lỗi tải tệp tin.');
     } finally {
       setUploadingReportFile(false);
     }
   };
 
-  const handleRemoveReportAttachment = (index: number) => {
-    setReportAttachments(prev => prev.filter((_, i) => i !== index));
+  const handlePickReportFile = async () => {
+    try {
+      console.log('--- Launching Document Picker ---');
+      const res = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+      });
+
+      console.log('DocumentPicker result:', res);
+      if (res.canceled || !res.assets || res.assets.length === 0) {
+        console.log('Document picking canceled.');
+        return;
+      }
+
+      setUploadingReportFile(true);
+      const pickedAsset = res.assets[0];
+      const fileUri = pickedAsset.uri;
+      const fileName = pickedAsset.name || `report_${Date.now()}`;
+      const fileType = pickedAsset.mimeType || 'application/octet-stream';
+
+      console.log('Selected document metadata:', { name: fileName, type: fileType, uri: fileUri });
+
+      const formData = new FormData();
+      if (Platform.OS === 'web') {
+        const response = await fetch(fileUri);
+        const blob = await response.blob();
+        formData.append('file', blob, fileName);
+      } else {
+        formData.append('file', {
+          uri: fileUri,
+          name: fileName,
+          type: fileType,
+        } as any);
+      }
+
+      console.log('Uploading document to:', `${API_BASE_URL}/upload`);
+      const uploadRes = await fetch(`${API_BASE_URL}/upload`, {
+        method: 'POST',
+        body: formData,
+      });
+      const uploadResult = await uploadRes.json();
+      console.log('Upload API response:', uploadResult);
+
+      const fileUrl = uploadResult.file_url || uploadResult.url;
+      if (uploadResult.status === 'success' && fileUrl) {
+        setNewReportAttachments(prev => {
+          const next = [...prev, { url: fileUrl, type: fileType, name: fileName }];
+          console.log('Updated newReportAttachments after file upload:', next);
+          return next;
+        });
+      } else {
+        Alert.alert('Lỗi', uploadResult.message || 'Lỗi tải tệp lên server.');
+      }
+    } catch (err) {
+      console.error('Error in handlePickReportFile:', err);
+      Alert.alert('Lỗi', 'Lỗi tải tệp tin.');
+    } finally {
+      setUploadingReportFile(false);
+    }
+  };
+
+  const handlePickReportAttachment = () => {
+    Alert.alert(
+      'Đính kèm tệp tin',
+      'Chọn phương thức tải lên:',
+      [
+        {
+          text: '📷 Chọn từ thư viện ảnh',
+          onPress: handlePickReportImage,
+        },
+        {
+          text: '📁 Chọn tài liệu (PDF, Word, Excel, ...)',
+          onPress: handlePickReportFile,
+        },
+        {
+          text: 'Hủy',
+          style: 'cancel',
+        },
+      ],
+      { cancelable: true }
+    );
   };
 
   const handleSubmitReport = async () => {
     if (!task) return;
-    if (!reportContent.trim()) {
+    if (submittingReport) {
+      console.log('Submit already in progress. Double click prevented.');
+      return;
+    }
+
+    if (!newReportContent.trim()) {
       Alert.alert('Lỗi', 'Nội dung báo cáo không được để trống.');
       return;
     }
 
+    if (newReportType !== 'completion' && (newReportProgress < 0 || newReportProgress > 100)) {
+      Alert.alert('Lỗi', 'Tiến độ phải nằm trong khoảng từ 0% đến 100%.');
+      return;
+    }
+
+    console.log('--- Submitting Task Report ---');
+    console.log('Task ID:', task.id);
+    console.log('newReportContent:', newReportContent);
+    console.log('newReportProgress:', newReportProgress);
+    console.log('newReportType:', newReportType);
+    console.log('newReportAttachments:', newReportAttachments);
+
     try {
       setSubmittingReport(true);
-      const res = await fetch(`${API_BASE_URL}/tasks/tasks/${task.id}/reports`, {
+      const payload = {
+        report_type: newReportType,
+        content: newReportContent.trim(),
+        progress_percent: newReportType === 'completion' ? 100 : newReportProgress,
+        attachments: newReportAttachments
+      };
+
+      const endpoint = `${API_BASE_URL}/tasks/tasks/${task.id}/reports`;
+      console.log('Posting payload to endpoint:', endpoint, payload);
+
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token || ''}`
         },
-        body: JSON.stringify({
-          report_type: reportType,
-          content: reportContent.trim(),
-          progress_percent: reportType === 'completion' ? 100 : reportProgress,
-          attachments: reportAttachments
-        })
+        body: JSON.stringify(payload)
       });
 
+      console.log('API HTTP response status:', res.status);
       const result = await res.json();
+      console.log('API JSON response body:', result);
+
       if (result.status === 'success') {
+        Alert.alert('Thành công', 'Đã gửi báo cáo thành công');
         // Reset form
-        setReportContent('');
-        setReportProgress(0);
-        setReportAttachments([]);
-        setReportType('progress');
+        setNewReportContent('');
+        setNewReportProgress(0);
+        setNewReportAttachments([]);
+        setNewReportType('progress');
         setIsCreatingReport(false);
         
         // Refresh data
@@ -275,9 +401,11 @@ export default function TaskDetailModal({
       } else {
         Alert.alert('Thất bại', result.message || 'Không thể tạo báo cáo.');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error submitting report:', err);
-      Alert.alert('Lỗi', 'Lỗi kết nối mạng.');
+      console.log('API Error response status:', err?.response?.status);
+      console.log('API Error response data:', err?.response?.data);
+      Alert.alert('Lỗi', 'Lỗi kết nối mạng hoặc lỗi máy chủ.');
     } finally {
       setSubmittingReport(false);
     }
@@ -1360,7 +1488,7 @@ export default function TaskDetailModal({
                           if (type === 'material_request') { label = 'Thiếu vật tư'; bg = '#fff7ed'; text = '#9a3412'; }
                           if (type === 'completion') { label = 'Hoàn thành'; bg = '#f0fdf4'; text = '#166534'; }
                           
-                          const isSelected = reportType === type;
+                          const isSelected = newReportType === type;
                           return (
                             <TouchableOpacity
                               key={type}
@@ -1373,8 +1501,8 @@ export default function TaskDetailModal({
                                 borderColor: text
                               }}
                               onPress={() => {
-                                setReportType(type);
-                                if (type === 'completion') setReportProgress(100);
+                                setNewReportType(type);
+                                if (type === 'completion') setNewReportProgress(100);
                               }}
                             >
                               <Text style={{ fontSize: 11, fontWeight: '700', color: isSelected ? '#ffffff' : text }}>
@@ -1388,9 +1516,9 @@ export default function TaskDetailModal({
 
                       {/* Progress slider / chips */}
                       <Text style={{ fontSize: 12, fontWeight: '600', color: colors.tabIconDefault, marginBottom: 6 }}>
-                        Tiến độ ({reportType === 'completion' ? '100%' : `${reportProgress}%`})
+                        Tiến độ ({newReportType === 'completion' ? '100%' : `${newReportProgress}%`})
                       </Text>
-                      {reportType === 'completion' ? (
+                      {newReportType === 'completion' ? (
                         <Text style={{ fontSize: 13, color: '#16a34a', fontWeight: '700', marginBottom: 12 }}>
                           Tự động đặt 100% khi báo cáo hoàn thành
                         </Text>
@@ -1406,11 +1534,11 @@ export default function TaskDetailModal({
                                   borderRadius: 6,
                                   borderWidth: 1,
                                   borderColor: colors.border,
-                                  backgroundColor: reportProgress === pct ? colors.tint : colors.card
+                                  backgroundColor: newReportProgress === pct ? colors.tint : colors.card
                                 }}
-                                onPress={() => setReportProgress(pct)}
+                                onPress={() => setNewReportProgress(pct)}
                               >
-                                <Text style={{ fontSize: 11, color: reportProgress === pct ? '#ffffff' : colors.text, fontWeight: '600' }}>
+                                <Text style={{ fontSize: 11, color: newReportProgress === pct ? '#ffffff' : colors.text, fontWeight: '600' }}>
                                   {pct}%
                                 </Text>
                               </TouchableOpacity>
@@ -1428,10 +1556,10 @@ export default function TaskDetailModal({
                               width: 80
                             }}
                             keyboardType="numeric"
-                            value={String(reportProgress)}
+                            value={String(newReportProgress)}
                             onChangeText={txt => {
                               const val = parseInt(txt.replace(/[^0-9]/g, '')) || 0;
-                              setReportProgress(Math.min(100, Math.max(0, val)));
+                              setNewReportProgress(Math.min(100, Math.max(0, val)));
                             }}
                             placeholder="Nhập %"
                           />
@@ -1458,10 +1586,8 @@ export default function TaskDetailModal({
                         multiline
                         placeholder="Mô tả cụ thể tiến độ hoặc vấn đề bạn gặp phải..."
                         placeholderTextColor={colors.tabIconDefault}
-                        value={reportContent}
-                        onChangeText={setCommentInput /* Wait, we should use setReportContent instead, but wait! */}
-                        // WAIT: In the original code we defined reportContent / setReportContent, let's use reportContent/setReportContent!
-                        // Oh, yes: reportContent is mapped to reportContent, onChangeText={setReportContent}
+                        value={newReportContent}
+                        onChangeText={setNewReportContent}
                       />
 
                       {/* Attachments picker */}
@@ -1480,7 +1606,7 @@ export default function TaskDetailModal({
                           backgroundColor: colors.card,
                           marginBottom: 10
                         }}
-                        onPress={handlePickReportFile}
+                        onPress={handlePickReportAttachment}
                         disabled={uploadingReportFile}
                       >
                         {uploadingReportFile ? (
@@ -1494,9 +1620,9 @@ export default function TaskDetailModal({
                       </TouchableOpacity>
 
                       {/* Chosen attachments list */}
-                      {reportAttachments.length > 0 && (
+                      {newReportAttachments.length > 0 && (
                         <View style={{ gap: 6, marginBottom: 12 }}>
-                          {reportAttachments.map((att, idx) => (
+                          {newReportAttachments.map((att, idx) => (
                             <View key={idx} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border, padding: 6, borderRadius: 8 }}>
                               <Text style={{ fontSize: 11, color: colors.text, flex: 1 }} numberOfLines={1}>
                                 📎 {att.name}
@@ -1518,12 +1644,17 @@ export default function TaskDetailModal({
                           <Text style={{ fontSize: 12, fontWeight: '700', color: colors.text }}>Hủy</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
-                          style={{ paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, backgroundColor: colors.tint }}
+                          style={{ 
+                            paddingHorizontal: 12, 
+                            paddingVertical: 8, 
+                            borderRadius: 8, 
+                            backgroundColor: submittingReport ? colors.border : colors.tint 
+                          }}
                           onPress={handleSubmitReport}
                           disabled={submittingReport}
                         >
                           {submittingReport ? (
-                            <ActivityIndicator size="small" color="#ffffff" />
+                            <ActivityIndicator size="small" color={colors.textSecondary} />
                           ) : (
                             <Text style={{ fontSize: 12, fontWeight: '700', color: '#ffffff' }}>Gửi báo cáo</Text>
                           )}

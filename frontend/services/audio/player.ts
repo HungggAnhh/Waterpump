@@ -77,6 +77,7 @@ export class VoicePlayer {
   async loadAndPlay(
     messageId: string | number,
     signedUrl: string,
+    mimeType: string,
     onStatusUpdate: (status: any) => void
   ) {
     this.messageId = messageId;
@@ -86,22 +87,63 @@ export class VoicePlayer {
 
     console.log(`[Analytics] voice_play_started: ${messageId}`);
 
-    const uri = await this.getCachedUri(messageId, signedUrl);
-
-    await Audio.setAudioModeAsync({
-      allowsRecordingIOS: false,
-      playsInSilentModeIOS: true,
-      staysActiveInBackground: false,
-      playThroughEarpieceAndroid: false,
+    console.log('[VOICE_PLAYBACK]', {
+      messageId,
+      mimeType,
+      signedUrl,
+      platform: Platform.OS
     });
 
-    const { sound } = await Audio.Sound.createAsync(
-      { uri },
-      { shouldPlay: true },
-      this.handlePlaybackStatusUpdate
+    const signedReadUrl = signedUrl;
+    console.log(
+      '[VOICE_DEBUG] PLAYBACK_START',
+      signedReadUrl
     );
+    console.log('[PLAYER] signedUrl=', signedUrl);
+    console.log('[PLAYER] platform=', Platform.OS);
+    console.log('[PLAYER] loading...');
 
-    this.sound = sound;
+    try {
+      const uri = await this.getCachedUri(messageId, signedUrl);
+
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        playThroughEarpieceAndroid: false,
+      });
+
+      console.log('[PLAYER CREATE ASYNC]');
+      console.log('[VOICE_PLAYBACK_DEBUG]', {
+        signedUrl,
+        platform: Platform.OS,
+        uri,
+        status: { shouldPlay: true }
+      });
+      const { sound } = await Audio.Sound.createAsync(
+        { uri },
+        { shouldPlay: true },
+        this.handlePlaybackStatusUpdate
+      );
+
+      console.log('[PLAYER loaded]');
+      console.log('[PLAYER playing...]');
+      
+      const soundStatus = await sound.getStatusAsync();
+      console.log('[VOICE STATUS]', soundStatus);
+      console.log('[PLAYER] status=', soundStatus);
+
+      console.log('[PLAYER SUCCESS]');
+      this.sound = sound;
+    } catch (err) {
+      const error = err;
+      console.error(
+        '[VOICE_DEBUG] PLAYBACK_ERROR',
+        error
+      );
+      console.error('[PLAYER ERROR]', error);
+      throw err;
+    }
   }
 
   private handlePlaybackStatusUpdate = (status: AVPlaybackStatus) => {

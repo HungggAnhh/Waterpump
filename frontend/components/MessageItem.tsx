@@ -17,6 +17,8 @@ export interface Message {
   attachment_url?: string | null;
   attachment_duration?: number | null;
   attachment_mime_type?: string | null;
+  original_attachment_url?: string | null;
+  processing_status?: 'pending' | 'processing' | 'completed' | 'failed' | null;
   created_at: string;
   raw_time?: string;
   reply_to?: number | null;
@@ -580,6 +582,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                 <VoiceMessage
                   messageId={item.id}
                   attachmentUrl={item.attachment_url}
+                  attachmentMimeType={item.attachment_mime_type}
                   duration={item.attachment_duration || 0}
                   currentUserId={currentUserId}
                   isMine={isMine}

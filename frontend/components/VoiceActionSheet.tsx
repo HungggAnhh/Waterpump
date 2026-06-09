@@ -162,6 +162,7 @@ export default function VoiceActionSheet({
       ]).start();
     } else {
       console.log('[VoicePanel] Panel closed. Stopping active recording/listening sessions.');
+      console.trace('[VoicePanel] Close stack trace');
       if (isRecording) {
         cancelRecording();
       }
@@ -257,6 +258,14 @@ export default function VoiceActionSheet({
       console.log('[VoiceRecorder] stopRecording result:', { uri, finalDuration, actualDuration });
       
       if (uri) {
+        console.log(
+          '[VOICE_DEBUG] RECORD_RESULT',
+          {
+            uri,
+            duration: actualDuration,
+            mimeType: 'audio/m4a'
+          }
+        );
         if (actualDuration < 1) {
           console.warn('[VoiceRecorder] Recording duration too short (< 1s). Cancelling.');
           triggerHaptic();
@@ -291,6 +300,14 @@ export default function VoiceActionSheet({
     console.log('[VoiceRecorder] Hands-Free stopRecording result:', { uri, finalDuration, actualDuration });
     
     if (uri) {
+      console.log(
+        '[VOICE_DEBUG] RECORD_RESULT',
+        {
+          uri,
+          duration: actualDuration,
+          mimeType: 'audio/m4a'
+        }
+      );
       if (actualDuration < 1) {
         console.warn('[VoiceRecorder] Hands-Free duration too short. Cancelling.');
         triggerHaptic();
@@ -325,6 +342,11 @@ export default function VoiceActionSheet({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: () => {
+        console.log('[BUTTON_DOWN]', {
+          timestamp: Date.now(),
+          isRecording: stateRef.current.isRecording,
+          isHandsFree: stateRef.current.isHandsFree
+        });
         if (stateRef.current.activeTab !== 'voice' || stateRef.current.isHandsFree) return;
         pressStartRef.current = Date.now();
         startRecordRef.current();
@@ -338,8 +360,18 @@ export default function VoiceActionSheet({
         }
       },
       onPanResponderRelease: () => {
-        if (stateRef.current.activeTab !== 'voice' || stateRef.current.isHandsFree) return;
         const pressDuration = Date.now() - pressStartRef.current;
+        console.log('[BUTTON_UP]', {
+          timestamp: Date.now(),
+          pressDuration,
+          isRecording: stateRef.current.isRecording,
+          isHandsFree: stateRef.current.isHandsFree
+        });
+        console.log('[PRESS_DURATION]', pressDuration);
+        console.log('[IS_RECORDING]', stateRef.current.isRecording);
+        console.log('[IS_HANDSFREE]', stateRef.current.isHandsFree);
+
+        if (stateRef.current.activeTab !== 'voice' || stateRef.current.isHandsFree) return;
         console.log('[VoiceRecorder] Button released. Press duration:', pressDuration, 'ms');
         if (pressDuration < 300) {
           console.log('[VoiceRecorder] Quick press detected. Switching to Hands-Free mode.');
@@ -350,6 +382,7 @@ export default function VoiceActionSheet({
       },
       onPanResponderTerminate: () => {
         console.log('[VoiceRecorder] PanResponder terminated.');
+        console.log('[IS_RECORDING]', stateRef.current.isRecording);
         cancelRecordRef.current();
         setIsHandsFree(false);
         setSwipeCancel(false);

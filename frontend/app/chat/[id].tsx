@@ -155,7 +155,7 @@ export default function ChatRoomScreen() {
               file_url: null,
               attachment_url: q.localUri,
               attachment_duration: q.duration,
-              attachment_mime_type: 'audio/m4a',
+              attachment_mime_type: q.mimeType || 'audio/m4a',
               created_at: new Date(q.createdAt).toISOString(),
               status: q.status,
               uploadProgress: q.uploadProgress,
@@ -411,6 +411,13 @@ export default function ChatRoomScreen() {
     // 1. Nhận tin nhắn mới
     const handleReceiveMessage = (msg: Message) => {
       if (String(msg.conversation_id) !== conversationId) return;
+      if (msg.type === 'voice') {
+        const message = msg;
+        console.log(
+          '[VOICE_DEBUG] SOCKET_RECEIVE_VOICE',
+          message
+        );
+      }
 
       setMessages((prev) => {
         if (prev.some(m => m.id === msg.id)) return prev;
@@ -449,6 +456,13 @@ export default function ChatRoomScreen() {
       
       // Đồng thời cập nhật list ghim nếu tin bị thu hồi
       fetchPinnedMessages();
+    };
+
+    // 4.5. Chuẩn hóa tin nhắn thoại (Normalize)
+    const handleMessageNormalized = (data: { messageId: number, attachmentUrl: string, processingStatus: string }) => {
+      setMessages((prev) => 
+        prev.map(m => m.id === data.messageId ? { ...m, attachment_url: data.attachmentUrl, processing_status: data.processingStatus as any } : m)
+      );
     };
 
     // 5. Xóa tin nhắn với tất cả (Delete For Everyone)
@@ -569,6 +583,7 @@ export default function ChatRoomScreen() {
     socket.on('group_updated', handleGroupUpdated);
     socket.on('message_read_receipt', handleMessageReadReceipt);
     socket.on('assignment_status_updated', handleAssignmentStatusUpdated);
+    socket.on('message_normalized', handleMessageNormalized);
 
     return () => {
       socket.emit('leave_room', joinRoomPayload);
@@ -588,6 +603,7 @@ export default function ChatRoomScreen() {
       socket.off('group_updated', handleGroupUpdated);
       socket.off('message_read_receipt', handleMessageReadReceipt);
       socket.off('assignment_status_updated', handleAssignmentStatusUpdated);
+      socket.off('message_normalized', handleMessageNormalized);
     };
   }, [socket, conversationId, currentUser.id]);
 

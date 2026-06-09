@@ -219,8 +219,10 @@ router.post('/sign-upload', async (req, res) => {
 
 // POST /api/upload/sign-read — lấy URL đọc an toàn thời hạn 15 phút
 router.post('/sign-read', async (req, res) => {
+  let msg = null;
   try {
-    const { attachment_url, user_id } = req.body;
+    const { attachment_url, user_id, platform = 'unknown' } = req.body;
+    console.log('attachment_url=', attachment_url);
     if (!attachment_url || !user_id) {
       return res.status(400).json({ status: 'error', message: 'Thiếu tham số: attachment_url hoặc user_id.' });
     }
@@ -231,8 +233,9 @@ router.post('/sign-read', async (req, res) => {
     // 1. Xác thực quyền tham gia cuộc hội thoại chứa tin nhắn này
     const { query } = require('../config/supabase');
     const msgCheck = await query(
-      `SELECT conversation_id FROM messages 
-       WHERE attachment_url = $1 OR file_url = $1 LIMIT 1`,
+      `SELECT id, conversation_id, attachment_mime_type, attachment_codec, attachment_duration 
+       FROM messages 
+       WHERE attachment_url = $1 OR original_attachment_url = $1 OR file_url = $1 LIMIT 1`,
       [attachment_url]
     );
 
@@ -240,7 +243,17 @@ router.post('/sign-read', async (req, res) => {
       return res.status(404).json({ status: 'error', message: 'Không tìm thấy tin nhắn chứa tệp tin này.' });
     }
 
-    const conversationId = msgCheck.rows[0].conversation_id;
+    msg = msgCheck.rows[0];
+    console.log('[VOICE_PLAYBACK_REQUEST]', {
+      messageId: msg.id,
+      conversationId: msg.conversation_id,
+      mimeType: msg.attachment_mime_type,
+      codec: msg.attachment_codec || 'unknown',
+      duration: msg.attachment_duration || 0,
+      platform
+    });
+
+    const conversationId = msg.conversation_id;
     
     const memberCheck = await query(
       `SELECT 1 FROM conversation_users 
@@ -262,14 +275,39 @@ router.post('/sign-read', async (req, res) => {
       path = decodeURIComponent(attachment_url.substring(index + marker.length));
     }
 
+    console.log('bucket=', bucketName);
+    console.log('path=', path);
+
+    console.log('calling createSignedUrl');
     const { data, error } = await supabase.storage
       .from(bucketName)
       .createSignedUrl(path, 900); // 15 phút
 
+    console.log('signedUrl result', data);
+    console.log('signedUrl error', error);
+
     if (error) {
       console.error('❌ [UPLOAD_API:SIGN_READ_ERROR]', error.message);
+      console.log('[VOICE_PLAYBACK_FAIL]', {
+        messageId: msg.id,
+        conversationId: msg.conversation_id,
+        mimeType: msg.attachment_mime_type,
+        codec: msg.attachment_codec || 'unknown',
+        duration: msg.attachment_duration || 0,
+        error: error.message,
+        platform
+      });
       return res.status(500).json({ status: 'error', message: 'Lỗi Supabase Storage: ' + error.message });
     }
+
+    console.log('[VOICE_PLAYBACK_SUCCESS]', {
+      messageId: msg.id,
+      conversationId: msg.conversation_id,
+      mimeType: msg.attachment_mime_type,
+      codec: msg.attachment_codec || 'unknown',
+      duration: msg.attachment_duration || 0,
+      platform
+    });
 
     return res.status(200).json({
       status: 'success',
@@ -277,6 +315,11 @@ router.post('/sign-read', async (req, res) => {
     });
   } catch (err) {
     console.error('❌ [UPLOAD_API:SIGN_READ_CRITICAL]', err);
+    console.log('[VOICE_PLAYBACK_FAIL]', {
+      messageId: msg ? msg.id : null,
+      conversationId: msg ? msg.conversation_id : null,
+      error: err.message
+    });
     return res.status(500).json({ status: 'error', message: 'Lỗi hệ thống: ' + err.message });
   }
 });

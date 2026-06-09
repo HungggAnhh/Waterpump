@@ -9,12 +9,14 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "ffmpeg-static": "^5.3.0",
     "firebase-admin": "^13.10.0",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.1.1",
     "pg": "^8.21.0",
     "prisma": "^7.8.0",
     "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3",
     "ws": "^8.21.0"
   }
 }

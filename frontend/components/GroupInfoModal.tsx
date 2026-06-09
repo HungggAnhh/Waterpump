@@ -20,6 +20,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL, endpoints } from '@/constants/Config';
 import { useConversationStore, GroupMember } from '../store/useConversationStore';
 import { useSocket } from '../context/SocketContext';
+import { useUser } from '../context/UserContext';
+import * as ImagePicker from 'expo-image-picker';
 
 interface User {
   id: number;
@@ -60,6 +62,7 @@ export function GroupInfoModal({
   position,
 }: GroupInfoModalProps) {
   const { socket } = useSocket();
+  const { token } = useUser();
   const conversations = useConversationStore((state) => state.conversations);
   
   const activeThread = useMemo(() => {
@@ -86,6 +89,140 @@ export function GroupInfoModal({
   // States
   const [isRenaming, setIsRenaming] = useState(false);
   const [newGroupName, setNewGroupName] = useState(activeThread?.name || '');
+
+  // Group Avatar & Fullscreen Viewer States
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [viewerVisible, setViewerVisible] = useState(false);
+  const [viewerImageUrl, setViewerImageUrl] = useState('');
+  const [viewerTitle, setViewerTitle] = useState('');
+  const [viewerIsGroup, setViewerIsGroup] = useState(false);
+
+  const handleViewGroupAvatar = () => {
+    if (!activeThread?.avatar) return;
+    setViewerImageUrl(activeThread.avatar);
+    setViewerTitle('Ảnh nhóm');
+    setViewerIsGroup(true);
+    setViewerVisible(true);
+  };
+
+  const handleViewMemberAvatar = (avatarUrl: string | null | undefined, name: string) => {
+    const defaultAvatar = 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150&q=80';
+    setViewerImageUrl(avatarUrl || defaultAvatar);
+    setViewerTitle(name);
+    setViewerIsGroup(false);
+    setViewerVisible(true);
+  };
+
+  const handlePickAndUploadGroupAvatar = async () => {
+    try {
+      const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permissionResult.granted) {
+        Alert.alert(
+          'Quyền truy cập',
+          'Bạn cần cấp quyền truy cập thư viện ảnh để thay đổi ảnh đại diện nhóm!'
+        );
+        return;
+      }
+
+      const pickerResult = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.5,
+      });
+
+      if (pickerResult.canceled || !pickerResult.assets || pickerResult.assets.length === 0) {
+        return;
+      }
+
+      const pickedAsset = pickerResult.assets[0];
+
+      if (pickedAsset.fileSize && pickedAsset.fileSize > 5 * 1024 * 1024) {
+        Alert.alert('Tệp quá lớn', 'Ảnh đại diện tối đa là 5MB. Vui lòng chọn ảnh khác!');
+        return;
+      }
+
+      setUploadingAvatar(true);
+      setUploadProgress(0);
+
+      const formData = new FormData();
+      let fileExt = 'jpg';
+      if (pickedAsset.mimeType) {
+        const mimeParts = pickedAsset.mimeType.split('/');
+        if (mimeParts.length > 1) {
+          const rawExt = mimeParts[1].toLowerCase();
+          if (rawExt === 'jpeg' || rawExt === 'jpg') fileExt = 'jpg';
+          else if (rawExt === 'png') fileExt = 'png';
+          else if (rawExt === 'webp') fileExt = 'webp';
+          else fileExt = rawExt;
+        }
+      } else if (pickedAsset.fileName) {
+        const nameParts = pickedAsset.fileName.split('.');
+        if (nameParts.length > 1) {
+          fileExt = nameParts.pop()?.toLowerCase() || fileExt;
+        }
+      }
+
+      const fileName = `group_${conversationId}_${Date.now()}.${fileExt}`;
+      const fileType = pickedAsset.mimeType || 'image/jpeg';
+
+      if (Platform.OS === 'web') {
+        const response = await fetch(pickedAsset.uri);
+        const blob = await response.blob();
+        formData.append('file', blob, fileName);
+      } else {
+        formData.append('file', {
+          uri: pickedAsset.uri,
+          name: fileName,
+          type: fileType,
+        } as any);
+      }
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_BASE_URL}/conversations/${conversationId}/avatar`);
+      
+      if (token) {
+        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      }
+
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          const percentComplete = Math.round((event.loaded / event.total) * 100);
+          setUploadProgress(percentComplete);
+        }
+      };
+
+      xhr.onload = () => {
+        setUploadingAvatar(false);
+        try {
+          const response = JSON.parse(xhr.responseText || '{}');
+          if (xhr.status >= 200 && xhr.status < 300 && response.status === 'success') {
+            const uploadedUrl = response.avatar;
+            useConversationStore.getState().updateConversationAvatar(conversationId, uploadedUrl);
+            setViewerImageUrl(uploadedUrl);
+            Alert.alert('Thành công', 'Đã cập nhật ảnh đại diện nhóm thành công!');
+          } else {
+            Alert.alert('Lỗi cập nhật', response.message || 'Không thể cập nhật ảnh nhóm.');
+          }
+        } catch (err) {
+          console.error(err);
+          Alert.alert('Lỗi phản hồi', 'Máy chủ trả về kết quả không hợp lệ.');
+        }
+      };
+
+      xhr.onerror = () => {
+        setUploadingAvatar(false);
+        Alert.alert('Lỗi kết nối', 'Không thể kết nối đến máy chủ.');
+      };
+
+      xhr.send(formData);
+    } catch (err: any) {
+      setUploadingAvatar(false);
+      console.error('Group avatar upload error:', err);
+      Alert.alert('Lỗi', 'Không thể đổi ảnh đại diện nhóm.');
+    }
+  };
 
   // Add Member Modal States
   const [addModalVisible, setAddModalVisible] = useState(false);
@@ -433,7 +570,26 @@ export function GroupInfoModal({
             <ScrollView contentContainerStyle={styles.scrollContent}>
               {/* Group Avatar and Editable Name */}
               <View style={styles.avatarSection}>
-                <Image source={{ uri: activeThread.avatar }} style={styles.groupAvatar} />
+                <View style={styles.groupAvatarWrapper}>
+                  <TouchableOpacity onPress={handleViewGroupAvatar} activeOpacity={0.8}>
+                    <Image source={{ uri: activeThread.avatar }} style={styles.groupAvatar} />
+                  </TouchableOpacity>
+                  {canManage && (
+                    <TouchableOpacity
+                      style={[styles.cameraIconContainer, { backgroundColor: colors.tint }]}
+                      onPress={handlePickAndUploadGroupAvatar}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="camera" size={16} color="#ffffff" />
+                    </TouchableOpacity>
+                  )}
+                  {uploadingAvatar && (
+                    <View style={styles.avatarProgressOverlay}>
+                      <ActivityIndicator size="small" color="#ffffff" />
+                      <Text style={styles.progressText}>{uploadProgress}%</Text>
+                    </View>
+                  )}
+                </View>
                 
                 {isRenaming ? (
                   <View style={styles.renameWrapper}>
@@ -500,10 +656,12 @@ export function GroupInfoModal({
 
                   return (
                     <View key={String(targetUserId)} style={[styles.memberRow, { borderBottomColor: colors.border }]}>
-                      <Image
-                        source={{ uri: member.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150&q=80' }}
-                        style={styles.memberAvatar}
-                      />
+                      <TouchableOpacity onPress={() => handleViewMemberAvatar(member.avatar, member.name)} activeOpacity={0.8}>
+                        <Image
+                          source={{ uri: member.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150&q=80' }}
+                          style={styles.memberAvatar}
+                        />
+                      </TouchableOpacity>
                       <View style={styles.memberInfo}>
                         <Text style={[styles.memberName, { color: colors.text }]}>
                           {member.name} {Number(targetUserId) === Number(currentUser.id) && '(Bạn)'}
@@ -614,6 +772,53 @@ export function GroupInfoModal({
             </View>
           )}
         </SafeAreaView>
+      </Modal>
+
+      {/* Full Screen Image Viewer Modal */}
+      <Modal
+        visible={viewerVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setViewerVisible(false)}
+      >
+        <View style={styles.viewerContainer}>
+          {/* Header Row */}
+          <View style={styles.viewerHeader}>
+            <TouchableOpacity
+              style={styles.viewerCloseBtn}
+              onPress={() => setViewerVisible(false)}
+            >
+              <Ionicons name="close" size={26} color="#ffffff" />
+            </TouchableOpacity>
+            <Text style={styles.viewerTitle}>{viewerTitle}</Text>
+            <View style={{ width: 40 }} />
+          </View>
+
+          {/* Main Image View */}
+          <View style={styles.viewerImageWrapper}>
+            <Image
+              source={{ uri: viewerImageUrl }}
+              style={styles.viewerImage}
+              resizeMode="contain"
+            />
+          </View>
+
+          {/* Bottom Edit Action (Only for Group avatar and if manager/admin) */}
+          {viewerIsGroup && canManage && !uploadingAvatar && (
+            <TouchableOpacity
+              style={[styles.viewerEditBtn, { backgroundColor: colors.tint }]}
+              onPress={() => {
+                setViewerVisible(false);
+                setTimeout(() => {
+                  handlePickAndUploadGroupAvatar();
+                }, 300);
+              }}
+            >
+              <Ionicons name="camera-outline" size={20} color="#ffffff" style={{ marginRight: 8 }} />
+              <Text style={styles.viewerEditText}>Thay đổi ảnh</Text>
+            </TouchableOpacity>
+          )}
+        </View>
       </Modal>
     </Modal>
   );
@@ -852,6 +1057,101 @@ const styles = StyleSheet.create({
     borderRadius: 22,
   },
   userName: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  groupAvatarWrapper: {
+    position: 'relative',
+    width: 90,
+    height: 90,
+    marginBottom: 12,
+  },
+  cameraIconContainer: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#ffffff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 1.5,
+    elevation: 2,
+  },
+  avatarProgressOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 45,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  progressText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: 'bold',
+    marginTop: 2,
+  },
+  viewerContainer: {
+    flex: 1,
+    backgroundColor: '#000000',
+    justifyContent: 'space-between',
+    paddingVertical: Platform.OS === 'ios' ? 50 : 20,
+  },
+  viewerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    width: '100%',
+    zIndex: 10,
+  },
+  viewerCloseBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  viewerTitle: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  viewerImageWrapper: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: '100%',
+    padding: 10,
+  },
+  viewerImage: {
+    width: '100%',
+    height: '100%',
+    maxHeight: 600,
+  },
+  viewerEditBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 25,
+    marginBottom: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  viewerEditText: {
+    color: '#ffffff',
     fontSize: 14,
     fontWeight: '700',
   },

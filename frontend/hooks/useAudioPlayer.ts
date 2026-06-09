@@ -11,6 +11,11 @@ export function useAudioPlayer(messageId: string | number) {
   const onPlaybackStatusUpdate = useCallback((status: any) => {
     if (!status.isLoaded) {
       if (status.error) {
+        const error = status.error;
+        console.error(
+          '[VOICE_DEBUG] PLAYBACK_ERROR',
+          error
+        );
         setError(`Playback error: ${status.error}`);
       }
       return;
@@ -23,11 +28,11 @@ export function useAudioPlayer(messageId: string | number) {
     }
   }, []);
 
-  const play = useCallback(async (sourceUrl: string) => {
+  const play = useCallback(async (sourceUrl: string, mimeType: string = 'audio/m4a') => {
     setIsLoading(true);
     setError(null);
     try {
-      await audioManager.play(messageId, sourceUrl, onPlaybackStatusUpdate);
+      await audioManager.play(messageId, sourceUrl, mimeType, onPlaybackStatusUpdate);
     } catch (err: any) {
       setError(err?.message || 'Không thể phát âm thanh.');
     } finally {

@@ -18,6 +18,28 @@ export interface PendingVoice {
   client_message_id: string;
   userId: number;
   retryCount?: number;
+  mimeType?: string;
+}
+
+function getExtensionFromMimeType(mimeType: string): string {
+  const map: { [key: string]: string } = {
+    'audio/webm': 'webm',
+    'audio/webm;codecs=opus': 'webm',
+    'audio/ogg': 'ogg',
+    'audio/mp4': 'm4a',
+    'audio/m4a': 'm4a',
+    'audio/x-m4a': 'm4a',
+    'audio/aac': 'aac',
+    'audio/x-aac': 'aac',
+    'audio/mpeg': 'mp3',
+    'audio/mp3': 'mp3',
+    'audio/wav': 'wav',
+    'audio/x-wav': 'wav',
+    'audio/3gpp': '3gp',
+    'audio/3gp': '3gp',
+  };
+  const cleanMime = mimeType.split(';')[0].toLowerCase().trim();
+  return map[cleanMime] || 'm4a';
 }
 
 type QueueListener = (queue: PendingVoice[]) => void;
@@ -84,6 +106,13 @@ class VoiceUploadWorker {
   }
 
   async addToQueue(item: Omit<PendingVoice, 'uploadProgress' | 'status' | 'retryCount'>) {
+    console.log(
+      '[VOICE_DEBUG] QUEUE_ADD',
+      {
+        uri: item.localUri,
+        duration: item.duration
+      }
+    );
     // Check if file size
     let fileSize = 0;
     if (Platform.OS !== 'web') {
@@ -97,12 +126,35 @@ class VoiceUploadWorker {
       }
     }
 
+    let mimeType = 'audio/m4a';
+    if (Platform.OS === 'web') {
+      try {
+        const audioResponse = await fetch(item.localUri);
+        const audioBlob = await audioResponse.blob();
+        mimeType = audioBlob.type || 'audio/webm';
+      } catch (err) {
+        console.error('Error fetching blob type in addToQueue:', err);
+        mimeType = 'audio/webm'; // fallback for Web
+      }
+    } else {
+      const fileExt = item.localUri.split('.').pop()?.toLowerCase() || 'm4a';
+      if (fileExt === 'm4a') mimeType = 'audio/m4a';
+      else if (fileExt === 'mp4') mimeType = 'audio/mp4';
+      else if (fileExt === 'aac') mimeType = 'audio/aac';
+      else if (fileExt === '3gp' || fileExt === '3gpp') mimeType = 'audio/3gpp';
+      else if (fileExt === 'wav') mimeType = 'audio/wav';
+      else if (fileExt === 'ogg') mimeType = 'audio/ogg';
+      else if (fileExt === 'webm') mimeType = 'audio/webm';
+      else mimeType = 'audio/m4a';
+    }
+
     const newItem: PendingVoice = {
       ...item,
       uploadProgress: 0,
       status: 'pending',
       fileSize,
       retryCount: 0,
+      mimeType,
     };
 
     // Remove if already exists to avoid duplicates
@@ -132,6 +184,12 @@ class VoiceUploadWorker {
   }
 
   private async uploadItem(item: PendingVoice) {
+    console.log(
+      '[VOICE_DEBUG] UPLOAD_START',
+      {
+        uri: item.localUri
+      }
+    );
     console.log(`[UploadWorker] Processing voice message: ${item.client_message_id}`);
     
     // Update status to uploading
@@ -157,8 +215,23 @@ class VoiceUploadWorker {
     }
 
     try {
-      const ext = 'm4a';
+      const mimeType = item.mimeType || 'audio/m4a';
+      let audioBlob: any = null;
+
+      if (Platform.OS === 'web') {
+        const audioResponse = await fetch(item.localUri);
+        audioBlob = await audioResponse.blob();
+      }
+
+      const ext = getExtensionFromMimeType(mimeType);
       const fileName = `chat-voice/${new Date().getFullYear()}/${String(new Date().getMonth() + 1).padStart(2, '0')}/voice_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+
+      console.log('[VOICE_UPLOAD]', {
+        fileName,
+        mimeType,
+        size: item.fileSize || audioBlob?.size || 0,
+        extension: ext
+      });
 
       // 1. Get Signed URL from Backend
       const signResponse = await fetch(`${API_BASE_URL}/upload/sign-upload`, {
@@ -168,7 +241,7 @@ class VoiceUploadWorker {
         },
         body: JSON.stringify({
           fileName,
-          contentType: `audio/${ext}`,
+          contentType: mimeType,
           user_id: item.userId,
         }),
       });
@@ -183,18 +256,24 @@ class VoiceUploadWorker {
       }
 
       const signedUrl = signResult.signedUrl;
+      console.log(
+        '[VOICE_DEBUG] SIGNED_UPLOAD_URL',
+        signedUrl
+      );
 
       let uploadStatus = 0;
 
       if (Platform.OS === 'web') {
-        // 2. Load audio blob
-        const audioResponse = await fetch(item.localUri);
-        const audioBlob = await audioResponse.blob();
+        console.log('[VOICE_MIME_DEBUG]', {
+          platform: Platform.OS,
+          ext,
+          mimeType
+        });
 
         // 3. PUT binary directly to Supabase Storage
         const xhr = new XMLHttpRequest();
         xhr.open('PUT', signedUrl, true);
-        xhr.setRequestHeader('Content-Type', audioBlob.type || `audio/${ext}`);
+        xhr.setRequestHeader('Content-Type', mimeType);
 
         xhr.upload.onprogress = (event) => {
           if (event.lengthComputable) {
@@ -215,16 +294,28 @@ class VoiceUploadWorker {
         xhr.send(audioBlob);
         const uploadRes = await uploadPromise;
         uploadStatus = uploadRes.status;
+        console.log(
+          '[VOICE_DEBUG] UPLOAD_RESPONSE',
+          {
+            status: uploadRes.status,
+            body: uploadRes.text
+          }
+        );
       } else {
         // On native platforms (iOS/Android), use FileSystem.createUploadTask
         // which does not suffer from fetch local file failures
         console.log(`[UploadWorker] Starting native binary upload via Expo FileSystem...`);
+        console.log('[VOICE_MIME_DEBUG]', {
+          platform: Platform.OS,
+          ext,
+          mimeType
+        });
         const uploadTask = FileSystem.createUploadTask(
           signedUrl,
           item.localUri,
           {
             headers: {
-              'Content-Type': `audio/${ext}`,
+              'Content-Type': mimeType,
             },
             httpMethod: 'PUT',
             uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
@@ -240,6 +331,13 @@ class VoiceUploadWorker {
           throw new Error('Native upload returned empty response.');
         }
         uploadStatus = uploadRes.status;
+        console.log(
+          '[VOICE_DEBUG] UPLOAD_RESPONSE',
+          {
+            status: uploadRes.status,
+            body: uploadRes.body
+          }
+        );
         console.log(`[UploadWorker] Native upload completed with status: ${uploadStatus}`);
       }
 
@@ -252,18 +350,33 @@ class VoiceUploadWorker {
       const host = match ? match[1] : '';
       const attachmentUrl = `${host}/storage/v1/object/private/media/${fileName}`;
 
+      const payload = {
+        conversation_id: item.roomId,
+        sender_id: item.userId,
+        message: '[Tin nhắn thoại]',
+        type: 'voice',
+        attachment_url: attachmentUrl,
+        attachment_duration: item.duration,
+        attachment_mime_type: mimeType,
+        client_message_id: item.client_message_id,
+      };
+
+      console.log('[VOICE_UPLOAD_DEBUG]', {
+        signedUrl,
+        uploadStatus,
+        attachmentUrl,
+        mimeType,
+        ext,
+        payload
+      });
+
       // 5. Send message via Socket
       if (this.socket && this.socket.connected) {
-        this.socket.emit('send_message', {
-          conversation_id: item.roomId,
-          sender_id: item.userId,
-          message: '[Tin nhắn thoại]',
-          type: 'voice',
-          attachment_url: attachmentUrl,
-          attachment_duration: item.duration,
-          attachment_mime_type: `audio/${ext}`,
-          client_message_id: item.client_message_id,
-        });
+        console.log(
+          '[VOICE_DEBUG] SOCKET_SEND_VOICE',
+          payload
+        );
+        this.socket.emit('send_message', payload);
 
         // Mark as sent
         this.updateItemStatus(item.client_message_id, 'sent', 100);

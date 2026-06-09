@@ -5,10 +5,12 @@ export class VoiceRecorderService {
 
   async requestPermissions(): Promise<boolean> {
     try {
-      const { status } = await Audio.getPermissionsAsync();
-      if (status !== 'granted') {
-        const { status: newStatus } = await Audio.requestPermissionsAsync();
-        return newStatus === 'granted';
+      const permissionStatus = await Audio.getPermissionsAsync();
+      console.log('[MIC_PERMISSION]', permissionStatus);
+      if (permissionStatus.status !== 'granted') {
+        const newStatus = await Audio.requestPermissionsAsync();
+        console.log('[MIC_PERMISSION_REQUESTED]', newStatus);
+        return newStatus.status === 'granted';
       }
       return true;
     } catch (err) {
@@ -18,29 +20,40 @@ export class VoiceRecorderService {
   }
 
   async start(): Promise<void> {
+    console.log('[VOICE_START_RECORDING]', { timestamp: Date.now() });
     const hasPermission = await this.requestPermissions();
     if (!hasPermission) {
-      throw new Error('Quyền sử dụng microphone bị từ chối.');
+      const err = new Error('Quyền sử dụng microphone bị từ chối.');
+      console.log('[VOICE_RECORDING_ERROR]', err.message);
+      throw err;
     }
 
-    await Audio.setAudioModeAsync({
-      allowsRecordingIOS: true,
-      playsInSilentModeIOS: true,
-      staysActiveInBackground: false,
-      playThroughEarpieceAndroid: false,
-    });
+    try {
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        playThroughEarpieceAndroid: false,
+      });
 
-    const { recording } = await Audio.Recording.createAsync(
-      Audio.RecordingOptionsPresets.HIGH_QUALITY
-    );
-    this.recording = recording;
+      const { recording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+      this.recording = recording;
+      console.log('[VOICE_RECORDING_CREATED]', { exists: !!recording });
+    } catch (err: any) {
+      console.log('[VOICE_RECORDING_ERROR]', err.message);
+      throw err;
+    }
   }
 
   async stop(): Promise<string | null> {
+    console.log('[VOICE_RECORDING_STOP]', { exists: !!this.recording });
     if (!this.recording) return null;
     try {
       await this.recording.stopAndUnloadAsync();
       const uri = this.recording.getURI();
+      console.log('[VOICE_RECORDING_URI]', uri);
       
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: false,
@@ -50,7 +63,8 @@ export class VoiceRecorderService {
       });
 
       return uri;
-    } catch (err) {
+    } catch (err: any) {
+      console.log('[VOICE_RECORDING_ERROR]', err.message);
       console.error('Failed to stop recording service:', err);
       return null;
     } finally {
@@ -66,7 +80,8 @@ export class VoiceRecorderService {
         allowsRecordingIOS: false,
         playsInSilentModeIOS: true,
       });
-    } catch (err) {
+    } catch (err: any) {
+      console.log('[VOICE_RECORDING_ERROR]', err.message);
       console.error('Failed to cancel recording service:', err);
     } finally {
       this.recording = null;

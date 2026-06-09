@@ -5,6 +5,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAudioPlayer } from '../hooks/useAudioPlayer';
@@ -13,6 +14,7 @@ import { API_BASE_URL } from '../constants/Config';
 interface VoiceMessageProps {
   messageId: string | number;
   attachmentUrl: string;
+  attachmentMimeType?: string | null;
   duration: number; // duration in seconds
   currentUserId?: number;
   isMine: boolean;
@@ -30,6 +32,7 @@ const WAVEFORM_BARS = [10, 16, 24, 14, 8, 18, 26, 20, 14, 10, 18, 24, 14, 8, 12]
 export default function VoiceMessage({
   messageId,
   attachmentUrl,
+  attachmentMimeType,
   duration,
   currentUserId,
   isMine,
@@ -54,6 +57,11 @@ export default function VoiceMessage({
     if (!currentUserId) return null;
 
     setIsFetchingUrl(true);
+    console.log('[VOICE PLAYBACK REQUEST]', {
+      attachment_url: attachmentUrl,
+      user_id: currentUserId
+    });
+
     try {
       const response = await fetch(`${API_BASE_URL}/upload/sign-read`, {
         method: 'POST',
@@ -63,6 +71,7 @@ export default function VoiceMessage({
         body: JSON.stringify({
           attachment_url: attachmentUrl,
           user_id: currentUserId,
+          platform: Platform.OS,
         }),
       });
       const result = await response.json();
@@ -88,11 +97,23 @@ export default function VoiceMessage({
       await pause();
     } else {
       if (isLocalFile) {
-        await play(attachmentUrl);
+        console.log('[VOICE_PLAYBACK]', {
+          messageId,
+          mimeType: attachmentMimeType || 'audio/m4a',
+          signedUrl: attachmentUrl,
+          platform: Platform.OS
+        });
+        await play(attachmentUrl, attachmentMimeType || 'audio/m4a');
       } else {
         const url = await fetchSignedUrl();
         if (url) {
-          await play(url);
+          console.log('[VOICE_PLAYBACK]', {
+            messageId,
+            mimeType: attachmentMimeType || 'audio/m4a',
+            signedUrl: url,
+            platform: Platform.OS
+          });
+          await play(url, attachmentMimeType || 'audio/m4a');
         }
       }
     }

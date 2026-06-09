@@ -68,6 +68,7 @@ interface ConversationStore {
   addMemberToGroup: (conversationId: string, member: GroupMember) => void;
   removeMemberFromGroup: (conversationId: string, userId: number) => void;
   transferCreator: (conversationId: string, newCreatorId: string | number) => void;
+  updateConversationAvatar: (conversationId: string, avatarUrl: string) => void;
   removeConversation: (conversationId: string) => void;
   replaceConversation: (updatedConversation: ChatThread) => void;
   updateLastMessage: (conversationId: string, messageId: number, newMessageText: string) => void;
@@ -260,6 +261,14 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
     set((state) => ({
       conversations: state.conversations.map((c) =>
         String(c.id) === convId ? { ...c, createdBy: String(newCreatorId) } : c
+      ),
+    }));
+  },
+  updateConversationAvatar: (conversationId, avatarUrl) => {
+    const convId = String(conversationId);
+    set((state) => ({
+      conversations: state.conversations.map((c) =>
+        String(c.id) === convId ? { ...c, avatar: avatarUrl } : c
       ),
     }));
   },

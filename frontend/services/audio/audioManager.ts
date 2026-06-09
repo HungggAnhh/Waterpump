@@ -29,6 +29,7 @@ export class AudioManagerService {
   async play(
     messageId: string | number,
     sourceUrl: string,
+    mimeType: string,
     onStatusUpdate: (status: any) => void
   ) {
     // Stop any active playing audio first
@@ -44,7 +45,7 @@ export class AudioManagerService {
     this.lastCallback = onStatusUpdate;
 
     try {
-      await this.player.loadAndPlay(messageId, sourceUrl, (status) => {
+      await this.player.loadAndPlay(messageId, sourceUrl, mimeType, (status) => {
         if (status.isLoaded && status.didJustFinish) {
           this.activeMessageId = null;
           this.lastCallback = null;

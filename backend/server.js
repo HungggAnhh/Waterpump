@@ -75,6 +75,10 @@ const io     = new Server(server, {
 // Chia sẻ instance socket.io cho các Express routes
 app.set('io', io);
 
+// Khởi tạo Background Queue Worker cho Voice Normalization
+const voiceQueue = require('./services/voiceQueue');
+voiceQueue.init(io);
+
 // ─── Online Users Map ─────────────────────────────────────────────
 const onlineUsers = new Map(); // userId → userDetail
 const activeCalls = new Map(); // tracks active calling sessions: userId <-> peerId (bidirectional)
@@ -150,14 +154,30 @@ io.on('connection', (socket) => {
     console.log(`💬 room_${conversation_id} | User ${sender_id}: ${message.substring(0, 50)}`);
 
     try {
+      const procStatus = (type === 'voice') ? 'pending' : null;
+
       // Lưu vào Supabase PostgreSQL
       const insertRes = await query(
-        `INSERT INTO messages (conversation_id, sender_id, message, type, file_url, reply_to, forwarded, attachment_url, attachment_duration, attachment_mime_type, client_message_id) 
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) 
+        `INSERT INTO messages (conversation_id, sender_id, message, type, file_url, reply_to, forwarded, attachment_url, attachment_duration, attachment_mime_type, client_message_id, processing_status, original_attachment_url) 
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) 
          ON CONFLICT (client_message_id) WHERE client_message_id IS NOT NULL 
          DO NOTHING 
          RETURNING id, created_at`,
-        [parseInt(conversation_id), parseInt(sender_id), message, type, file_url, reply_to ? parseInt(reply_to) : null, !!forwarded, attachment_url, attachment_duration ? parseInt(attachment_duration) : null, attachment_mime_type, client_message_id]
+        [
+          parseInt(conversation_id), 
+          parseInt(sender_id), 
+          message, 
+          type, 
+          file_url, 
+          reply_to ? parseInt(reply_to) : null, 
+          !!forwarded, 
+          attachment_url, 
+          attachment_duration ? parseInt(attachment_duration) : null, 
+          attachment_mime_type, 
+          client_message_id,
+          procStatus,
+          type === 'voice' ? attachment_url : null
+        ]
       );
       
       let messageId;
@@ -174,6 +194,12 @@ io.on('connection', (socket) => {
           messageId = Date.now();
           createdAt = new Date().toISOString();
         }
+      }
+
+      // Trigger background normalization queue if message type is voice
+      if (type === 'voice') {
+        const voiceQueue = require('./services/voiceQueue');
+        voiceQueue.trigger();
       }
 
       // Cập nhật database: set last_seen_message_id cho chính người gửi
@@ -227,6 +253,8 @@ io.on('connection', (socket) => {
         attachment_duration: attachment_duration ? parseInt(attachment_duration) : null,
         attachment_mime_type,
         client_message_id,
+        processing_status: procStatus,
+        original_attachment_url: type === 'voice' ? attachment_url : null,
         created_at:      createdAt, // Server database timestamp (ISO Timestamptz)
         raw_time:        createdAt,
         reply_to:        reply_to ? parseInt(reply_to) : null,
