@@ -628,12 +628,12 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                 {isMine && (
                   <View style={styles.statusContainer}>
                     <Ionicons 
-                      name={readBy && readBy.length > 0 ? "checkmark-done" : "checkmark"} 
+                      name={item.status === 'pending' || item.status === 'uploading' ? "time-outline" : (readBy && readBy.length > 0 ? "checkmark-done" : "checkmark")} 
                       size={13} 
                       color={isMine ? 'rgba(255,255,255,0.9)' : colors.tint} 
                     />
                     <Text style={[styles.statusText, { color: isMine ? 'rgba(255,255,255,0.9)' : colors.textSecondary }]}>
-                      {readBy && readBy.length > 0 ? 'Đã xem' : 'Đã gửi'}
+                      {item.status === 'pending' || item.status === 'uploading' ? 'Đang gửi' : (readBy && readBy.length > 0 ? 'Đã xem' : 'Đã gửi')}
                     </Text>
                   </View>
                 )}
@@ -754,6 +754,8 @@ export const MessageItem = React.memo(MessageItemComponent, (prevProps, nextProp
   return (
     prevProps.item.id === nextProps.item.id &&
     prevProps.item.message === nextProps.item.message &&
+    prevProps.item.status === nextProps.item.status &&
+    prevProps.item.uploadProgress === nextProps.item.uploadProgress &&
     prevProps.item.edited === nextProps.item.edited &&
     prevProps.item.recalled === nextProps.item.recalled &&
     prevProps.item.deleted === nextProps.item.deleted &&

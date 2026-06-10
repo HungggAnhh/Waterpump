@@ -142,7 +142,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // 4. Gửi & lưu tin nhắn vào Supabase
+  // 4. Gửi & lưu tin nhắn vào Supabase (Đã tối ưu hóa chạy truy vấn song song & xử lý nền để phản hồi nhanh nhất)
   socket.on('send_message', async (data) => {
     const { conversation_id, sender_id, message, type = 'text', file_url = null, reply_to = null, forwarded = false, attachment_url = null, attachment_duration = null, attachment_mime_type = null, client_message_id = null } = data;
 
@@ -156,8 +156,8 @@ io.on('connection', (socket) => {
     try {
       const procStatus = (type === 'voice') ? 'pending' : null;
 
-      // Lưu vào Supabase PostgreSQL
-      const insertRes = await query(
+      // Chạy song song tất cả các truy vấn CSDL để giảm độ trễ
+      const insertPromise = query(
         `INSERT INTO messages (conversation_id, sender_id, message, type, file_url, reply_to, forwarded, attachment_url, attachment_duration, attachment_mime_type, client_message_id, processing_status, original_attachment_url) 
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) 
          ON CONFLICT (client_message_id) WHERE client_message_id IS NOT NULL 
@@ -179,6 +179,38 @@ io.on('connection', (socket) => {
           type === 'voice' ? attachment_url : null
         ]
       );
+
+      const userPromise = query(
+        'SELECT name, avatar FROM users WHERE id = $1 LIMIT 1',
+        [parseInt(sender_id)]
+      );
+
+      const parentPromise = reply_to ? query(
+        `SELECT m.id, m.message, m.type, m.file_url, m.recalled, u.name AS sender_name
+         FROM messages m
+         JOIN users u ON m.sender_id = u.id
+         WHERE m.id = $1 LIMIT 1`,
+        [parseInt(reply_to)]
+      ) : Promise.resolve({ rows: [] });
+
+      const convPromise = query(
+        'SELECT type FROM conversations WHERE id = $1 LIMIT 1',
+        [parseInt(conversation_id)]
+      );
+
+      const membersPromise = query(
+        'SELECT user_id FROM conversation_users WHERE conversation_id = $1',
+        [parseInt(conversation_id)]
+      );
+
+      // Chờ toàn bộ các truy vấn hoàn thành
+      const [insertRes, userRes, parentRes, convCheck, memberRes] = await Promise.all([
+        insertPromise,
+        userPromise,
+        parentPromise,
+        convPromise,
+        membersPromise
+      ]);
       
       let messageId;
       let createdAt;
@@ -202,42 +234,20 @@ io.on('connection', (socket) => {
         voiceQueue.trigger();
       }
 
-      // Cập nhật database: set last_seen_message_id cho chính người gửi
-      await query(
-        `UPDATE conversation_users
-         SET last_seen_message_id = $1, last_seen_at = NOW()
-         WHERE conversation_id = $2 AND user_id = $3`,
-        [parseInt(messageId), parseInt(conversation_id), parseInt(sender_id)]
-      );
-
-      // Lấy thông tin sender
-      const userRes = await query(
-        'SELECT name, avatar FROM users WHERE id = $1 LIMIT 1',
-        [parseInt(sender_id)]
-      );
       const sender = userRes.rows[0] || {};
 
       // Lấy thông tin tin nhắn gốc được trích dẫn (Reply Quote) nếu có
       let replyToMessage = null;
-      if (reply_to) {
-        const parentRes = await query(
-          `SELECT m.id, m.message, m.type, m.file_url, m.recalled, u.name AS sender_name
-           FROM messages m
-           JOIN users u ON m.sender_id = u.id
-           WHERE m.id = $1 LIMIT 1`,
-          [parseInt(reply_to)]
-        );
-        if (parentRes.rows.length > 0) {
-          const parent = parentRes.rows[0];
-          replyToMessage = {
-            id: parseInt(parent.id),
-            sender_name: parent.sender_name,
-            message: parent.recalled ? "Tin nhắn đã được thu hồi" : parent.message,
-            type: parent.type,
-            file_url: parent.file_url,
-            recalled: !!parent.recalled
-          };
-        }
+      if (reply_to && parentRes.rows.length > 0) {
+        const parent = parentRes.rows[0];
+        replyToMessage = {
+          id: parseInt(parent.id),
+          sender_name: parent.sender_name,
+          message: parent.recalled ? "Tin nhắn đã được thu hồi" : parent.message,
+          type: parent.type,
+          file_url: parent.file_url,
+          recalled: !!parent.recalled
+        };
       }
 
       const messageObject = {
@@ -268,87 +278,7 @@ io.on('connection', (socket) => {
         }
       };
 
-      // Kiểm tra tự động khôi phục cuộc trò chuyện Direct cho thành viên đã xóa
-      const convCheck = await query(
-        'SELECT type FROM conversations WHERE id = $1 LIMIT 1',
-        [parseInt(conversation_id)]
-      );
-      const isDirect = convCheck.rows.length > 0 && convCheck.rows[0].type === 'direct';
-
-      if (isDirect) {
-        const currentParticipants = await query(
-          'SELECT user_id FROM conversation_users WHERE conversation_id = $1',
-          [parseInt(conversation_id)]
-        );
-        
-        if (currentParticipants.rows.length === 1) {
-          // Find the exact other participant in this direct conversation
-          const matchingRes = await query(
-            `SELECT u.id 
-             FROM users u
-             WHERE u.id != $1 AND u.status = 'active'
-               AND EXISTS (
-                 SELECT 1 
-                 FROM conversations c
-                 WHERE c.id = $2 AND c.type = 'direct'
-                   AND (
-                     EXISTS (
-                       SELECT 1 FROM conversation_users cu1 
-                       JOIN conversation_users cu2 ON cu1.conversation_id = cu2.conversation_id
-                       WHERE cu1.conversation_id = c.id AND cu1.user_id = $1 AND cu2.user_id = u.id
-                     )
-                     OR (
-                       EXISTS (SELECT 1 FROM conversation_users cu WHERE cu.conversation_id = c.id AND cu.user_id = $1)
-                       AND NOT EXISTS (SELECT 1 FROM conversation_users cu WHERE cu.conversation_id = c.id AND cu.user_id = u.id)
-                       AND (
-                         EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.sender_id = u.id)
-                         OR EXISTS (SELECT 1 FROM deleted_messages dm JOIN messages m ON dm.message_id = m.id WHERE m.conversation_id = c.id AND dm.user_id = u.id)
-                       )
-                     )
-                     OR (
-                       EXISTS (SELECT 1 FROM conversation_users cu WHERE cu.conversation_id = c.id AND cu.user_id = u.id)
-                       AND NOT EXISTS (SELECT 1 FROM conversation_users cu WHERE cu.conversation_id = c.id AND cu.user_id = $1)
-                       AND (
-                         EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.sender_id = $1)
-                         OR EXISTS (SELECT 1 FROM deleted_messages dm JOIN messages m ON dm.message_id = m.id WHERE m.conversation_id = c.id AND dm.user_id = $1)
-                       )
-                     )
-                     OR (
-                       NOT EXISTS (SELECT 1 FROM conversation_users cu WHERE cu.conversation_id = c.id AND cu.user_id = $1)
-                       AND NOT EXISTS (SELECT 1 FROM conversation_users cu WHERE cu.conversation_id = c.id AND cu.user_id = u.id)
-                       AND (
-                         EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND (m.sender_id = $1 OR m.sender_id = u.id))
-                         OR EXISTS (SELECT 1 FROM deleted_messages dm JOIN messages m ON dm.message_id = m.id WHERE m.conversation_id = c.id AND (dm.user_id = $1 OR dm.user_id = u.id))
-                       )
-                     )
-                   )
-               )
-             LIMIT 1`,
-            [parseInt(sender_id), parseInt(conversation_id)]
-          );
-          
-          let missingUserId = matchingRes.rows.length > 0 ? matchingRes.rows[0].id : null;
-          
-          if (missingUserId) {
-            console.log(`[RESTORE] Recreating missing conversation_users row for user ${missingUserId} in conv ${conversation_id}`);
-            await query(
-              'INSERT INTO conversation_users (conversation_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-              [parseInt(conversation_id), parseInt(missingUserId)]
-            );
-            
-            io.to(`user_${missingUserId}`).emit('conversation_restored', {
-              conversation_id: String(conversation_id)
-            });
-          }
-        }
-      }
-
-      // Phát tới tất cả thành viên phòng chat qua phòng cá nhân
-      const memberRes = await query(
-        'SELECT user_id FROM conversation_users WHERE conversation_id = $1',
-        [parseInt(conversation_id)]
-      );
-
+      // 1. PHÁT TIN NHẮN NGAY LẬP TỨC CHO CÁC THÀNH VIÊN ĐANG ONLINE
       memberRes.rows.forEach(({ user_id }) => {
         io.to(`user_${user_id}`).emit('receive_message', messageObject);
         console.log('[SERVER] Sent receive_message to room:', `user_${user_id}`);
@@ -356,9 +286,84 @@ io.on('connection', (socket) => {
         console.log('[SERVER] message.id:', messageId);
       });
 
-      // Gửi Push Notification cho các thành viên khác trong phòng chat (chạy bất đồng bộ)
+      // 2. CHẠY CÁC TÁC VỤ PHỤ (Cập nhật CSDL, Khôi phục Direct chat, Gửi Push Notification) DƯỚI NỀN BẤT ĐỒNG BỘ
       (async () => {
         try {
+          // A. Cập nhật database: set last_seen_message_id cho chính người gửi
+          await query(
+            `UPDATE conversation_users
+             SET last_seen_message_id = $1, last_seen_at = NOW()
+             WHERE conversation_id = $2 AND user_id = $3`,
+            [parseInt(messageId), parseInt(conversation_id), parseInt(sender_id)]
+          );
+
+          // B. Kiểm tra tự động khôi phục cuộc trò chuyện Direct cho thành viên đã xóa
+          const isDirect = convCheck.rows.length > 0 && convCheck.rows[0].type === 'direct';
+          if (isDirect && memberRes.rows.length === 1) {
+            // Find the exact other participant in this direct conversation
+            const matchingRes = await query(
+              `SELECT u.id 
+               FROM users u
+               WHERE u.id != $1 AND u.status = 'active'
+                 AND EXISTS (
+                   SELECT 1 
+                   FROM conversations c
+                   WHERE c.id = $2 AND c.type = 'direct'
+                     AND (
+                       EXISTS (
+                         SELECT 1 FROM conversation_users cu1 
+                         JOIN conversation_users cu2 ON cu1.conversation_id = cu2.conversation_id
+                         WHERE cu1.conversation_id = c.id AND cu1.user_id = $1 AND cu2.user_id = u.id
+                       )
+                       OR (
+                         EXISTS (SELECT 1 FROM conversation_users cu WHERE cu.conversation_id = c.id AND cu.user_id = $1)
+                         AND NOT EXISTS (SELECT 1 FROM conversation_users cu WHERE cu.conversation_id = c.id AND cu.user_id = u.id)
+                         AND (
+                           EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.sender_id = u.id)
+                           OR EXISTS (SELECT 1 FROM deleted_messages dm JOIN messages m ON dm.message_id = m.id WHERE m.conversation_id = c.id AND dm.user_id = u.id)
+                         )
+                       )
+                       OR (
+                         EXISTS (SELECT 1 FROM conversation_users cu WHERE cu.conversation_id = c.id AND cu.user_id = u.id)
+                         AND NOT EXISTS (SELECT 1 FROM conversation_users cu WHERE cu.conversation_id = c.id AND cu.user_id = $1)
+                         AND (
+                           EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.sender_id = $1)
+                           OR EXISTS (SELECT 1 FROM deleted_messages dm JOIN messages m ON dm.message_id = m.id WHERE m.conversation_id = c.id AND dm.user_id = $1)
+                         )
+                       )
+                       OR (
+                         NOT EXISTS (SELECT 1 FROM conversation_users cu WHERE cu.conversation_id = c.id AND cu.user_id = $1)
+                         AND NOT EXISTS (SELECT 1 FROM conversation_users cu WHERE cu.conversation_id = c.id AND cu.user_id = u.id)
+                         AND (
+                           EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND (m.sender_id = $1 OR m.sender_id = u.id))
+                           OR EXISTS (SELECT 1 FROM deleted_messages dm JOIN messages m ON dm.message_id = m.id WHERE m.conversation_id = c.id AND (dm.user_id = $1 OR dm.user_id = u.id))
+                         )
+                       )
+                     )
+                 )
+               LIMIT 1`,
+              [parseInt(sender_id), parseInt(conversation_id)]
+            );
+            
+            let missingUserId = matchingRes.rows.length > 0 ? matchingRes.rows[0].id : null;
+            
+            if (missingUserId) {
+              console.log(`[RESTORE] Recreating missing conversation_users row for user ${missingUserId} in conv ${conversation_id}`);
+              await query(
+                'INSERT INTO conversation_users (conversation_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+                [parseInt(conversation_id), parseInt(missingUserId)]
+              );
+              
+              io.to(`user_${missingUserId}`).emit('conversation_restored', {
+                conversation_id: String(conversation_id)
+              });
+
+              // Send this message to the restored user's personal room as they were not in memberRes
+              io.to(`user_${missingUserId}`).emit('receive_message', messageObject);
+            }
+          }
+
+          // C. Gửi Push Notification cho các thành viên khác trong phòng chat
           const senderName = sender.name || 'Người dùng';
           // Lọc danh sách người nhận (loại trừ chính người gửi)
           const otherMembers = memberRes.rows.filter(m => m.user_id !== parseInt(sender_id));
@@ -397,8 +402,8 @@ io.on('connection', (socket) => {
               }
             }
           }
-        } catch (pushErr) {
-          console.error('⚠️ [socket] Lỗi gửi push notification cho tin nhắn:', pushErr.message);
+        } catch (bgErr) {
+          console.error('⚠️ [socket] Lỗi xử lý nền gửi tin nhắn/push:', bgErr.message);
         }
       })();
 

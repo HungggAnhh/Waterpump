@@ -215,8 +215,8 @@ class VoiceNotificationService {
     }
   }
 
-  speakTaskAssigned(taskTitle: string) {
-    this.speak(`Bạn vừa được giao nhiệm vụ: ${taskTitle}`, 'assignment');
+  speakTaskAssigned(taskTitle: string, creatorName = 'Thành viên') {
+    this.speak(`${creatorName} vừa giao nhiệm vụ cho bạn: ${taskTitle}`, 'assignment');
   }
 
   speakTaskViewed(viewerName: string) {

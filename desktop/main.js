@@ -23,18 +23,37 @@ if (!gotTheLock) {
 
 // 1. Tạo cửa sổ chính (Main Chat App)
 function createMainWindow() {
+  const preloadPath = path.join(__dirname, 'preload.js');
+  console.log('[PRELOAD_PATH]', preloadPath);
+  console.log('[WEB_PREFERENCES]', {
+    preload: preloadPath,
+    contextIsolation: true,
+    nodeIntegration: false
+  });
+
+  console.log(
+    '[WINDOW_CONFIG]',
+    {
+      preload: preloadPath,
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  );
+
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     minWidth: 800,
     minHeight: 600,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: preloadPath,
       contextIsolation: true,
       nodeIntegration: false,
       backgroundThrottling: false // Giúp ứng dụng không bị ngủ đông khi thu nhỏ, giữ kết nối Realtime/Push luôn hoạt động
     }
   });
+
+  console.log('[MAIN_WINDOW_CREATED]');
 
   // Tự động phê duyệt các quyền hiển thị Thông báo (Notification) để đảm bảo không bị Windows chặn
   mainWindow.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
@@ -44,13 +63,21 @@ function createMainWindow() {
     callback(true); // Chấp nhận các quyền cơ bản khác
   });
 
-  // Tải trực tiếp giao diện Web đã deploy trên Vercel của bạn
-  mainWindow.loadURL('https://waterpump-eta.vercel.app/').catch(() => {
-    // Fallback về localhost nếu muốn chạy thử ở local
-    mainWindow.loadURL('http://localhost:8082').catch(() => {
-      mainWindow.loadURL('http://localhost:8081');
+  // Tải trực tiếp giao diện Web ở local trước (để dev), nếu không chạy thì fallback về bản Vercel đã deploy
+  mainWindow.loadURL('http://localhost:8082').catch(() => {
+    mainWindow.loadURL('https://waterpump-eta.vercel.app/').catch(() => {
+      mainWindow.loadURL('http://localhost:8082');
     });
   });
+
+mainWindow.webContents.on('did-finish-load', () => {
+  console.log(
+    '[MAIN_WINDOW_URL]',
+    mainWindow.webContents.getURL()
+  );
+});
+
+
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -92,6 +119,10 @@ async function triggerScreenshot(options = { excludeSelf: true }) {
       types: ['screen'],
       thumbnailSize: { width: 1920, height: 1080 } // Thumbnail tối ưu, không render full quality tránh lag
     });
+
+    if (!sources || sources.length === 0) {
+      throw new Error('Không tìm thấy nguồn chụp màn hình. Hãy kiểm tra quyền truy cập Screen Recording của ứng dụng.');
+    }
 
     // Mở một cửa sổ overlay transparent cho MỖI monitor
     displays.forEach((display, index) => {
@@ -218,6 +249,81 @@ app.whenReady().then(() => {
     } catch (err) {
       console.error('❌ Lỗi đọc file tạm:', err);
       return null;
+    }
+  });
+
+  // Đọc ảnh từ clipboard
+  ipcMain.handle('clipboard-read-image', async () => {
+    console.log('[MAIN_CLIPBOARD_HANDLER_ENTERED]');
+    console.log('[CLIPBOARD_READ_START]');
+    try {
+      const { clipboard } = require('electron');
+      const image = clipboard.readImage();
+      console.log('[MAIN_CLIPBOARD_IMAGE_EMPTY]', image.isEmpty());
+      if (image.isEmpty()) {
+        console.log('[CLIPBOARD_IMAGE_EMPTY]');
+        console.log('[CLIPBOARD_READ_FAIL] Clipboard is empty or does not contain an image.');
+        return { success: false, error: 'Clipboard does not contain an image.' };
+      }
+      
+      const buffer = image.toPNG();
+      console.log('[MAIN_CLIPBOARD_IMAGE_SIZE]', buffer.length);
+      const sizeBytes = buffer.length;
+      
+      // Reject if larger than 20MB (20 * 1024 * 1024 bytes)
+      if (sizeBytes > 20 * 1024 * 1024) {
+        console.log('[CLIPBOARD_IMAGE_TOO_LARGE]', sizeBytes);
+        return { success: false, error: 'Image size exceeds 20MB limit.' };
+      }
+      
+      const tempDir = os.tmpdir();
+      const filePath = path.join(tempDir, `teamflow_clipboard_${Date.now()}.png`);
+      fs.writeFileSync(filePath, buffer);
+      
+      const size = image.getSize();
+      console.log('[CLIPBOARD_IMAGE_SAVED]', {
+        width: size.width,
+        height: size.height,
+        bufferSize: sizeBytes,
+        savedPath: filePath
+      });
+      
+      return {
+        success: true,
+        filePath,
+        width: size.width,
+        height: size.height,
+        sizeBytes
+      };
+    } catch (err) {
+      console.log('[CLIPBOARD_READ_ERROR]', err.message);
+      console.log('[CLIPBOARD_READ_FAIL]', err.message);
+      return { success: false, error: err.message };
+    }
+  });
+
+  // Xóa file tạm một cách an toàn
+  ipcMain.handle('delete-temp-file', async (event, filePath) => {
+    try {
+      if (!filePath) return { success: false, error: 'No path provided' };
+      const tempDir = os.tmpdir();
+      
+      const normalizedPath = path.normalize(filePath);
+      const normalizedTempDir = path.normalize(tempDir);
+      
+      if (!normalizedPath.startsWith(normalizedTempDir)) {
+        console.log('[TEMP_FILE_DELETE_FAIL] Unauthorized deletion path:', filePath);
+        return { success: false, error: 'Unauthorized path' };
+      }
+      
+      if (fs.existsSync(normalizedPath)) {
+        fs.unlinkSync(normalizedPath);
+        console.log('[TEMP_FILE_DELETE]', normalizedPath);
+      }
+      return { success: true };
+    } catch (err) {
+      console.log('[TEMP_FILE_DELETE_FAIL]', err.message);
+      return { success: false, error: err.message };
     }
   });
 

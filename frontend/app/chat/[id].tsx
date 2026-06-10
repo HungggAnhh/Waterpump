@@ -43,6 +43,16 @@ import * as Haptics from 'expo-haptics';
 import { VoicePlayer } from '../../services/audio/player';
 import { getMessageDayLabel, formatDateTime } from '../../utils/dateTime';
 
+if (typeof window !== 'undefined') {
+  const originalAdd = window.addEventListener;
+  (window as any).addEventListener = function (...args: any[]) {
+    if (args[0] === 'paste') {
+      console.log('[PASTE_LISTENER_REGISTERED]', new Error().stack);
+    }
+    return originalAdd.apply(this, args as any);
+  };
+}
+
 export default function ChatRoomScreen() {
   const { id, messageId } = useLocalSearchParams();
   const conversationId = typeof id === 'string' ? id : Array.isArray(id) ? id[0] : '';
@@ -249,6 +259,14 @@ export default function ChatRoomScreen() {
   const [capturedImagePath, setCapturedImagePath] = useState<string | null>(null);
   const [infoModalVisible, setInfoModalVisible] = useState(false); // Group details modal
 
+  useEffect(() => {
+    console.log('[STATE_CAPTURED_IMAGE_CHANGED]', capturedImagePath);
+  }, [capturedImagePath]);
+
+  useEffect(() => {
+    console.log('[STATE_MODAL_CHANGED]', screenshotModalVisible);
+  }, [screenshotModalVisible]);
+
   // Mentions (@tag)
   const [showTagList, setShowTagList] = useState(false);
   const [tagSearchQuery, setTagSearchQuery] = useState('');
@@ -334,6 +352,227 @@ export default function ChatRoomScreen() {
       setAppState(nextAppState);
     });
     return () => subscription.remove();
+  }, []);
+
+  // Register listener for screenshot captured events
+  useEffect(() => {
+    console.log('[CHATROOM_MOUNT]', Date.now());
+
+    return () => {
+      console.log('[CHATROOM_UNMOUNT]', Date.now());
+    };
+  }, []);
+
+  // Register listener for screenshot captured events
+  useEffect(() => {
+    let isMounted = true;
+    const electronInstance = (window as any).electronAPI;
+    if (electronInstance && typeof electronInstance.onScreenshotCaptured === 'function') {
+      electronInstance.onScreenshotCaptured((filePath: string) => {
+        if (isMounted) {
+          setCapturedImagePath(filePath);
+          setScreenshotModalVisible(true);
+        }
+      });
+    }
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Register clipboard paste listener for Ctrl+V image upload
+  useEffect(() => {
+    let isMounted = true;
+    const handlePaste = async (e: any) => {
+      console.log('[PASTE_VERSION]', '2026-06-10-v7');
+      console.log('[WINDOW_EQUALS_TOP]', window === window.top);
+      console.log('[WINDOW_ELECTRON_API]', typeof (window as any).electronAPI);
+      console.log('[WINDOW_TOP_ELECTRON_API]', typeof (window.top as any)?.electronAPI);
+      console.log('[WINDOW_LOCATION]', window.location.href);
+      console.log('[WINDOW_TOP_LOCATION]', window.top.location.href);
+      console.log('[HANDLE_PASTE_START]');
+
+      console.log(
+        '[RUNTIME_CHECK]',
+        {
+          location: window.location.href,
+          electronAPI:
+            typeof (window as any).electronAPI,
+          getClipboardImage:
+            typeof (window as any)
+              ?.electronAPI
+              ?.getClipboardImage,
+          deleteTempFile:
+            typeof (window as any)
+              ?.electronAPI
+              ?.deleteTempFile,
+          debugApi:
+            typeof (window as any).debugApi,
+          userAgent:
+            navigator.userAgent
+        }
+      );
+
+      console.log('[PASTE_CAPTURE_PHASE]', document.activeElement?.tagName);
+      console.log('[PASTE_EVENT_DETECTED]', {
+        eventType: e.type,
+        activeElement: document.activeElement ? document.activeElement.tagName : 'none',
+        clipboardDataExists: !!e.clipboardData,
+        itemsLength: e.clipboardData?.items ? e.clipboardData.items.length : 0
+      });
+
+      if (e.clipboardData) {
+        console.log(
+          '[CLIPBOARD_ITEMS_DETAIL]',
+          Array.from(e.clipboardData.items).map((item: any) => ({
+            kind: item.kind,
+            type: item.type,
+          }))
+        );
+        console.log(
+          '[CLIPBOARD_TYPES]',
+          e.clipboardData.types
+        );
+      }
+
+      console.log(
+        '[ELECTRON_API_CHECK]',
+        {
+          electronAPI: !!(window as any).electronAPI,
+          getClipboardImage:
+            typeof (window as any).electronAPI?.getClipboardImage,
+        }
+      );
+
+      console.log(
+        '[WINDOW_ELECTRON_API_DUMP]',
+        (window as any).electronAPI
+      );
+
+      console.log(
+        '[WINDOW_KEYS]',
+        Object.keys(window)
+           .filter(
+             k =>
+               k.toLowerCase()
+                 .includes('electron')
+           )
+      );
+
+      console.log(
+        '[DEBUG_API]',
+        (window as any).debugApi
+      );
+
+      console.log('[ELECTRON_INSTANCE_CHECK]', {
+        exists: !!(window as any).electronAPI,
+        keys: (window as any).electronAPI
+          ? Object.keys((window as any).electronAPI)
+          : []
+      });
+
+      if ((window as any).electronAPI) {
+        console.log('[GET_CLIPBOARD_TYPE]',
+          typeof (window as any).electronAPI.getClipboardImage
+        );
+      }
+
+      console.log('[DIRECT_ELECTRON_API_TYPE]', typeof (window as any).electronAPI);
+      console.log('[DIRECT_ELECTRON_API_VALUE]', (window as any).electronAPI);
+      const electronInstance = (window as any).electronAPI;
+      console.log('[LOCAL_ELECTRON_INSTANCE]', electronInstance);
+      if (!electronInstance) return;
+
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      const hasImage =
+        Array.from(items).some((item: any) =>
+          item.type?.startsWith('image/') ||
+          item.kind === 'file'
+        ) ||
+        Array.from(e.clipboardData.types || []).includes('Files');
+
+      console.log(
+        '[CLIPBOARD_DETECTION_RESULT]',
+        {
+          hasImage,
+          items: Array.from(items).map((item: any) => ({
+            kind: item.kind,
+            type: item.type,
+          })),
+          types: Array.from(e.clipboardData.types || []),
+        }
+      );
+
+      if (!hasImage) {
+        console.log('[CLIPBOARD_TEXT_BYPASS]');
+        return; // Case A: Standard fallback to text/URL paste
+      }
+
+      // Case B: Clipboard contains an image
+      e.preventDefault();
+      console.log('[CLIPBOARD_IMAGE_DETECTED]');
+
+      try {
+        console.log(
+          '[CLIPBOARD_IPC_CALL]'
+        );
+        console.log('[IPC_INVOKE_START]');
+        const result = await electronInstance.getClipboardImage();
+        console.log(
+          '[CLIPBOARD_IPC_RESPONSE]',
+          result
+        );
+        console.log('[IPC_INVOKE_RESPONSE]', result);
+        console.log('[AFTER_IPC_RESPONSE]');
+
+        if (result && result.success && result.filePath) {
+          if (isMounted) {
+            console.log('[CLIPBOARD_IMAGE_FOUND]', result.filePath);
+            
+            // Clean up previous temp path if user pasted another image before sending
+            console.log('[BEFORE_SET_IMAGE]');
+            setCapturedImagePath(prev => {
+              if (prev && prev !== result.filePath) {
+                if (typeof electronInstance.deleteTempFile === 'function') {
+                  electronInstance.deleteTempFile(prev);
+                }
+              }
+              return result.filePath;
+            });
+            console.log('[AFTER_SET_IMAGE]');
+
+            console.log(
+              '[STATE_SET_IMAGE]',
+              result.filePath
+            );
+            console.log(
+              '[STATE_OPEN_MODAL]'
+            );
+            console.log('[BEFORE_OPEN_MODAL]');
+            setScreenshotModalVisible(true);
+            console.log('[AFTER_OPEN_MODAL]');
+            console.log('[CLIPBOARD_MODAL_OPEN]');
+          }
+        } else if (result && result.error) {
+          if (result.error.includes('exceeds 20MB limit')) {
+            console.log('[CLIPBOARD_IMAGE_TOO_LARGE]');
+            Alert.alert("Lỗi", "Kích thước ảnh sao chép vượt quá giới hạn 20MB!");
+          } else {
+            console.log('[CLIPBOARD_READ_FAIL]', result.error);
+          }
+        }
+      } catch (err: any) {
+        console.log('[CLIPBOARD_READ_FAIL]', err.message);
+      }
+    };
+
+    window.addEventListener('paste', handlePaste, true);
+    return () => {
+      isMounted = false;
+      window.removeEventListener('paste', handlePaste, true);
+    };
   }, []);
 
   // Keyboard listener to hide emoji panel
@@ -861,12 +1100,45 @@ export default function ChatRoomScreen() {
       return;
     }
 
+    const messageText = inputMessage.trim();
+    const clientMessageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+
+    // 1. Tạo tin nhắn tạm (optimistic message)
+    const optimisticMsg: Message = {
+      id: clientMessageId, // String local ID
+      conversation_id: parseInt(conversationId),
+      sender_id: currentUser.id,
+      sender_name: currentUser.name,
+      sender_avatar: currentUser.avatar,
+      message: messageText,
+      type: 'text',
+      file_url: null,
+      created_at: new Date().toISOString(),
+      raw_time: new Date().toISOString(),
+      reply_to: replyingToMessage ? (typeof replyingToMessage.id === 'number' ? replyingToMessage.id : null) : null,
+      reply_to_message: replyingToMessage ? {
+        id: typeof replyingToMessage.id === 'number' ? replyingToMessage.id : 0,
+        sender_name: replyingToMessage.sender_name,
+        message: replyingToMessage.message,
+        type: replyingToMessage.type,
+        file_url: replyingToMessage.file_url,
+        recalled: replyingToMessage.recalled
+      } : null,
+      client_message_id: clientMessageId,
+      status: 'pending' // Cờ trạng thái đang gửi
+    };
+
+    // 2. Cập nhật state UI ngay lập tức
+    setMessages(prev => [optimisticMsg, ...prev]);
+
+    // 3. Gửi qua socket
     if (socket) {
       const payload: any = {
         conversation_id: parseInt(conversationId),
         sender_id: currentUser.id,
-        message: inputMessage.trim(),
-        type: 'text'
+        message: messageText,
+        type: 'text',
+        client_message_id: clientMessageId
       };
 
       if (replyingToMessage && typeof replyingToMessage.id === 'number') {
@@ -1182,6 +1454,11 @@ export default function ChatRoomScreen() {
   };
 
   const handleSendScreenshot = async (caption: string, base64Data: string) => {
+    const isClipboard = capturedImagePath && capturedImagePath.includes('teamflow_clipboard_');
+    if (isClipboard) {
+      console.log('[CLIPBOARD_UPLOAD_START]');
+    }
+
     try {
       setScreenshotModalVisible(false);
       setUploadingMedia(true);
@@ -1195,7 +1472,7 @@ export default function ChatRoomScreen() {
       const blob = new Blob([byteArray], { type: 'image/jpeg' });
       
       const formData = new FormData();
-      const fileName = `screenshot_${Date.now()}.jpg`;
+      const fileName = isClipboard ? `clipboard_${Date.now()}.jpg` : `screenshot_${Date.now()}.jpg`;
       formData.append('file', blob, fileName);
 
       const response = await fetch(`${API_BASE_URL}/upload`, {
@@ -1207,23 +1484,65 @@ export default function ChatRoomScreen() {
       if (response.ok && result.status === 'success') {
         const fileUrl = result.file_url;
         
+        if (isClipboard) {
+          console.log('[CLIPBOARD_UPLOAD_SUCCESS]');
+        }
+
+        const screenshotMsgText = caption || (isClipboard ? '[Ảnh từ clipboard]' : '[Ảnh chụp màn hình]');
+        const clientMessageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+
+        // Optimistic update
+        const optimisticMsg: Message = {
+          id: clientMessageId,
+          conversation_id: parseInt(conversationId),
+          sender_id: currentUser.id,
+          sender_name: currentUser.name,
+          sender_avatar: currentUser.avatar,
+          message: screenshotMsgText,
+          type: 'image',
+          file_url: fileUrl,
+          created_at: new Date().toISOString(),
+          raw_time: new Date().toISOString(),
+          client_message_id: clientMessageId,
+          status: 'pending'
+        };
+
+        setMessages(prev => [optimisticMsg, ...prev]);
+
         if (socket) {
           socket.emit('send_message', {
             conversation_id: parseInt(conversationId),
             sender_id: currentUser.id,
-            message: caption || '[Ảnh chụp màn hình]',
+            message: screenshotMsgText,
             type: 'image',
-            file_url: fileUrl
+            file_url: fileUrl,
+            client_message_id: clientMessageId
           });
         }
       } else {
+        if (isClipboard) {
+          console.log('[CLIPBOARD_UPLOAD_FAIL]', result.message);
+        }
         Alert.alert("Lỗi tải lên", result.message || "Không thể tải ảnh chụp lên.");
       }
-    } catch (error) {
+    } catch (error: any) {
+      if (isClipboard) {
+        console.log('[CLIPBOARD_UPLOAD_FAIL]', error.message);
+      }
       console.error("Lỗi gửi ảnh chụp màn hình:", error);
       Alert.alert("Lỗi kết nối", "Không thể kết nối đến máy chủ.");
     } finally {
       setUploadingMedia(false);
+      
+      // Cleanup temporary file
+      if (capturedImagePath) {
+        const electronInstance = (window as any).electronAPI;
+        if (electronInstance && typeof electronInstance.deleteTempFile === 'function') {
+          electronInstance.deleteTempFile(capturedImagePath);
+          console.log('[CLIPBOARD_TEMP_DELETE]', capturedImagePath);
+        }
+        setCapturedImagePath(null);
+      }
     }
   };
 
@@ -1299,13 +1618,35 @@ export default function ChatRoomScreen() {
       if (response.ok && uploadResult.status === 'success') {
         const fileUrl = uploadResult.file_url;
 
+        const mediaMsgText = isVideo ? '[Video]' : '[Hình ảnh]';
+        const clientMessageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+
+        // Optimistic update
+        const optimisticMsg: Message = {
+          id: clientMessageId,
+          conversation_id: parseInt(conversationId),
+          sender_id: currentUser.id,
+          sender_name: currentUser.name,
+          sender_avatar: currentUser.avatar,
+          message: mediaMsgText,
+          type: isVideo ? 'file' : 'image',
+          file_url: fileUrl,
+          created_at: new Date().toISOString(),
+          raw_time: new Date().toISOString(),
+          client_message_id: clientMessageId,
+          status: 'pending'
+        };
+
+        setMessages(prev => [optimisticMsg, ...prev]);
+
         if (socket) {
           socket.emit('send_message', {
             conversation_id: parseInt(conversationId),
             sender_id: currentUser.id,
-            message: isVideo ? '[Video]' : '[Hình ảnh]',
+            message: mediaMsgText,
             type: isVideo ? 'file' : 'image',
-            file_url: fileUrl
+            file_url: fileUrl,
+            client_message_id: clientMessageId
           });
         }
       } else {
@@ -2072,6 +2413,13 @@ export default function ChatRoomScreen() {
         imagePath={capturedImagePath}
         onClose={() => {
           setScreenshotModalVisible(false);
+          if (capturedImagePath) {
+            const electronInstance = (window as any).electronAPI;
+            if (electronInstance && typeof electronInstance.deleteTempFile === 'function') {
+              electronInstance.deleteTempFile(capturedImagePath);
+              console.log('[CLIPBOARD_TEMP_DELETE]', capturedImagePath);
+            }
+          }
           setCapturedImagePath(null);
         }}
         onSend={handleSendScreenshot}

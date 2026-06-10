@@ -30,6 +30,8 @@ declare global {
       captureScreen: (options?: { excludeSelf: boolean }) => void;
       onScreenshotCaptured: (callback: (filePath: string) => void) => void;
       readImageFile: (filePath: string) => Promise<string | null>;
+      getClipboardImage: () => Promise<{ success: boolean; filePath?: string; width?: number; height?: number; sizeBytes?: number; error?: string }>;
+      deleteTempFile: (filePath: string) => Promise<{ success: boolean; error?: string }>;
     };
   }
 }
@@ -40,6 +42,14 @@ export const ScreenshotPreviewModal: React.FC<ScreenshotPreviewModalProps> = ({
   onClose,
   onSend
 }) => {
+  console.log(
+    '[MODAL_RENDER]',
+    {
+      visible,
+      imagePath,
+    }
+  );
+
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
 
@@ -47,6 +57,13 @@ export const ScreenshotPreviewModal: React.FC<ScreenshotPreviewModalProps> = ({
   const [base64Data, setBase64Data] = useState<string | null>(null);
   const [caption, setCaption] = useState('');
   const [sending, setSending] = useState(false);
+
+  useEffect(() => {
+    console.log('[MODAL_MOUNTED]');
+    return () => {
+      console.log('[MODAL_UNMOUNTED]');
+    };
+  }, []);
 
   // Khi modal hiện lên và có đường dẫn ảnh tạm -> Đọc file tạm lên Base64
   useEffect(() => {

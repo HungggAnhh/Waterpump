@@ -105,16 +105,18 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     const pendingMsgAlerts = new Map<string, { count: number; timer: any }>();
 
-    socket.on('task_assigned_notification', (data: { task: any, message: string }) => {
+    socket.on('task_assigned_notification', (data: any) => {
       console.log('📡 [SOCKET:TASK_ASSIGNED] Received assignment notification:', data);
-      Alert.alert('Nhiệm vụ mới 📋', data.message || 'Bạn vừa được giao nhiệm vụ mới');
+      const creatorName = data.creator?.name || 'Thành viên';
+      const taskTitle = data.task?.title || 'nhiệm vụ mới';
+      const alertMsg = `${creatorName} vừa giao nhiệm vụ cho bạn: "${taskTitle}"`;
+      Alert.alert('Nhiệm vụ mới 📋', alertMsg);
       
       const currentSettings = settingsRef.current;
       if (currentSettings.enabled && currentSettings.readTaskAssigned) {
         const satisfyFocus = !currentSettings.onlyWhenHidden || (typeof document !== 'undefined' && document.hidden);
         if (satisfyFocus) {
-          const taskTitle = data.task?.title || 'nhiệm vụ mới';
-          voiceNotification.speakTaskAssigned(taskTitle);
+          voiceNotification.speakTaskAssigned(taskTitle, creatorName);
         }
       }
     });
@@ -171,7 +173,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       // Voice Alert for Message
       const currentSettings = settingsRef.current;
-      const isMyMessage = Number(msg.user_id) === Number(user.id);
+      const isMyMessage = Number(msg.sender_id || msg.user_id) === Number(user.id);
       
       if (currentSettings.enabled && currentSettings.readMessages && !isMyMessage) {
         // Smart Context Rule: Do not speak if the active conversation is currently open
@@ -183,7 +185,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const satisfyFocus = !currentSettings.onlyWhenHidden || isHidden;
 
         if (shouldAlert && satisfyFocus) {
-          const senderName = msg.user_name || 'Thành viên';
+          const senderName = msg.sender_name || msg.user_name || 'Thành viên';
           const existing = pendingMsgAlerts.get(senderName);
           
           let currentCount = 1;
