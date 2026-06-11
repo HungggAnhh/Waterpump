@@ -79,6 +79,10 @@ app.set('io', io);
 const voiceQueue = require('./services/voiceQueue');
 voiceQueue.init(io);
 
+// Khởi tạo Auto Data Retention Policy Scheduler
+const autoCleanup = require('./services/autoCleanup');
+autoCleanup.init();
+
 // ─── Online Users Map ─────────────────────────────────────────────
 const onlineUsers = new Map(); // userId → userDetail
 const activeCalls = new Map(); // tracks active calling sessions: userId <-> peerId (bidirectional)

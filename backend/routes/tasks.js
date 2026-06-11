@@ -54,7 +54,9 @@ router.get('/', async (req, res) => {
     creator_id,
     from_date,
     to_date,
-    quick_filter
+    quick_filter,
+    show_archived,
+    archived_only
   } = req.query;
 
   try {
@@ -74,6 +76,13 @@ router.get('/', async (req, res) => {
       ) AS assigned_at`;
     }
 
+    // Determine archive visibility:
+    // archived_only=true  → show ONLY archived tasks (admin)
+    // show_archived=true  → show all (active + archived)
+    // default             → hide archived tasks
+    const showOnlyArchived = user.role === 'admin' && archived_only === 'true';
+    const showAllIncArchived = user.role === 'admin' && show_archived === 'true';
+
     let queryText = `
       SELECT ${selectFields}
       FROM tasks t 
@@ -81,6 +90,12 @@ router.get('/', async (req, res) => {
       LEFT JOIN users c ON t.created_by = c.id
       WHERE (t.is_deleted = FALSE OR t.is_deleted IS NULL)
     `;
+
+    if (showOnlyArchived) {
+      queryText += ` AND t.is_archived = TRUE`;
+    } else if (!showAllIncArchived) {
+      queryText += ` AND (t.is_archived = FALSE OR t.is_archived IS NULL)`;
+    }
 
     const queryParams = [];
     let paramIndex = 1;
@@ -768,13 +783,21 @@ router.get('/workspaces/:workspaceId/tasks', async (req, res) => {
 
   const workspaceId = parseInt(req.params.workspaceId);
 
+  const showArchived = req.query.show_archived === 'true' && user.role === 'admin';
+  const archivedOnly = req.query.archived_only === 'true' && user.role === 'admin';
+
   try {
+    let archiveClause = ' AND (t.is_archived = FALSE OR t.is_archived IS NULL)';
+    if (archivedOnly) archiveClause = ' AND t.is_archived = TRUE';
+    else if (showArchived) archiveClause = '';
+
     const result = await query(
       `SELECT t.*, 
               c.name AS creator_name, c.avatar AS creator_avatar 
        FROM tasks t 
        LEFT JOIN users c ON t.created_by = c.id
-       WHERE t.workspace_id = $1 
+       WHERE t.workspace_id = $1
+       ${archiveClause}
        ORDER BY t.id ASC`,
       [workspaceId]
     );
@@ -844,13 +867,21 @@ router.get('/pages/:pageId/tasks', async (req, res) => {
 
   const pageId = parseInt(req.params.pageId);
 
+  const showArchivedPage = req.query.show_archived === 'true' && user.role === 'admin';
+  const archivedOnlyPage = req.query.archived_only === 'true' && user.role === 'admin';
+
   try {
+    let archiveClausePage = ' AND (t.is_archived = FALSE OR t.is_archived IS NULL)';
+    if (archivedOnlyPage) archiveClausePage = ' AND t.is_archived = TRUE';
+    else if (showArchivedPage) archiveClausePage = '';
+
     const result = await query(
       `SELECT t.*, 
               c.name AS creator_name, c.avatar AS creator_avatar 
        FROM tasks t 
        LEFT JOIN users c ON t.created_by = c.id
-       WHERE t.page_id = $1 
+       WHERE t.page_id = $1
+       ${archiveClausePage}
        ORDER BY t.id ASC`,
       [pageId]
     );
@@ -1585,7 +1616,8 @@ router.get('/stats', async (req, res) => {
           COUNT(CASE WHEN approval_status = 'revision_required' THEN 1 END)::int AS revision_required,
           COUNT(CASE WHEN approval_status = 'completed' THEN 1 END)::int AS completed
         FROM tasks
-        WHERE is_deleted = FALSE OR is_deleted IS NULL
+        WHERE (is_deleted = FALSE OR is_deleted IS NULL)
+          AND (is_archived = FALSE OR is_archived IS NULL)
       `);
       viewedRes = await query(`
         SELECT COUNT(DISTINCT t.id)::int AS viewed
@@ -1749,9 +1781,72 @@ router.get('/stats', async (req, res) => {
       user_completed: assignedToMeStats.completed || 0
     };
 
+    // Admin-only: archived task KPI
+    if (user.role === 'admin') {
+      const archivedStatsRes = await query(`
+        SELECT
+          COUNT(*)::int AS total_archived,
+          COUNT(CASE WHEN archived_at >= DATE_TRUNC('month', NOW()) THEN 1 END)::int AS archived_this_month,
+          COUNT(CASE WHEN archived_at >= DATE_TRUNC('week', NOW()) THEN 1 END)::int AS archived_this_week
+        FROM tasks
+        WHERE is_archived = TRUE
+          AND (is_deleted = FALSE OR is_deleted IS NULL)
+      `);
+      const archivedRow = archivedStatsRes.rows[0] || { total_archived: 0, archived_this_month: 0, archived_this_week: 0 };
+      statsData.archived = {
+        total: archivedRow.total_archived || 0,
+        this_month: archivedRow.archived_this_month || 0,
+        this_week: archivedRow.archived_this_week || 0
+      };
+    }
+
     return res.status(200).json({ status: 'success', data: statsData });
   } catch (err) {
     return res.status(500).json({ status: 'error', message: 'Lỗi tính toán thống kê: ' + err.message });
+  }
+});
+
+// POST /api/tasks/tasks/:taskId/restore — Khôi phục nhiệm vụ lưu trữ (chỉ Admin)
+router.post('/tasks/:taskId/restore', async (req, res) => {
+  const user = getAuthUser(req);
+  if (!user || user.role !== 'admin') {
+    return res.status(403).json({ status: 'error', message: 'Chỉ quản trị viên mới được phép khôi phục nhiệm vụ lưu trữ.' });
+  }
+
+  const taskId = parseInt(req.params.taskId);
+  if (isNaN(taskId)) {
+    return res.status(400).json({ status: 'error', message: 'ID nhiệm vụ không hợp lệ.' });
+  }
+
+  try {
+    const taskRes = await query('SELECT id, is_archived, title FROM tasks WHERE id = $1 AND (is_deleted = FALSE OR is_deleted IS NULL)', [taskId]);
+    if (taskRes.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'Không tìm thấy nhiệm vụ.' });
+    }
+    const task = taskRes.rows[0];
+    if (!task.is_archived) {
+      return res.status(400).json({ status: 'error', message: 'Nhiệm vụ này chưa được lưu trữ.' });
+    }
+
+    const result = await query(
+      `UPDATE tasks
+       SET is_archived = FALSE,
+           archived_at = NULL,
+           updated_at = NOW()
+       WHERE id = $1 RETURNING *`,
+      [taskId]
+    );
+    const updatedTask = result.rows[0];
+
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('task_updated', { id: taskId, is_archived: false });
+    }
+
+    console.log(`📦 [task-retention] Task restored from archive: ID ${taskId} – "${task.title}"`);
+    return res.status(200).json({ status: 'success', message: 'Đã khôi phục nhiệm vụ thành công.', data: updatedTask });
+  } catch (err) {
+    return res.status(500).json({ status: 'error', message: 'Lỗi khôi phục nhiệm vụ: ' + err.message });
   }
 });
 

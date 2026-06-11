@@ -60,7 +60,11 @@ interface KPIStats {
   unreported_assignments?: number;
   in_progress_assignments?: number;
   completed_assignments?: number;
-  
+  archived?: {
+    total: number;
+    this_month: number;
+    this_week: number;
+  };
   assigned_to_me?: {
     total: number;
     in_progress: number;
@@ -449,6 +453,48 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View>
         </View>
+
+        {/* ARCHIVED TASKS KPI – Admin only */}
+        {user?.role === 'admin' && (stats.archived?.total ?? 0) > 0 && (
+          <TouchableOpacity
+            style={[
+              styles.widgetContainer,
+              {
+                backgroundColor: colors.card,
+                borderColor: '#f59e0b',
+                borderWidth: 1.5,
+                marginTop: 0,
+                flexDirection: 'row',
+                alignItems: 'center',
+                padding: 14,
+                gap: 14,
+              }
+            ]}
+            onPress={() => router.push({ pathname: '/tasks', params: { tab: 'summary', archived_only: 'true' } })}
+            activeOpacity={0.75}
+          >
+            <View style={{ width: 44, height: 44, borderRadius: 12, backgroundColor: '#FEF3C7', alignItems: 'center', justifyContent: 'center' }}>
+              <Text style={{ fontSize: 22 }}>📦</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 12, fontWeight: '700', color: '#92400e', letterSpacing: 0.3 }}>NHIỆM VỤ LƯU TRỮ</Text>
+              <Text style={{ fontSize: 22, fontWeight: '800', color: '#d97706', lineHeight: 28 }}>
+                {stats.archived?.total || 0}
+              </Text>
+              <View style={{ flexDirection: 'row', gap: 12, marginTop: 2 }}>
+                <Text style={{ fontSize: 11, color: '#92400e', fontWeight: '600' }}>
+                  Tuần này: {stats.archived?.this_week || 0}
+                </Text>
+                <Text style={{ fontSize: 11, color: '#92400e', fontWeight: '600' }}>
+                  Tháng này: {stats.archived?.this_month || 0}
+                </Text>
+              </View>
+            </View>
+            <View style={{ alignItems: 'center' }}>
+              <Ionicons name="chevron-forward" size={18} color="#d97706" />
+            </View>
+          </TouchableOpacity>
+        )}
 
         {/* MINI TASK PREVIEW SECTION */}
         <Text style={[styles.sectionTitle, { color: colors.text }]}>🔥 Nhiệm vụ cần xử lý ngay</Text>

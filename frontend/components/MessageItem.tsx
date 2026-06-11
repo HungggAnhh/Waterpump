@@ -19,6 +19,8 @@ export interface Message {
   attachment_mime_type?: string | null;
   original_attachment_url?: string | null;
   processing_status?: 'pending' | 'processing' | 'completed' | 'failed' | null;
+  file_deleted_at?: string | null;
+  file_deleted_reason?: string | null;
   created_at: string;
   raw_time?: string;
   reply_to?: number | null;
@@ -316,6 +318,32 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
             <Text style={[styles.recalledText, { color: isMine ? '#fff' : '#a0aec0' }]}>
               Tin nhắn đã được thu hồi
             </Text>
+          </View>
+        ) : item.file_deleted_at ? (
+          /* File auto-deleted fallback */
+          <View
+            style={[
+              styles.messageBubble,
+              { minWidth: 130 },
+              isMine
+                ? { backgroundColor: colors.tint, opacity: 0.8 }
+                : { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1 }
+            ]}
+          >
+            <Text style={{ color: isMine ? '#fff' : colors.textSecondary, fontStyle: 'italic', fontSize: 13, marginBottom: 4 }}>
+              📁 File đã được hệ thống tự động xóa sau thời gian lưu trữ.
+            </Text>
+            <View style={styles.bubbleFooter}>
+              <Text style={[styles.messageTimeInside, { color: isMine ? 'rgba(255,255,255,0.7)' : colors.textSecondary }]}>
+                {formatMessageTime(item.created_at)}
+              </Text>
+              {isMine && (
+                <View style={styles.statusContainer}>
+                  <Ionicons name="checkmark-done" size={13} color={isMine ? 'rgba(255,255,255,0.9)' : colors.tint} />
+                  <Text style={[styles.statusText, { color: isMine ? 'rgba(255,255,255,0.9)' : colors.textSecondary }]}>Đã gửi</Text>
+                </View>
+              )}
+            </View>
           </View>
         ) : item.type === 'image' && item.file_url ? (
           /* Image bubble */

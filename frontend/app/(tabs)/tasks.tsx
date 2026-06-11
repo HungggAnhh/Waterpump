@@ -220,7 +220,7 @@ export default function WorkspaceScreen() {
   const colors = Colors[colorScheme ?? 'light'];
   const { user } = useUser();
   const { socket } = useSocket();
-  const params = useLocalSearchParams<{ tab?: string; status?: string; taskId?: string; filter?: string }>();
+  const params = useLocalSearchParams<{ tab?: string; status?: string; taskId?: string; filter?: string; archived_only?: string }>();
   const { unreadCount, unreadAssignedCount, openDrawer } = useNotifications();
 
   // Tabs states
@@ -255,7 +255,8 @@ export default function WorkspaceScreen() {
   const [selectedPriority, setSelectedPriority] = useState<string | null>(null);
   const [fromDate, setFromDate] = useState<string | null>(null);
   const [toDate, setToDate] = useState<string | null>(null);
-  const [quickFilter, setQuickFilter] = useState<'all' | 'assigned_to_me' | 'created_by_me' | 'overdue' | 'due_soon' | 'completed'>('all');
+  const [quickFilter, setQuickFilter] = useState<'all' | 'assigned_to_me' | 'created_by_me' | 'overdue' | 'due_soon' | 'completed' | 'archived'>('all');
+  const [showArchivedOnly, setShowArchivedOnly] = useState(false);
 
 
   // Detail Modal states
@@ -303,7 +304,13 @@ export default function WorkspaceScreen() {
 
   // Load URL query params
   useEffect(() => {
-    if (params.filter) {
+    if (params.archived_only === 'true') {
+      setActiveTab('summary');
+      setQuickFilter('archived');
+      setShowArchivedOnly(true);
+      setExpandedAccordions(prev => ({ ...prev, 'archived': true }));
+      fetchArchivedTasks();
+    } else if (params.filter) {
       setActiveTab('summary');
       const filterVal = params.filter;
       if (['assigned_to_me', 'created_by_me', 'overdue', 'due_soon', 'completed'].includes(filterVal)) {
@@ -432,7 +439,7 @@ export default function WorkspaceScreen() {
       if (selectedPriority) url += `&priority=${selectedPriority}`;
       if (fromDate) url += `&from_date=${fromDate}`;
       if (toDate) url += `&to_date=${toDate}`;
-      if (quickFilter && quickFilter !== 'all') url += `&quick_filter=${quickFilter}`;
+      if (quickFilter && quickFilter !== 'all' && quickFilter !== 'archived') url += `&quick_filter=${quickFilter}`;
 
       const res = await fetch(url);
       const result = await res.json();
@@ -443,6 +450,52 @@ export default function WorkspaceScreen() {
       console.error(`Error loading tasks for status ${status}:`, err);
     } finally {
       setAccordionLoading(prev => ({ ...prev, [status]: false }));
+    }
+  };
+
+  // Fetch archived tasks (admin only)
+  const fetchArchivedTasks = async () => {
+    try {
+      setAccordionLoading(prev => ({ ...prev, 'archived': true }));
+      let url = `${API_BASE_URL}/tasks?archived_only=true`;
+      if (debouncedSearch.trim()) url += `&search=${encodeURIComponent(debouncedSearch.trim())}`;
+      if (selectedWorkspace) url += `&workspace_id=${selectedWorkspace}`;
+      if (selectedAssignee) url += `&assignee_id=${selectedAssignee}`;
+      if (selectedCreator) url += `&creator_id=${selectedCreator}`;
+      if (selectedPriority) url += `&priority=${selectedPriority}`;
+
+      const res = await fetch(url);
+      const result = await res.json();
+      if (result.status === 'success') {
+        setAccordionTasks(prev => ({ ...prev, 'archived': sortTasksStable(result.data || []) }));
+      }
+    } catch (err) {
+      console.error('Error loading archived tasks:', err);
+    } finally {
+      setAccordionLoading(prev => ({ ...prev, 'archived': false }));
+    }
+  };
+
+  // Handle restore task from archive
+  const handleRestoreTask = async (taskId: number) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/tasks/tasks/${taskId}/restore`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const result = await res.json();
+      if (result.status === 'success') {
+        // Remove from archived list immediately
+        setAccordionTasks(prev => ({
+          ...prev,
+          'archived': (prev['archived'] || []).filter(t => t.id !== taskId)
+        }));
+        Alert.alert('✅ Thành công', 'Đã khôi phục nhiệm vụ thành công.');
+      } else {
+        Alert.alert('Lỗi', result.message || 'Không thể khôi phục nhiệm vụ.');
+      }
+    } catch (err) {
+      Alert.alert('Lỗi', 'Không thể kết nối server.');
     }
   };
 
@@ -1140,6 +1193,22 @@ export default function WorkspaceScreen() {
             >
               <Text style={{ fontSize: 12, fontWeight: '700', color: quickFilter === 'completed' ? '#ffffff' : colors.text }}>✅ Hoàn thành</Text>
             </TouchableOpacity>
+
+            {isAdmin && (
+              <TouchableOpacity 
+                style={[styles.quickFilterChip, quickFilter === 'archived' && [styles.quickFilterChipActive, { backgroundColor: '#d97706', borderColor: 'transparent' }]]}
+                onPress={() => {
+                  setQuickFilter('archived');
+                  setShowArchivedOnly(true);
+                  if (!expandedAccordions['archived']) {
+                    setExpandedAccordions(prev => ({ ...prev, 'archived': true }));
+                    fetchArchivedTasks();
+                  }
+                }}
+              >
+                <Text style={{ fontSize: 12, fontWeight: '700', color: quickFilter === 'archived' ? '#ffffff' : '#d97706' }}>📦 Lưu trữ</Text>
+              </TouchableOpacity>
+            )}
           </ScrollView>
 
           {/* Advanced Filters */}
@@ -1408,6 +1477,123 @@ export default function WorkspaceScreen() {
                     </View>
                   );
                 })}
+
+                {/* ARCHIVED ACCORDION – Admin Only */}
+                {isAdmin && (() => {
+                  const archivedTasks = accordionTasks['archived'] || [];
+                  const isArchivedExpanded = !!expandedAccordions['archived'];
+                  const isArchivedLoading = !!accordionLoading['archived'];
+
+                  return (
+                    <View
+                      key="archived"
+                      onLayout={e => {
+                        accordionYRefs.current['archived'] = e.nativeEvent.layout.y;
+                      }}
+                      style={[
+                        styles.accordionBox,
+                        {
+                          backgroundColor: colors.card,
+                          borderColor: '#f59e0b',
+                          borderWidth: 1.5,
+                          borderStyle: 'dashed'
+                        }
+                      ]}
+                    >
+                      <TouchableOpacity
+                        style={styles.accordionHeader}
+                        onPress={() => {
+                          if (!isArchivedExpanded && archivedTasks.length === 0) {
+                            fetchArchivedTasks();
+                          }
+                          setExpandedAccordions(prev => ({ ...prev, 'archived': !prev['archived'] }));
+                        }}
+                        activeOpacity={0.8}
+                      >
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          <Text style={{ marginRight: 8, fontSize: 18 }}>📦</Text>
+                          <Text style={[styles.accordionTitleText, { color: '#d97706' }]}>
+                            Nhiệm vụ lưu trữ
+                          </Text>
+                          {archivedTasks.length > 0 && (
+                            <View style={{ marginLeft: 8, backgroundColor: '#fef3c7', borderRadius: 10, paddingHorizontal: 7, paddingVertical: 2 }}>
+                              <Text style={{ fontSize: 10, fontWeight: '800', color: '#92400e' }}>{archivedTasks.length}</Text>
+                            </View>
+                          )}
+                        </View>
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          {isArchivedLoading && <ActivityIndicator size="small" color="#d97706" style={{ marginRight: 10 }} />}
+                          <Ionicons
+                            name={isArchivedExpanded ? 'chevron-down' : 'chevron-forward'}
+                            size={16}
+                            color="#d97706"
+                          />
+                        </View>
+                      </TouchableOpacity>
+
+                      {isArchivedExpanded && (
+                        <View style={styles.accordionBody}>
+                          {isArchivedLoading && archivedTasks.length === 0 ? (
+                            <View style={{ paddingVertical: 20 }}>
+                              <ActivityIndicator size="small" color="#d97706" />
+                            </View>
+                          ) : archivedTasks.length === 0 ? (
+                            <Text style={{ fontSize: 12.5, color: '#92400e', fontStyle: 'italic', paddingVertical: 14, textAlign: 'center' }}>
+                              Không có nhiệm vụ nào đang lưu trữ.
+                            </Text>
+                          ) : (
+                            <View style={{ gap: 8, marginTop: 8 }}>
+                              {archivedTasks.map(t => (
+                                <View
+                                  key={t.id}
+                                  style={[
+                                    styles.accordionTaskCard,
+                                    { borderColor: '#fed7aa', backgroundColor: '#fffbeb' }
+                                  ]}
+                                >
+                                  <View style={{ flex: 1 }}>
+                                    <Text style={[styles.accordionTaskTitle, { color: '#92400e' }]} numberOfLines={1}>
+                                      {t.title}
+                                    </Text>
+                                    <Text style={{ fontSize: 11, color: '#b45309', marginTop: 2 }}>
+                                      👤 {t.assignee_name || (t.assignees && t.assignees.length > 0 ? t.assignees.map((a: any) => a.name).join(', ') : 'Chưa gán')}
+                                    </Text>
+                                    {(t as any).archived_at && (
+                                      <Text style={{ fontSize: 10, color: '#92400e', marginTop: 2 }}>
+                                        📦 Lưu trữ: {new Date((t as any).archived_at).toLocaleDateString('vi-VN')}
+                                      </Text>
+                                    )}
+                                  </View>
+                                  <TouchableOpacity
+                                    style={{
+                                      backgroundColor: '#d97706',
+                                      borderRadius: 8,
+                                      paddingHorizontal: 10,
+                                      paddingVertical: 6,
+                                      marginLeft: 8
+                                    }}
+                                    onPress={() => {
+                                      Alert.alert(
+                                        'Khôi phục nhiệm vụ',
+                                        `Bạn có chắc muốn khôi phục "${t.title}" khỏi kho lưu trữ?`,
+                                        [
+                                          { text: 'Hủy', style: 'cancel' },
+                                          { text: 'Khôi phục', onPress: () => handleRestoreTask(t.id) }
+                                        ]
+                                      );
+                                    }}
+                                  >
+                                    <Text style={{ fontSize: 10, fontWeight: '700', color: '#ffffff' }}>↩ Khôi phục</Text>
+                                  </TouchableOpacity>
+                                </View>
+                              ))}
+                            </View>
+                          )}
+                        </View>
+                      )}
+                    </View>
+                  );
+                })()}
               </View>
             </>
           )}

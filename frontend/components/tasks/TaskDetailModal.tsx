@@ -82,11 +82,13 @@ interface Attachment {
   id: number;
   task_id: number;
   uploaded_by: number;
-  file_url: string;
+  file_url: string | null;
   file_type: string | null;
   created_at: string;
   user_name?: string;
   user_avatar?: string | null;
+  file_deleted_at?: string | null;
+  file_deleted_reason?: string | null;
 }
 
 interface Activity {
@@ -158,7 +160,6 @@ export default function TaskDetailModal({
     }
   }, [visible, activeSubTab, task?.id]);
 
-  // Reports states
   interface Report {
     id: number;
     task_id: number;
@@ -172,6 +173,8 @@ export default function TaskDetailModal({
     user_name: string;
     user_avatar: string | null;
     user_role?: string;
+    file_deleted_at?: string | null;
+    file_deleted_reason?: string | null;
   }
 
   const [reports, setReports] = useState<Report[]>([]);
@@ -1486,13 +1489,16 @@ export default function TaskDetailModal({
                   ) : (
                     <View style={{ gap: 10, marginTop: 14 }}>
                       {attachments.map(att => {
-                        const fileName = att.file_url.split('/').pop() || 'file_attachment';
+                        const isDeleted = att.file_deleted_at || !att.file_url;
+                        const fileName = isDeleted 
+                          ? '📁 File đã được hệ thống tự động xóa sau thời gian lưu trữ.'
+                          : (att.file_url.split('/').pop() || 'file_attachment');
                         const isImage = att.file_type && att.file_type.startsWith('image/');
                         return (
                           <View key={att.id} style={[styles.attachmentCard, { borderColor: colors.border }]}>
-                            <Ionicons name={isImage ? 'image-outline' : 'document-text-outline'} size={24} color={colors.tint} style={{ marginRight: 10 }} />
+                            <Ionicons name={isDeleted ? 'close-circle-outline' : isImage ? 'image-outline' : 'document-text-outline'} size={24} color={isDeleted ? '#ef4444' : colors.tint} style={{ marginRight: 10 }} />
                             <View style={{ flex: 1 }}>
-                              <Text style={[styles.attachmentName, { color: colors.text }]} numberOfLines={1}>
+                              <Text style={[styles.attachmentName, { color: isDeleted ? '#ef4444' : colors.text, fontStyle: isDeleted ? 'italic' : 'normal' }]} numberOfLines={1}>
                                 {fileName}
                               </Text>
                               {att.user_name && (
@@ -1501,12 +1507,14 @@ export default function TaskDetailModal({
                                 </Text>
                               )}
                             </View>
-                            <TouchableOpacity
-                              style={[styles.attachmentOpenBtn, { backgroundColor: colors.border }]}
-                              onPress={() => Linking.openURL(att.file_url)}
-                            >
-                              <Ionicons name="open-outline" size={16} color={colors.text} />
-                            </TouchableOpacity>
+                            {!isDeleted && att.file_url && (
+                              <TouchableOpacity
+                                style={[styles.attachmentOpenBtn, { backgroundColor: colors.border }]}
+                                onPress={() => Linking.openURL(att.file_url)}
+                              >
+                                <Ionicons name="open-outline" size={16} color={colors.text} />
+                              </TouchableOpacity>
+                            )}
                           </View>
                         );
                       })}
@@ -1838,6 +1846,12 @@ export default function TaskDetailModal({
                                             <Text style={{ fontSize: 12.5, color: colors.text, marginTop: 2 }}>
                                               {rep.content}
                                             </Text>
+                                            
+                                            {rep.file_deleted_at && (
+                                              <Text style={{ fontSize: 11.5, fontStyle: 'italic', color: '#ef4444', marginTop: 4 }}>
+                                                📁 File đã được hệ thống tự động xóa sau thời gian lưu trữ.
+                                              </Text>
+                                            )}
                                             
                                             {/* Report Attachments rendering */}
                                             {Array.isArray(rep.attachments) && rep.attachments.length > 0 && (
