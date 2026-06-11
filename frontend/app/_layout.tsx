@@ -28,6 +28,7 @@ import { VoiceSettingsProvider } from '../context/VoiceSettingsContext';
 import LoginScreen from '../components/LoginScreen';
 import NameOnboardingScreen from '../components/NameOnboardingScreen';
 import { requestAndRegisterFCM } from '../utils/fcmHelper';
+import { ImageViewer } from '../components/ImageViewer';
 
 export default function RootLayout() {
   const [loaded, error] = useFonts({
@@ -139,6 +140,7 @@ function RootLayoutNav() {
           }}
         />
       </Stack>
+      <ImageViewer />
     </ThemeProvider>
   );
 }

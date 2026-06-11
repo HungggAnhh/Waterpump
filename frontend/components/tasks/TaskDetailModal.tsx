@@ -23,6 +23,7 @@ import { useSocket } from '@/context/SocketContext';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import { formatDateTime, formatConversationTime, getMessageDayLabel, formatMessageTime } from '../../utils/dateTime';
+import { openImageViewer, isImageFile } from '../../store/useImageViewerStore';
 
 const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
 export let activeDetailTaskId: number | null = null;
@@ -1452,6 +1453,30 @@ export default function TaskDetailModal({
                             <Text style={[styles.commentBody, { color: colors.text }]}>
                               {c.comment}
                             </Text>
+                            {c.file_url && (
+                              <View style={{ marginTop: 6 }}>
+                                {isImageFile(c.file_url) ? (
+                                  <TouchableOpacity onPress={() => openImageViewer(c.file_url!)}>
+                                    <Image 
+                                      source={{ uri: c.file_url }} 
+                                      style={{ width: 120, height: 90, borderRadius: 8, marginTop: 4 }} 
+                                      resizeMode="cover" 
+                                      resizeMethod="resize"
+                                    />
+                                  </TouchableOpacity>
+                                ) : (
+                                  <TouchableOpacity 
+                                    style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.border + '30', padding: 6, borderRadius: 6, marginTop: 4, alignSelf: 'flex-start' }}
+                                    onPress={() => Linking.openURL(c.file_url!)}
+                                  >
+                                    <Ionicons name="document-text-outline" size={16} color={colors.tint} style={{ marginRight: 6 }} />
+                                    <Text style={{ fontSize: 11, color: colors.tint }} numberOfLines={1}>
+                                      {c.file_url.split('/').pop() || 'Tệp đính kèm'}
+                                    </Text>
+                                  </TouchableOpacity>
+                                )}
+                              </View>
+                            )}
                           </View>
                         </View>
                       ))}
@@ -1489,13 +1514,23 @@ export default function TaskDetailModal({
                   ) : (
                     <View style={{ gap: 10, marginTop: 14 }}>
                       {attachments.map(att => {
-                        const isDeleted = att.file_deleted_at || !att.file_url;
+                        const isDeleted = !!(att.file_deleted_at || !att.file_url);
                         const fileName = isDeleted 
                           ? '📁 File đã được hệ thống tự động xóa sau thời gian lưu trữ.'
-                          : (att.file_url.split('/').pop() || 'file_attachment');
-                        const isImage = att.file_type && att.file_type.startsWith('image/');
+                          : (att.file_url ? (att.file_url.split('/').pop() || 'file_attachment') : 'file_attachment');
+                        const isImage = isImageFile(att.file_url, att.file_type);
                         return (
-                          <View key={att.id} style={[styles.attachmentCard, { borderColor: colors.border }]}>
+                          <TouchableOpacity
+                            key={att.id}
+                            activeOpacity={isImage && !isDeleted ? 0.7 : 1}
+                            disabled={!isImage || isDeleted}
+                            onPress={() => {
+                              if (isImage && !isDeleted && att.file_url) {
+                                openImageViewer(att.file_url);
+                              }
+                            }}
+                            style={[styles.attachmentCard, { borderColor: colors.border }]}
+                          >
                             <Ionicons name={isDeleted ? 'close-circle-outline' : isImage ? 'image-outline' : 'document-text-outline'} size={24} color={isDeleted ? '#ef4444' : colors.tint} style={{ marginRight: 10 }} />
                             <View style={{ flex: 1 }}>
                               <Text style={[styles.attachmentName, { color: isDeleted ? '#ef4444' : colors.text, fontStyle: isDeleted ? 'italic' : 'normal' }]} numberOfLines={1}>
@@ -1510,12 +1545,18 @@ export default function TaskDetailModal({
                             {!isDeleted && att.file_url && (
                               <TouchableOpacity
                                 style={[styles.attachmentOpenBtn, { backgroundColor: colors.border }]}
-                                onPress={() => Linking.openURL(att.file_url)}
+                                onPress={() => {
+                                  if (isImage) {
+                                    openImageViewer(att.file_url!);
+                                  } else {
+                                    Linking.openURL(att.file_url!);
+                                  }
+                                }}
                               >
                                 <Ionicons name="open-outline" size={16} color={colors.text} />
                               </TouchableOpacity>
                             )}
-                          </View>
+                          </TouchableOpacity>
                         );
                       })}
                     </View>
@@ -1856,26 +1897,35 @@ export default function TaskDetailModal({
                                             {/* Report Attachments rendering */}
                                             {Array.isArray(rep.attachments) && rep.attachments.length > 0 && (
                                               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
-                                                {rep.attachments.map((att, idx) => (
-                                                  <TouchableOpacity
-                                                    key={idx}
-                                                    style={{
-                                                      flexDirection: 'row',
-                                                      alignItems: 'center',
-                                                      backgroundColor: colors.border + '15',
-                                                      padding: 4,
-                                                      borderRadius: 6,
-                                                      borderWidth: 1,
-                                                      borderColor: colors.border
-                                                    }}
-                                                    onPress={() => Linking.openURL(att.url)}
-                                                  >
-                                                    <Ionicons name="paper-plane-outline" size={10} color={colors.tint} style={{ marginRight: 4 }} />
-                                                    <Text style={{ fontSize: 10, color: colors.tint, maxWidth: 100 }} numberOfLines={1}>
-                                                      {att.name || 'file'}
-                                                    </Text>
-                                                  </TouchableOpacity>
-                                                ))}
+                                                {rep.attachments.map((att, idx) => {
+                                                  const isImg = isImageFile(att.url, att.type);
+                                                  return (
+                                                    <TouchableOpacity
+                                                      key={idx}
+                                                      style={{
+                                                        flexDirection: 'row',
+                                                        alignItems: 'center',
+                                                        backgroundColor: colors.border + '15',
+                                                        padding: 4,
+                                                        borderRadius: 6,
+                                                        borderWidth: 1,
+                                                        borderColor: colors.border
+                                                      }}
+                                                      onPress={() => {
+                                                        if (isImg) {
+                                                          openImageViewer(att.url);
+                                                        } else {
+                                                          Linking.openURL(att.url);
+                                                        }
+                                                      }}
+                                                    >
+                                                      <Ionicons name={isImg ? "image-outline" : "paper-plane-outline"} size={10} color={colors.tint} style={{ marginRight: 4 }} />
+                                                      <Text style={{ fontSize: 10, color: colors.tint, maxWidth: 100 }} numberOfLines={1}>
+                                                        {att.name || 'file'}
+                                                      </Text>
+                                                    </TouchableOpacity>
+                                                  );
+                                                })}
                                               </View>
                                             )}
                                           </View>

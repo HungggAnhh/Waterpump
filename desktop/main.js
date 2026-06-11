@@ -327,6 +327,49 @@ app.whenReady().then(() => {
     }
   });
 
+  // Tải xuống file an toàn (hỗ trợ cả Base64 và URL)
+  ipcMain.handle('download-file', async (event, { url, filename }) => {
+    try {
+      const { dialog } = require('electron');
+      const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+        defaultPath: filename || 'download.png',
+        filters: [
+          { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'] }
+        ]
+      });
+
+      if (canceled || !filePath) {
+        return { success: false, error: 'User canceled' };
+      }
+
+      if (url.startsWith('data:')) {
+        const base64Data = url.split(';base64,').pop();
+        fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
+      } else {
+        const { net } = require('electron');
+        const request = net.request(url);
+        
+        await new Promise((resolve, reject) => {
+          request.on('response', (response) => {
+            const chunks = [];
+            response.on('data', (chunk) => chunks.push(chunk));
+            response.on('end', () => {
+              fs.writeFileSync(filePath, Buffer.concat(chunks));
+              resolve();
+            });
+            response.on('error', reject);
+          });
+          request.on('error', reject);
+          request.end();
+        });
+      }
+      return { success: true, filePath };
+    } catch (err) {
+      console.error('❌ Lỗi tải xuống file:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
   });

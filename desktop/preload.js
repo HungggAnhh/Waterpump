@@ -35,6 +35,9 @@ try {
     },
     deleteTempFile: (filePath) => {
       return ipcRenderer.invoke('delete-temp-file', filePath);
+    },
+    downloadFile: (options) => {
+      return ipcRenderer.invoke('download-file', options);
     }
   };
 

@@ -42,6 +42,7 @@ import VoiceActionSheet from '../../components/VoiceActionSheet';
 import * as Haptics from 'expo-haptics';
 import { VoicePlayer } from '../../services/audio/player';
 import { getMessageDayLabel, formatDateTime } from '../../utils/dateTime';
+import { openImageViewer, isImageFile } from '../../store/useImageViewerStore';
 
 if (typeof window !== 'undefined') {
   const originalAdd = window.addEventListener;
@@ -1547,8 +1548,12 @@ export default function ChatRoomScreen() {
   };
 
   const handlePressImage = useCallback((url: string) => {
-    setSelectedImage(url);
-    setImageModalVisible(true);
+    if (isImageFile(url)) {
+      openImageViewer(url);
+    } else {
+      setSelectedImage(url);
+      setImageModalVisible(true);
+    }
   }, []);
 
   const handlePickMedia = async (mediaType: 'image' | 'video') => {
