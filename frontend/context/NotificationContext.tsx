@@ -25,7 +25,7 @@ export interface NotificationItem {
   id: string;
   title: string;
   body: string;
-  type: 'message' | 'task_assigned' | 'task_urged' | 'comment' | 'task_approved' | 'task_rejected';
+  type: 'message' | 'task_assigned' | 'task_urged' | 'comment' | 'task_approved' | 'task_rejected' | 'task_report';
   createdAt: string;
   isRead: boolean;
   created_by?: number;
@@ -325,12 +325,13 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     if (item.type === 'message' && item.data?.conversationId) {
       router.push(`/chat/${item.data.conversationId}` as any);
     } else if (item.data?.taskId) {
+      const tabParam = item.type === 'task_report' ? '&initialTab=reports' : '';
       if (item.data.workspaceId) {
         // Navigate directly to Workspace details with taskId query parameter to auto-scroll & open modal
-        router.push(`/workspace/${item.data.workspaceId}?taskId=${item.data.taskId}` as any);
+        router.push(`/workspace/${item.data.workspaceId}?taskId=${item.data.taskId}${tabParam}` as any);
       } else {
         // Fallback to Tasks main tab
-        router.push(`/tasks?taskId=${item.data.taskId}` as any);
+        router.push(`/tasks?taskId=${item.data.taskId}${tabParam}` as any);
       }
     }
   };
@@ -456,6 +457,39 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       });
     };
 
+    // G. Báo cáo tiến độ mới (Toast realtime)
+    const handleTaskReportCreated = (data: any) => {
+      if (!data) return;
+      const reporterId = data.reporterId;
+      
+      // Không thông báo nếu chính mình gửi
+      if (Number(reporterId) === Number(user.id)) return;
+
+      const isAdmin = user.role === 'admin';
+      const isCreator = Number(data.taskCreatorId) === Number(user.id);
+      
+      if (isAdmin || isCreator) {
+        // Play notification sound
+        playNotificationSound();
+
+        // Tạo item ảo (chỉ hiển thị toast, không add vào notifications array)
+        const toastItem: NotificationItem = {
+          id: `temp_${Math.random().toString(36).substring(2, 9)}`,
+          title: '📊 Báo cáo mới',
+          body: `${data.reporterName || 'Nhân viên'} vừa gửi báo cáo tiến độ`,
+          type: 'task_report',
+          createdAt: new Date().toISOString(),
+          isRead: false,
+          created_by: reporterId,
+          data: {
+            taskId: data.taskId,
+            workspaceId: data.workspaceId
+          }
+        };
+        showPopup(toastItem);
+      }
+    };
+
     const handleTaskChangeGlobal = () => {
       fetchUnreadAssignedCount();
     };
@@ -467,6 +501,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     socket.on('task_comment_created', handleCommentCreated);
     socket.on('task_approved', handleTaskApproved);
     socket.on('task_rejected', handleTaskRejected);
+    socket.on('task_report_created', handleTaskReportCreated);
     
     socket.on('task_created', handleTaskChangeGlobal);
     socket.on('task_updated', handleTaskChangeGlobal);
@@ -482,6 +517,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       socket.off('task_comment_created', handleCommentCreated);
       socket.off('task_approved', handleTaskApproved);
       socket.off('task_rejected', handleTaskRejected);
+      socket.off('task_report_created', handleTaskReportCreated);
       
       socket.off('task_created', handleTaskChangeGlobal);
       socket.off('task_updated', handleTaskChangeGlobal);
@@ -500,6 +536,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       case 'comment': return 'chatbox-ellipses-outline';
       case 'task_approved': return 'checkmark-circle-outline';
       case 'task_rejected': return 'alert-circle-outline';
+      case 'task_report': return 'analytics-outline';
       default: return 'notifications-outline';
     }
   };
@@ -512,6 +549,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       case 'comment': return 'Bình luận mới';
       case 'task_approved': return 'Nhiệm vụ được duyệt';
       case 'task_rejected': return 'Trả lại sửa';
+      case 'task_report': return 'Báo cáo mới';
       default: return 'Thông báo';
     }
   };

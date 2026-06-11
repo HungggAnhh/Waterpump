@@ -42,6 +42,16 @@ async function runMigration() {
     `);
     console.log("👉 Đã tạo bảng workspaces.");
 
+    // 1.1 Đảm bảo cấu trúc cột của workspaces nếu bảng đã tồn tại trước đó
+    await client.query(`
+      ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS description TEXT NULL;
+      ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS icon VARCHAR(50) DEFAULT 'folder';
+      ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS color VARCHAR(50) DEFAULT '#3b82f6';
+      ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS avatar_url TEXT NULL;
+      ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE;
+    `);
+    console.log("👉 Đã đồng bộ cột cho bảng workspaces.");
+
     // 2. Tạo bảng workspace_members (nếu chưa có)
     await client.query(`
       CREATE TABLE IF NOT EXISTS workspace_members (
@@ -121,7 +131,7 @@ async function runMigration() {
     // Seed Workspace mặc định số 1 nếu chưa có
     await client.query(`
       INSERT INTO workspaces (id, name, description, icon, color, created_by)
-      VALUES (1, 'Dự Án Chung 🚀', 'Không gian mặc định chứa toàn bộ các công việc công ty.', 'briefcase', '#1d4ed8', 1)
+      VALUES (1, 'Dự Án Chung 🚀', 'Không gian mặc định chứa toàn bộ các công việc công ty.', 'briefcase', '#1d4ed8', (SELECT id FROM users ORDER BY id ASC LIMIT 1))
       ON CONFLICT (id) DO NOTHING;
     `);
     console.log("👉 Đã thêm workspace mặc định ID 1.");

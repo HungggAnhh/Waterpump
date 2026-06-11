@@ -59,12 +59,19 @@ router.get('/', async (req, res) => {
 
   try {
     const isAssignedFilter = quick_filter === 'assigned_to_me' || !!assignee_id;
+    const sortUserId = assignee_id ? parseInt(assignee_id) : user.id;
+
     let selectFields = `DISTINCT t.*, 
              w.name AS workspace_name,
              c.name AS creator_name, c.avatar AS creator_avatar`;
 
     if (isAssignedFilter) {
-      selectFields += `, COALESCE(ta.created_at, t.created_at) AS assigned_at`;
+      // Sử dụng subquery vô cùng sạch sẽ để lấy ngày phân công của đúng người đang được lọc/sắp xếp
+      // Điều này ngăn chặn việc nhân đôi dòng do JOIN một-nhiều với task_assignments
+      selectFields += `, COALESCE(
+        (SELECT ta_sort.created_at FROM task_assignments ta_sort WHERE ta_sort.task_id = t.id AND ta_sort.user_id = ${parseInt(sortUserId)} LIMIT 1),
+        t.created_at
+      ) AS assigned_at`;
     }
 
     let queryText = `
@@ -72,21 +79,19 @@ router.get('/', async (req, res) => {
       FROM tasks t 
       LEFT JOIN workspaces w ON t.workspace_id = w.id
       LEFT JOIN users c ON t.created_by = c.id
-      LEFT JOIN task_assignments ta ON ta.task_id = t.id
-      LEFT JOIN workspace_members wm ON wm.workspace_id = t.workspace_id
       WHERE (t.is_deleted = FALSE OR t.is_deleted IS NULL)
     `;
 
     const queryParams = [];
     let paramIndex = 1;
 
-    // Phân quyền cơ bản
+    // Phân quyền cơ bản bằng EXISTS để tránh nhân bản dòng
     if (user.role !== 'admin') {
       queryText += ` AND (
         t.created_by = $${paramIndex} OR 
         t.assigned_to = $${paramIndex} OR 
-        ta.user_id = $${paramIndex} OR 
-        wm.user_id = $${paramIndex}
+        EXISTS (SELECT 1 FROM task_assignments ta_perm WHERE ta_perm.task_id = t.id AND ta_perm.user_id = $${paramIndex}) OR 
+        EXISTS (SELECT 1 FROM workspace_members wm_perm WHERE wm_perm.workspace_id = t.workspace_id AND wm_perm.user_id = $${paramIndex})
       )`;
       queryParams.push(user.id);
       paramIndex++;
@@ -124,9 +129,9 @@ router.get('/', async (req, res) => {
       paramIndex++;
     }
 
-    // Lọc theo người thực hiện
+    // Lọc theo người thực hiện (Sử dụng EXISTS để tránh duplicate)
     if (assignee_id) {
-      queryText += ` AND (t.assigned_to = $${paramIndex} OR ta.user_id = $${paramIndex})`;
+      queryText += ` AND (t.assigned_to = $${paramIndex} OR EXISTS (SELECT 1 FROM task_assignments ta_filt WHERE ta_filt.task_id = t.id AND ta_filt.user_id = $${paramIndex}))`;
       queryParams.push(parseInt(assignee_id));
       paramIndex++;
     }
@@ -150,14 +155,14 @@ router.get('/', async (req, res) => {
       paramIndex++;
     }
 
-    // Bộ lọc nhanh (Quick Filters)
+    // Bộ lọc nhanh (Quick Filters) - Sử dụng EXISTS để tránh duplicate
     if (quick_filter) {
       if (quick_filter === 'my_tasks' || quick_filter === 'mine') {
-        queryText += ` AND (t.assigned_to = $${paramIndex} OR ta.user_id = $${paramIndex} OR t.created_by = $${paramIndex})`;
+        queryText += ` AND (t.assigned_to = $${paramIndex} OR EXISTS (SELECT 1 FROM task_assignments ta_q WHERE ta_q.task_id = t.id AND ta_q.user_id = $${paramIndex}) OR t.created_by = $${paramIndex})`;
         queryParams.push(user.id);
         paramIndex++;
       } else if (quick_filter === 'assigned_to_me') {
-        queryText += ` AND (t.assigned_to = $${paramIndex} OR ta.user_id = $${paramIndex})`;
+        queryText += ` AND (t.assigned_to = $${paramIndex} OR EXISTS (SELECT 1 FROM task_assignments ta_q WHERE ta_q.task_id = t.id AND ta_q.user_id = $${paramIndex}))`;
         queryParams.push(user.id);
         paramIndex++;
       } else if (quick_filter === 'created_by_me') {
@@ -244,6 +249,19 @@ router.get('/', async (req, res) => {
         reportsCountMap[parseInt(row.task_id)] = row.reports_count;
       });
 
+      // Lấy số báo cáo chưa xem của từng nhiệm vụ
+      const unseenReportsCountRes = await query(
+        `SELECT task_id, COUNT(*)::int AS unseen_count
+         FROM task_reports
+         WHERE is_seen_by_admin = FALSE AND task_id = ANY($1)
+         GROUP BY task_id`,
+        [taskIds]
+      );
+      const unseenReportsCountMap = {};
+      unseenReportsCountRes.rows.forEach(row => {
+        unseenReportsCountMap[parseInt(row.task_id)] = row.unseen_count;
+      });
+
       tasks.forEach(t => {
         t.assignees = assigneesMap[t.id] || [];
         const taskViews = viewsMap[t.id] || new Set();
@@ -265,6 +283,7 @@ router.get('/', async (req, res) => {
         t.viewed_assignees_count = viewedCount;
         t.completed_assignees_count = completedMap[t.id] || 0;
         t.total_reports_count = reportsCountMap[t.id] || 0;
+        t.unseen_reports_count = unseenReportsCountMap[t.id] || 0;
       });
     }
 
@@ -2787,8 +2806,8 @@ router.post('/tasks/:taskId/reports', async (req, res) => {
     const dailyReportDate = new Date().toISOString().slice(0, 10); // Format YYYY-MM-DD
 
     const reportInsertRes = await query(
-      `INSERT INTO task_reports (task_id, user_id, report_type, content, progress_percent, attachments, daily_report_date)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO task_reports (task_id, user_id, report_type, content, progress_percent, attachments, daily_report_date, is_seen_by_admin)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE)
        RETURNING *`,
       [taskId, user.id, report_type, content.trim(), parseInt(progress_percent), attachmentsJson, dailyReportDate]
     );
@@ -2857,13 +2876,12 @@ router.post('/tasks/:taskId/reports', async (req, res) => {
     if (io) {
       const socketPayload = {
         taskId,
-        report: { ...report, userName: user.name },
-        user_id: user.id,
-        userName: user.name,
-        completed_assignees_count: completedAssigneesCount,
-        total_assignees: totalAssignees,
-        task_status: updatedTask.status,
-        approval_status: updatedTask.approval_status
+        taskTitle: task.title,
+        reporterId: user.id,
+        reporterName: user.name || 'Thành viên',
+        workspaceId: task.workspace_id,
+        createdAt: report.created_at,
+        taskCreatorId: task.created_by
       };
       io.emit('task_report_created', socketPayload);
       if (task.conversation_id) {
@@ -2949,6 +2967,40 @@ router.get('/tasks/:taskId/reports', async (req, res) => {
   } catch (err) {
     console.error('❌ Lỗi lấy báo cáo nhiệm vụ:', err.message);
     return res.status(500).json({ status: 'error', message: 'Lỗi máy chủ khi lấy danh sách báo cáo.' });
+  }
+});
+
+// POST /api/tasks/tasks/:taskId/reports/seen — Đánh dấu tất cả báo cáo của nhiệm vụ này là đã xem
+router.post('/tasks/:taskId/reports/seen', async (req, res) => {
+  const user = getAuthUser(req);
+  if (!user) {
+    return res.status(401).json({ status: 'error', message: 'Không thể xác thực người dùng.' });
+  }
+
+  const taskId = parseInt(req.params.taskId);
+
+  try {
+    const taskRes = await query('SELECT * FROM tasks WHERE id = $1 AND is_deleted = FALSE', [taskId]);
+    if (taskRes.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'Không tìm thấy nhiệm vụ.' });
+    }
+
+    // UPDATE task_reports SET is_seen_by_admin = TRUE WHERE task_id = :taskId
+    await query(
+      `UPDATE task_reports SET is_seen_by_admin = TRUE WHERE task_id = $1`,
+      [taskId]
+    );
+
+    // Phát socket event: task_reports_seen
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('task_reports_seen', { taskId });
+    }
+
+    return res.status(200).json({ status: 'success', message: 'Đã đánh dấu đã xem toàn bộ báo cáo.' });
+  } catch (err) {
+    console.error('❌ Lỗi đánh dấu đã xem báo cáo:', err.message);
+    return res.status(500).json({ status: 'error', message: 'Lỗi máy chủ khi cập nhật trạng thái đã xem.' });
   }
 });
 

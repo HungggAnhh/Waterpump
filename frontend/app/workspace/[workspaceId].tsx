@@ -497,16 +497,23 @@ export default function PageTasksScreen() {
       }
     };
 
+    const handleTaskReportsSeen = (data: { taskId: number }) => {
+      setTasks(prev => prev.map(t => t.id === data.taskId ? { ...t, unseen_reports_count: 0 } : t));
+      setSelectedTask(prev => prev && prev.id === data.taskId ? { ...prev, unseen_reports_count: 0 } : prev);
+    };
+
     socket.on('task_created', handleTaskCreated);
     socket.on('task_updated', handleTaskUpdated);
     socket.on('task_deleted', handleTaskDeleted);
     socket.on('assignment_status_updated', handleAssignmentStatusUpdated);
+    socket.on('task_reports_seen', handleTaskReportsSeen);
 
     return () => {
       socket.off('task_created', handleTaskCreated);
       socket.off('task_updated', handleTaskUpdated);
       socket.off('task_deleted', handleTaskDeleted);
       socket.off('assignment_status_updated', handleAssignmentStatusUpdated);
+      socket.off('task_reports_seen', handleTaskReportsSeen);
     };
   }, [socket, workspaceId, user, selectedTask]);
 

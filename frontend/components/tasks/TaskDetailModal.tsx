@@ -108,6 +108,7 @@ interface TaskDetailModalProps {
   task: Task | null;
   onTaskUpdated: (updated: Task) => void;
   onTaskDeleted?: (taskId: number) => void;
+  initialTab?: 'comments' | 'attachments' | 'activities' | 'reports';
 }
 
 export default function TaskDetailModal({
@@ -116,6 +117,7 @@ export default function TaskDetailModal({
   task: initialTask,
   onTaskUpdated,
   onTaskDeleted,
+  initialTab,
 }: TaskDetailModalProps) {
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
@@ -124,6 +126,37 @@ export default function TaskDetailModal({
 
   const [task, setTask] = useState<Task | null>(initialTask);
   const [activeSubTab, setActiveSubTab] = useState<'comments' | 'attachments' | 'activities' | 'reports'>('comments');
+
+  useEffect(() => {
+    if (visible) {
+      setActiveSubTab(initialTab || 'comments');
+    }
+  }, [visible, initialTab]);
+
+  useEffect(() => {
+    const isAdmin = user?.role === 'admin';
+    if (visible && task && activeSubTab === 'reports') {
+      const isCreator = task.created_by === user?.id;
+      if (isAdmin || isCreator) {
+        fetch(`${API_BASE_URL}/tasks/tasks/${task.id}/reports/seen`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token || ''}`
+          }
+        })
+          .then(res => res.json())
+          .then(result => {
+            if (result.status === 'success') {
+              const updatedTask = { ...task, unseen_reports_count: 0 };
+              setTask(updatedTask);
+              onTaskUpdated(updatedTask);
+            }
+          })
+          .catch(err => console.error("Error marking reports as seen:", err));
+      }
+    }
+  }, [visible, activeSubTab, task?.id]);
 
   // Reports states
   interface Report {
@@ -157,7 +190,11 @@ export default function TaskDetailModal({
   async function fetchReports(taskId: number) {
     try {
       setLoadingReports(true);
-      const res = await fetch(`${API_BASE_URL}/tasks/tasks/${taskId}/reports`);
+      const res = await fetch(`${API_BASE_URL}/tasks/tasks/${taskId}/reports`, {
+        headers: {
+          'Authorization': `Bearer ${token || ''}`
+        }
+      });
       const result = await res.json();
       if (result.status === 'success') {
         setReports(result.data || []);
@@ -389,7 +426,11 @@ export default function TaskDetailModal({
         
         // Trigger parent update
         if (task && onTaskUpdated) {
-          const refreshedTaskRes = await fetch(`${API_BASE_URL}/tasks?search=${encodeURIComponent(task.title)}`);
+          const refreshedTaskRes = await fetch(`${API_BASE_URL}/tasks?search=${encodeURIComponent(task.title)}`, {
+            headers: {
+              'Authorization': `Bearer ${token || ''}`
+            }
+          });
           const refreshedTaskResult = await refreshedTaskRes.json();
           if (refreshedTaskResult.status === 'success') {
             const updatedTaskItem = refreshedTaskResult.data.find((t: any) => t.id === task.id);
@@ -495,7 +536,11 @@ export default function TaskDetailModal({
   async function fetchRecipients(taskId: number) {
     try {
       setLoadingRecipients(true);
-      const res = await fetch(`${API_BASE_URL}/tasks/tasks/${taskId}/recipients`);
+      const res = await fetch(`${API_BASE_URL}/tasks/tasks/${taskId}/recipients`, {
+        headers: {
+          'Authorization': `Bearer ${token || ''}`
+        }
+      });
       const result = await res.json();
       if (result.success) {
         setRecipientsData(result.data);
@@ -626,7 +671,11 @@ export default function TaskDetailModal({
   async function fetchComments(taskId: number) {
     try {
       setLoadingComments(true);
-      const res = await fetch(`${API_BASE_URL}/tasks/tasks/${taskId}/comments`);
+      const res = await fetch(`${API_BASE_URL}/tasks/tasks/${taskId}/comments`, {
+        headers: {
+          'Authorization': `Bearer ${token || ''}`
+        }
+      });
       const result = await res.json();
       if (result.status === 'success') {
         setComments(result.data || []);
@@ -641,7 +690,11 @@ export default function TaskDetailModal({
   async function fetchAttachments(taskId: number) {
     try {
       setLoadingAttachments(true);
-      const res = await fetch(`${API_BASE_URL}/tasks/tasks/${taskId}/attachments`);
+      const res = await fetch(`${API_BASE_URL}/tasks/tasks/${taskId}/attachments`, {
+        headers: {
+          'Authorization': `Bearer ${token || ''}`
+        }
+      });
       const result = await res.json();
       if (result.status === 'success') {
         setAttachments(result.data || []);
@@ -656,7 +709,11 @@ export default function TaskDetailModal({
   async function fetchActivities(taskId: number) {
     try {
       setLoadingActivities(true);
-      const res = await fetch(`${API_BASE_URL}/tasks/tasks/${taskId}/activities`);
+      const res = await fetch(`${API_BASE_URL}/tasks/tasks/${taskId}/activities`, {
+        headers: {
+          'Authorization': `Bearer ${token || ''}`
+        }
+      });
       const result = await res.json();
       if (result.status === 'success') {
         setActivities(result.data || []);
@@ -673,7 +730,10 @@ export default function TaskDetailModal({
     try {
       const res = await fetch(`${API_BASE_URL}/tasks/tasks/${task.id}/start`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token || ''}`
+        },
       });
       const result = await res.json();
       if (result.status === 'success') {
@@ -694,7 +754,10 @@ export default function TaskDetailModal({
     try {
       const res = await fetch(`${API_BASE_URL}/tasks/tasks/${task.id}/submit`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token || ''}`
+        },
       });
       const result = await res.json();
       if (result.status === 'success') {
@@ -715,7 +778,10 @@ export default function TaskDetailModal({
     try {
       const res = await fetch(`${API_BASE_URL}/tasks/tasks/${task.id}/approve`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token || ''}`
+        },
       });
       const result = await res.json();
       if (result.status === 'success') {
@@ -738,7 +804,10 @@ export default function TaskDetailModal({
       setSubmittingReject(true);
       const res = await fetch(`${API_BASE_URL}/tasks/tasks/${task.id}/reject`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token || ''}`
+        },
         body: JSON.stringify({ reason: rejectReason.trim() }),
       });
       const result = await res.json();
@@ -765,7 +834,10 @@ export default function TaskDetailModal({
       setSubmittingUrge(true);
       const res = await fetch(`${API_BASE_URL}/tasks/tasks/${task.id}/urge`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token || ''}`
+        },
         body: JSON.stringify({ interval, target: urgeTarget }),
       });
       const result = await res.json();
@@ -793,6 +865,9 @@ export default function TaskDetailModal({
       try {
         const res = await fetch(`${API_BASE_URL}/tasks/tasks/${task.id}`, {
           method: 'DELETE',
+          headers: {
+            'Authorization': `Bearer ${token || ''}`
+          }
         });
         const result = await res.json();
         if (result.status === 'success') {
@@ -832,7 +907,10 @@ export default function TaskDetailModal({
       setSubmittingComment(true);
       const res = await fetch(`${API_BASE_URL}/tasks/tasks/${task.id}/comments`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token || ''}`
+        },
         body: JSON.stringify({ comment: commentInput.trim() }),
       });
       const result = await res.json();
@@ -893,7 +971,10 @@ export default function TaskDetailModal({
         // Link attachment to task
         const attachRes = await fetch(`${API_BASE_URL}/tasks/tasks/${task.id}/attachments`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token || ''}`
+          },
           body: JSON.stringify({
             file_url: uploadResult.url,
             file_type: fileType,

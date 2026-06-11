@@ -632,12 +632,27 @@ export default function WorkspaceScreen() {
       fetchWorkspaces();
     };
 
+    const handleTaskReportsSeen = (data: { taskId: number }) => {
+      setAllTasksForSearch(prev => prev.map(t => t.id === data.taskId ? { ...t, unseen_reports_count: 0 } : t));
+      setAccordionTasks(prev => {
+        const updated = { ...prev };
+        Object.keys(updated).forEach(status => {
+          if (updated[status]) {
+            updated[status] = updated[status].map(t => t.id === data.taskId ? { ...t, unseen_reports_count: 0 } : t);
+          }
+        });
+        return updated;
+      });
+      setSelectedTask(prev => prev && prev.id === data.taskId ? { ...prev, unseen_reports_count: 0 } : prev);
+    };
+
     socket.on('task_created', handleTaskCreated);
     socket.on('task_updated', handleTaskUpdated);
     socket.on('task_deleted', handleTaskDeleted);
     socket.on('workspace_created', handleWorkspaceChange);
     socket.on('workspace_updated', handleWorkspaceChange);
     socket.on('workspace_deleted', handleWorkspaceChange);
+    socket.on('task_reports_seen', handleTaskReportsSeen);
 
     return () => {
       socket.off('task_created', handleTaskCreated);
@@ -646,6 +661,7 @@ export default function WorkspaceScreen() {
       socket.off('workspace_created', handleWorkspaceChange);
       socket.off('workspace_updated', handleWorkspaceChange);
       socket.off('workspace_deleted', handleWorkspaceChange);
+      socket.off('task_reports_seen', handleTaskReportsSeen);
     };
   }, [socket, activeTab, expandedAccordions]);
 
@@ -1240,6 +1256,23 @@ export default function WorkspaceScreen() {
                           </View>
                         </View>
                         
+                        {t.unseen_reports_count && t.unseen_reports_count > 0 && (isAdmin || t.created_by === user?.id) ? (
+                          <View style={{
+                            backgroundColor: '#fee2e2',
+                            borderColor: '#ef4444',
+                            borderWidth: 1,
+                            borderRadius: 8,
+                            paddingHorizontal: 8,
+                            paddingVertical: 4,
+                            marginRight: 8,
+                            justifyContent: 'center',
+                            alignItems: 'center'
+                          }}>
+                            <Text style={{ color: '#b91c1c', fontSize: 10, fontWeight: '800' }}>
+                              🔴 {t.unseen_reports_count} Báo cáo mới
+                            </Text>
+                          </View>
+                        ) : null}
                         {/* Eye icon/detail trigger */}
                         <TouchableOpacity
                           style={styles.searchDetailBtn}
@@ -1348,6 +1381,23 @@ export default function WorkspaceScreen() {
                                       👤 Giao cho: {t.assignee_name || (t.assignees && t.assignees.length > 0 ? t.assignees.map(a => a.name).join(', ') : 'Chưa gán')}
                                     </Text>
                                   </View>
+                                  {t.unseen_reports_count && t.unseen_reports_count > 0 && (isAdmin || t.created_by === user?.id) ? (
+                                    <View style={{
+                                      backgroundColor: '#fee2e2',
+                                      borderColor: '#ef4444',
+                                      borderWidth: 1,
+                                      borderRadius: 8,
+                                      paddingHorizontal: 8,
+                                      paddingVertical: 4,
+                                      marginRight: 8,
+                                      justifyContent: 'center',
+                                      alignItems: 'center'
+                                    }}>
+                                      <Text style={{ color: '#b91c1c', fontSize: 10, fontWeight: '800' }}>
+                                        🔴 {t.unseen_reports_count} Báo cáo mới
+                                      </Text>
+                                    </View>
+                                  ) : null}
                                   <Ionicons name="arrow-forward-outline" size={16} color={colors.tabIconDefault} />
                                 </TouchableOpacity>
                               ))}
