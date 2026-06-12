@@ -195,6 +195,11 @@ app.whenReady().then(() => {
     triggerScreenshot({ excludeSelf: true });
   });
 
+  // Đăng ký shortcut Ctrl+Alt+A (Tương tự Zalo)
+  globalShortcut.register('Ctrl+Alt+A', () => {
+    triggerScreenshot({ excludeSelf: true });
+  });
+
   // Lắng nghe yêu cầu chụp ảnh từ React Native App (Có thể tùy chỉnh include/exclude)
   ipcMain.on('trigger-screenshot', (event, options) => {
     triggerScreenshot(options);

@@ -386,11 +386,11 @@ export default function ChatRoomScreen() {
     let isMounted = true;
     const handlePaste = async (e: any) => {
       console.log('[PASTE_VERSION]', '2026-06-10-v7');
-      console.log('[WINDOW_EQUALS_TOP]', window === window.top);
+      console.log('[WINDOW_EQUALS_TOP]', window.top ? window === window.top : true);
       console.log('[WINDOW_ELECTRON_API]', typeof (window as any).electronAPI);
-      console.log('[WINDOW_TOP_ELECTRON_API]', typeof (window.top as any)?.electronAPI);
+      console.log('[WINDOW_TOP_ELECTRON_API]', window.top ? typeof (window.top as any).electronAPI : 'undefined');
       console.log('[WINDOW_LOCATION]', window.location.href);
-      console.log('[WINDOW_TOP_LOCATION]', window.top.location.href);
+      console.log('[WINDOW_TOP_LOCATION]', window.top ? window.top.location.href : 'undefined');
       console.log('[HANDLE_PASTE_START]');
 
       console.log(
@@ -478,11 +478,8 @@ export default function ChatRoomScreen() {
         );
       }
 
-      console.log('[DIRECT_ELECTRON_API_TYPE]', typeof (window as any).electronAPI);
-      console.log('[DIRECT_ELECTRON_API_VALUE]', (window as any).electronAPI);
       const electronInstance = (window as any).electronAPI;
       console.log('[LOCAL_ELECTRON_INSTANCE]', electronInstance);
-      if (!electronInstance) return;
 
       const items = e.clipboardData?.items;
       if (!items) return;
@@ -515,57 +512,79 @@ export default function ChatRoomScreen() {
       e.preventDefault();
       console.log('[CLIPBOARD_IMAGE_DETECTED]');
 
-      try {
-        console.log(
-          '[CLIPBOARD_IPC_CALL]'
-        );
-        console.log('[IPC_INVOKE_START]');
-        const result = await electronInstance.getClipboardImage();
-        console.log(
-          '[CLIPBOARD_IPC_RESPONSE]',
-          result
-        );
-        console.log('[IPC_INVOKE_RESPONSE]', result);
-        console.log('[AFTER_IPC_RESPONSE]');
+      // 1. Try standard HTML5 paste first (robust for both browser and file copy on Electron)
+      let imageFile: File | null = null;
+      for (const item of Array.from(items) as any[]) {
+        if (item.type?.startsWith('image/')) {
+          imageFile = item.getAsFile();
+          break;
+        }
+      }
 
-        if (result && result.success && result.filePath) {
-          if (isMounted) {
-            console.log('[CLIPBOARD_IMAGE_FOUND]', result.filePath);
-            
-            // Clean up previous temp path if user pasted another image before sending
-            console.log('[BEFORE_SET_IMAGE]');
-            setCapturedImagePath(prev => {
-              if (prev && prev !== result.filePath) {
-                if (typeof electronInstance.deleteTempFile === 'function') {
-                  electronInstance.deleteTempFile(prev);
-                }
-              }
-              return result.filePath;
-            });
-            console.log('[AFTER_SET_IMAGE]');
-
-            console.log(
-              '[STATE_SET_IMAGE]',
-              result.filePath
-            );
-            console.log(
-              '[STATE_OPEN_MODAL]'
-            );
-            console.log('[BEFORE_OPEN_MODAL]');
-            setScreenshotModalVisible(true);
-            console.log('[AFTER_OPEN_MODAL]');
-            console.log('[CLIPBOARD_MODAL_OPEN]');
-          }
-        } else if (result && result.error) {
-          if (result.error.includes('exceeds 20MB limit')) {
-            console.log('[CLIPBOARD_IMAGE_TOO_LARGE]');
-            Alert.alert("Lỗi", "Kích thước ảnh sao chép vượt quá giới hạn 20MB!");
-          } else {
-            console.log('[CLIPBOARD_READ_FAIL]', result.error);
+      if (!imageFile && e.clipboardData.files && e.clipboardData.files.length > 0) {
+        for (const file of Array.from(e.clipboardData.files) as any[]) {
+          if (file.type?.startsWith('image/')) {
+            imageFile = file;
+            break;
           }
         }
-      } catch (err: any) {
-        console.log('[CLIPBOARD_READ_FAIL]', err.message);
+      }
+
+      if (imageFile) {
+        console.log('[CLIPBOARD_HTML5_IMAGE_FOUND]', imageFile.name, imageFile.type, imageFile.size);
+        if (imageFile.size > 20 * 1024 * 1024) {
+          Alert.alert("Lỗi", "Kích thước ảnh sao chép vượt quá giới hạn 20MB!");
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          if (event.target?.result && typeof event.target.result === 'string') {
+            if (isMounted) {
+              console.log('[CLIPBOARD_HTML5_READ_SUCCESS]');
+              setCapturedImagePath(prev => {
+                if (prev && !prev.startsWith('data:') && electronInstance && typeof electronInstance.deleteTempFile === 'function') {
+                  electronInstance.deleteTempFile(prev);
+                }
+                return event.target!.result as string;
+              });
+              setScreenshotModalVisible(true);
+            }
+          }
+        };
+        reader.onerror = (err) => {
+          console.error('[CLIPBOARD_HTML5_READ_ERROR]', err);
+        };
+        reader.readAsDataURL(imageFile);
+        return;
+      }
+
+      // 2. Fallback to Electron IPC if HTML5 paste didn't get the file directly
+      if (electronInstance && typeof electronInstance.getClipboardImage === 'function') {
+        try {
+          console.log('[CLIPBOARD_IPC_CALL]');
+          const result = await electronInstance.getClipboardImage();
+          if (result && result.success && result.filePath) {
+            if (isMounted) {
+              console.log('[CLIPBOARD_IMAGE_FOUND_IPC]', result.filePath);
+              setCapturedImagePath(prev => {
+                if (prev && prev !== result.filePath && !prev.startsWith('data:') && typeof electronInstance.deleteTempFile === 'function') {
+                  electronInstance.deleteTempFile(prev);
+                }
+                return result.filePath;
+              });
+              setScreenshotModalVisible(true);
+            }
+          } else if (result && result.error) {
+            if (result.error.includes('exceeds 20MB limit')) {
+              Alert.alert("Lỗi", "Kích thước ảnh sao chép vượt quá giới hạn 20MB!");
+            } else {
+              console.log('[CLIPBOARD_READ_FAIL_IPC]', result.error);
+            }
+          }
+        } catch (err: any) {
+          console.log('[CLIPBOARD_READ_FAIL_IPC]', err.message);
+        }
       }
     };
 
@@ -1455,7 +1474,7 @@ export default function ChatRoomScreen() {
   };
 
   const handleSendScreenshot = async (caption: string, base64Data: string) => {
-    const isClipboard = capturedImagePath && capturedImagePath.includes('teamflow_clipboard_');
+    const isClipboard = capturedImagePath && (capturedImagePath.includes('teamflow_clipboard_') || capturedImagePath.startsWith('data:'));
     if (isClipboard) {
       console.log('[CLIPBOARD_UPLOAD_START]');
     }
@@ -1538,7 +1557,7 @@ export default function ChatRoomScreen() {
       // Cleanup temporary file
       if (capturedImagePath) {
         const electronInstance = (window as any).electronAPI;
-        if (electronInstance && typeof electronInstance.deleteTempFile === 'function') {
+        if (electronInstance && typeof electronInstance.deleteTempFile === 'function' && !capturedImagePath.startsWith('data:')) {
           electronInstance.deleteTempFile(capturedImagePath);
           console.log('[CLIPBOARD_TEMP_DELETE]', capturedImagePath);
         }
@@ -2418,7 +2437,7 @@ export default function ChatRoomScreen() {
         imagePath={capturedImagePath}
         onClose={() => {
           setScreenshotModalVisible(false);
-          if (capturedImagePath) {
+          if (capturedImagePath && !capturedImagePath.startsWith('data:')) {
             const electronInstance = (window as any).electronAPI;
             if (electronInstance && typeof electronInstance.deleteTempFile === 'function') {
               electronInstance.deleteTempFile(capturedImagePath);

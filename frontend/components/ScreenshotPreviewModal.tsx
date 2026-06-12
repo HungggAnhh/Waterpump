@@ -74,7 +74,13 @@ export const ScreenshotPreviewModal: React.FC<ScreenshotPreviewModalProps> = ({
       
       const loadCroppedImage = async () => {
         try {
-          if (window.electronAPI && typeof window.electronAPI.readImageFile === 'function') {
+          if (imagePath.startsWith('data:')) {
+            // It's a base64 Data URL, extract the base64 portion
+            const base64Part = imagePath.split(';base64,').pop();
+            if (base64Part) {
+              setBase64Data(base64Part);
+            }
+          } else if (window.electronAPI && typeof window.electronAPI.readImageFile === 'function') {
             const data = await window.electronAPI.readImageFile(imagePath);
             if (data) {
               setBase64Data(data);
