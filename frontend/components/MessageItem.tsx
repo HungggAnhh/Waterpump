@@ -2,8 +2,10 @@
 import React from 'react';
 import { StyleSheet, Text, View, Image, TouchableOpacity, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { Video, ResizeMode } from 'expo-av';
 import VoiceMessage from './VoiceMessage';
 import { formatMessageTime } from '../utils/dateTime';
+import { isVideoFile } from '../store/useImageViewerStore';
 
 export interface Message {
   id: number | string; // support string client-side optimistic IDs
@@ -375,6 +377,55 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
               </View>
             )}
           </TouchableOpacity>
+        ) : item.type === 'file' && item.file_url && isVideoFile(item.file_url) ? (
+          /* Video bubble */
+          <TouchableOpacity 
+            onPress={() => {
+              handleTap();
+              onPressImage && onPressImage(item.file_url!);
+            }} 
+            onLongPress={() => onLongPress && onLongPress(item)}
+            activeOpacity={0.9}
+            style={[
+              styles.imageMessageContainer,
+              isHighlighted && { borderColor: '#f59e0b', borderWidth: 3 }
+            ]}
+          >
+            {Platform.OS === 'web' ? (
+              <video
+                src={item.file_url}
+                style={styles.chatVideo as any}
+                controls={false}
+                muted
+                preload="metadata"
+              />
+            ) : (
+              <Video
+                source={{ uri: item.file_url }}
+                style={styles.chatVideo}
+                resizeMode={ResizeMode.COVER}
+                shouldPlay={false}
+                isMuted={true}
+              />
+            )}
+            <View style={styles.playIconOverlay}>
+              <Ionicons name="play" size={32} color="#ffffff" />
+            </View>
+            {item.message && item.message !== '[Ảnh chụp màn hình]' && item.message !== '[Hình ảnh]' && item.message !== '[Video]' && (
+              <View style={[
+                styles.messageBubble,
+                isHighlighted
+                  ? { backgroundColor: '#fef3c7', borderColor: '#f59e0b', borderWidth: 2, marginTop: 6 }
+                  : isMine
+                    ? { backgroundColor: colors.tint, marginTop: 6 }
+                    : isMentioned
+                      ? { backgroundColor: '#fef3c7', borderColor: '#f59e0b', borderWidth: 1, marginTop: 6 }
+                      : { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1, marginTop: 6 }
+              ]}>
+                {renderMessageText(item.message, isMine, colors, isMentioned, isHighlighted)}
+              </View>
+            )}
+          </TouchableOpacity>
         ) : item.type === 'task' && item.task ? (
           /* Task Message Card */
           <TouchableOpacity
@@ -630,7 +681,11 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                   );
                 })()
               ) : item.type === 'file' && item.file_url ? (
-                <View style={styles.videoAttachmentCard}>
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => onPressImage && onPressImage(item.file_url!)}
+                  style={styles.videoAttachmentCard}
+                >
                   <Ionicons name="play-circle-outline" size={32} color={(isMine && !isHighlighted) ? '#fff' : colors.tint} />
                   <View style={{ marginLeft: 8 }}>
                     <Text style={[styles.videoAttachmentText, { color: (isMine && !isHighlighted) ? '#fff' : colors.text }]}>
@@ -640,7 +695,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
                       Nhấn để phát video clip
                     </Text>
                   </View>
-                </View>
+                </TouchableOpacity>
               ) : (
                 renderMessageText(item.message, isMine, colors, isMentioned, isHighlighted)
               )}
@@ -887,6 +942,23 @@ const styles = StyleSheet.create({
   chatImage: {
     width: 240,
     height: 180,
+    borderRadius: 16,
+  },
+  chatVideo: {
+    width: 240,
+    height: 180,
+    borderRadius: 16,
+    backgroundColor: '#000000',
+  },
+  playIconOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: 240,
+    height: 180,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.25)',
     borderRadius: 16,
   },
   videoAttachmentCard: {

@@ -196,7 +196,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
           const timer = setTimeout(() => {
             pendingMsgAlerts.delete(senderName);
-            voiceNotification.speakMessage(senderName, currentCount);
+            voiceNotification.speakMessage(senderName, user?.name || 'bạn', currentCount);
           }, 2000); // 2 seconds debounce to group messages
 
           pendingMsgAlerts.set(senderName, { count: currentCount, timer });

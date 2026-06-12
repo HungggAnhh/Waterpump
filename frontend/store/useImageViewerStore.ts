@@ -50,6 +50,14 @@ export const isImageFile = (url: string | null | undefined, mimeType?: string | 
   return false;
 };
 
+export const isVideoFile = (url: string | null | undefined): boolean => {
+  if (!url) return false;
+  const lowerUrl = url.toLowerCase();
+  const pathWithoutQuery = lowerUrl.split('?')[0];
+  const videoExtensions = ['.mp4', '.mov', '.m4v', '.avi', '.webm', '.mkv', '.3gp'];
+  return videoExtensions.some(ext => pathWithoutQuery.endsWith(ext));
+};
+
 export const useImageViewerStore = create<ImageViewerStore>((set) => ({
   visible: false,
   images: [],

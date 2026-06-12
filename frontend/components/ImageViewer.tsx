@@ -15,7 +15,8 @@ import {
   StatusBar,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useImageViewerStore } from '@/store/useImageViewerStore';
+import { Video, ResizeMode } from 'expo-av';
+import { useImageViewerStore, isVideoFile } from '@/store/useImageViewerStore';
 
 const MIN_SCALE = 1;
 const MAX_SCALE = 10; // Zoom up to 10x on mobile as requested
@@ -499,7 +500,7 @@ export const ImageViewer: React.FC = () => {
           },
           Platform.OS === 'web' && { cursor: cursor as any }
         ]}
-        {...panResponder.panHandlers}
+        {...(isVideoFile(imageUrl) ? {} : panResponder.panHandlers)}
       >
         {/* Loading Indicator */}
         {loading && (
@@ -525,19 +526,43 @@ export const ImageViewer: React.FC = () => {
         >
           <TouchableOpacity
             activeOpacity={1}
-            onPress={handleDoubleTap}
+            onPress={isVideoFile(imageUrl) ? undefined : handleDoubleTap}
             style={styles.imagePressable}
+            disabled={isVideoFile(imageUrl)}
           >
-            <Image
-              source={{ uri: imageUrl }}
-              style={styles.image}
-              resizeMode="contain"
-              onLoad={handleLoad}
-              onLoadStart={() => {
-                setLoading(true);
-                imageDimensions.current = { width: 0, height: 0 };
-              }}
-            />
+            {isVideoFile(imageUrl) ? (
+              Platform.OS === 'web' ? (
+                <video
+                  src={imageUrl}
+                  style={styles.fullscreenVideo as any}
+                  controls
+                  autoPlay
+                  preload="auto"
+                  onLoadedData={() => setLoading(false)}
+                />
+              ) : (
+                <Video
+                  source={{ uri: imageUrl }}
+                  style={styles.fullscreenVideo}
+                  useNativeControls
+                  resizeMode={ResizeMode.CONTAIN}
+                  shouldPlay={true}
+                  isLooping={false}
+                  onLoad={() => setLoading(false)}
+                />
+              )
+            ) : (
+              <Image
+                source={{ uri: imageUrl }}
+                style={styles.image}
+                resizeMode="contain"
+                onLoad={handleLoad}
+                onLoadStart={() => {
+                  setLoading(true);
+                  imageDimensions.current = { width: 0, height: 0 };
+                }}
+              />
+            )}
           </TouchableOpacity>
         </Animated.View>
 
@@ -580,7 +605,7 @@ export const ImageViewer: React.FC = () => {
         </View>
 
         {/* Floating Desktop Zoom Toolbar (Web & Electron only) */}
-        {Platform.OS === 'web' && (
+        {Platform.OS === 'web' && !isVideoFile(imageUrl) && (
           <View style={styles.zoomToolbar} pointerEvents="box-none">
             <View style={styles.toolbarContainer}>
               <TouchableOpacity
@@ -654,6 +679,12 @@ const styles = StyleSheet.create({
   image: {
     width: '100%',
     height: '100%',
+  },
+  fullscreenVideo: {
+    width: '100%',
+    height: '100%',
+    maxWidth: '100%',
+    maxHeight: '100%',
   },
   headerBar: {
     position: 'absolute',

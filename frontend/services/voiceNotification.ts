@@ -207,11 +207,11 @@ class VoiceNotificationService {
 
   // --- Specialized notification builders ---
 
-  speakMessage(senderName: string, count = 1) {
+  speakMessage(senderName: string, receiverName = 'bạn', count = 1) {
     if (count > 1) {
-      this.speak(`${senderName} vừa gửi ${count} tin nhắn cho bạn`, 'message');
+      this.speak(`${senderName} đã gửi ${count} tin nhắn cho ${receiverName}`, 'message');
     } else {
-      this.speak(`${senderName} vừa gửi tin nhắn cho bạn`, 'message');
+      this.speak(`${senderName} đã gửi tin nhắn cho ${receiverName}`, 'message');
     }
   }
 
