@@ -65,6 +65,8 @@ interface Task {
   revision_count?: number;
   total_assignees?: number;
   viewed_assignees_count?: number;
+  total_reports_count?: number;
+  unseen_reports_count?: number;
 }
 
 interface Comment {

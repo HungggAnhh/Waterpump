@@ -64,6 +64,7 @@ interface Task {
   viewed_assignees_count?: number;
   completed_assignees_count?: number;
   total_reports_count?: number;
+  unseen_reports_count?: number;
 }
 
 interface UserListItem {

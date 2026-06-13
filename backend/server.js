@@ -205,7 +205,7 @@ io.on('connection', (socket) => {
       ) : Promise.resolve({ rows: [] });
 
       const convPromise = query(
-        'SELECT type FROM conversations WHERE id = $1 LIMIT 1',
+        'SELECT name, type FROM conversations WHERE id = $1 LIMIT 1',
         [parseInt(conversation_id)]
       );
 
@@ -299,27 +299,27 @@ io.on('connection', (socket) => {
 
       // Additive station announcement trigger (Production Safe)
       const isDirect = convCheck.rows.length > 0 && convCheck.rows[0].type === 'direct';
-      if (sender.role === 'admin' && isDirect) {
+      const isGroup = convCheck.rows.length > 0 && convCheck.rows[0].type === 'group';
+      const groupName = convCheck.rows.length > 0 ? convCheck.rows[0].name : '';
+      if (sender.role === 'admin' && (isDirect || isGroup)) {
         (async () => {
           try {
-            const otherMemberRes = await query(
-              `SELECT id, name FROM users WHERE id = (
-                 SELECT user_id FROM conversation_users 
-                 WHERE conversation_id = $1 AND user_id != $2 
-                 LIMIT 1
-               )`,
+            const receiverRes = await query(
+              `SELECT u.name FROM conversation_users cu
+               JOIN users u ON cu.user_id = u.id
+               WHERE cu.conversation_id = $1 AND cu.user_id != $2`,
               [parseInt(conversation_id), parseInt(sender_id)]
             );
-            if (otherMemberRes.rows.length > 0) {
-              const recipient = otherMemberRes.rows[0];
-              io.to('stations').emit('station_direct_message', {
-                adminName: sender.name || 'Admin',
-                employeeName: recipient.name,
-                employeeId: recipient.id,
-                timestamp: new Date().toISOString()
-              });
-              console.log('[STATION] Emitted station_direct_message to stations room');
-            }
+            const receiverNames = receiverRes.rows.map(r => r.name || 'nhân viên');
+
+            io.to('stations').emit('station_direct_message', {
+              adminName: sender.name || 'Admin',
+              receiverNames: receiverNames,
+              isGroup: isGroup,
+              groupName: groupName,
+              timestamp: new Date().toISOString()
+            });
+            console.log(`[STATION] Emitted station_direct_message to stations room (isGroup: ${isGroup}, receiverNames: ${receiverNames}, groupName: ${groupName})`);
           } catch (err) {
             console.error('❌ Fail-Safe: Error emitting station direct message:', err.message);
           }

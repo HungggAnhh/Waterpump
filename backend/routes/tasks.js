@@ -1138,28 +1138,28 @@ router.post('/tasks', async (req, res) => {
       console.log('📡 Realtime: Phát sự kiện tạo và gán task cho các thành viên');
       
       // Additive station announcement trigger (Production Safe)
-      if (user.role === 'admin' && assigneeIds && assigneeIds.length > 0) {
-        (async () => {
-          try {
-            const assigneesDetails = await query(
-              'SELECT id, name FROM users WHERE id = ANY($1)',
-              [assigneeIds]
-            );
-            for (const emp of assigneesDetails.rows) {
-              io.to('stations').emit('station_task_assigned', {
-                adminName: senderName || 'Admin',
-                employeeName: emp.name,
-                employeeId: emp.id,
-                taskId: newTask.id,
-                taskTitle: newTask.title,
-                timestamp: new Date().toISOString()
-              });
-              console.log(`[STATION] Emitted station_task_assigned to stations room for employee: ${emp.name}`);
+      if (user.role === 'admin') {
+        try {
+          const isGroup = !!newTask.workspace_id;
+          let workspaceName = '';
+          if (newTask.workspace_id) {
+            const wsRes = await query('SELECT name FROM workspaces WHERE id = $1', [newTask.workspace_id]);
+            if (wsRes.rows.length > 0) {
+              workspaceName = wsRes.rows[0].name;
             }
-          } catch (err) {
-            console.error('❌ Fail-Safe: Error emitting station task assignment:', err.message);
           }
-        })();
+          const assigneeNames = (newTask.assignees || []).map(a => a.name || 'nhân viên');
+          io.to('stations').emit('station_task_assigned', {
+            adminName: senderName || 'Admin',
+            assigneeNames: assigneeNames,
+            isGroup: isGroup,
+            groupName: workspaceName,
+            timestamp: new Date().toISOString()
+          });
+          console.log(`[STATION] Emitted station_task_assigned to stations room (isGroup: ${isGroup}, assigneeNames: ${assigneeNames}, groupName: ${workspaceName})`);
+        } catch (err) {
+          console.error('❌ Fail-Safe: Error emitting station task assignment:', err.message);
+        }
       }
     }
 

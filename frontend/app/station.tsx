@@ -45,13 +45,25 @@ export default function StationScreen() {
   const [pendingSpeech, setPendingSpeech] = useState<SpeechItem[]>([]);
 
   // Ref trackers
-  const eventBuffer = useRef<Record<string, {
-    type: 'task' | 'message';
-    adminName: string;
-    employeeName: string;
-    count: number;
+  const eventBuffer = useRef<{
+    hasGroupTask: boolean;
+    hasPersonalTask: boolean;
+    hasGroupMessage: boolean;
+    hasPersonalMessage: boolean;
+    taskAssignees: Set<string>;
+    messageReceivers: Set<string>;
+    groupName: string;
     timer: any;
-  }>>({});
+  }>({
+    hasGroupTask: false,
+    hasPersonalTask: false,
+    hasGroupMessage: false,
+    hasPersonalMessage: false,
+    taskAssignees: new Set(),
+    messageReceivers: new Set(),
+    groupName: '',
+    timer: null,
+  });
 
   const isSpeakingRef = useRef(false);
   const pendingSpeechRef = useRef<SpeechItem[]>([]);
@@ -169,108 +181,151 @@ export default function StationScreen() {
   useEffect(() => {
     if (!socket) return;
 
+    const processBufferedEvents = () => {
+      const buf = eventBuffer.current;
+      
+      let text = '';
+      let priority = 1;
+
+      const formatNames = (namesSet: Set<string>) => {
+        const names = Array.from(namesSet);
+        if (names.length === 0) return '';
+        if (names.length === 1) return names[0];
+        if (names.length === 2) return `${names[0]} và ${names[1]}`;
+        return `${names.slice(0, -1).join(', ')} và ${names[names.length - 1]}`;
+      };
+
+      if (buf.hasPersonalTask) {
+        const namesStr = formatNames(buf.taskAssignees);
+
+        text = namesStr
+          ? `Admin vừa giao nhiệm vụ cho ${namesStr}.`
+          : 'Admin vừa giao nhiệm vụ mới.';
+
+        priority = 1;
+
+      } else if (buf.hasGroupTask) {
+
+        const groupName = buf.groupName || '';
+
+        text = groupName
+          ? `Admin vừa giao nhiệm vụ cho nhóm ${groupName}.`
+          : 'Admin vừa giao nhiệm vụ cho một nhóm.';
+
+        priority = 1;
+
+      } else if (buf.hasPersonalMessage) {
+
+        const namesStr = formatNames(buf.messageReceivers);
+
+        text = namesStr
+          ? `Admin vừa gửi tin nhắn cho ${namesStr}.`
+          : 'Admin vừa gửi tin nhắn mới.';
+
+        priority = 2;
+
+      } else if (buf.hasGroupMessage) {
+
+        const groupName = buf.groupName || '';
+
+        text = groupName
+          ? `Admin vừa gửi tin nhắn cho nhóm ${groupName}.`
+          : 'Admin vừa gửi tin nhắn trong một nhóm.';
+
+        priority = 2;
+      }
+
+      // Reset buffer
+      eventBuffer.current = {
+        hasGroupTask: false,
+        hasPersonalTask: false,
+        hasGroupMessage: false,
+        hasPersonalMessage: false,
+        taskAssignees: new Set(),
+        messageReceivers: new Set(),
+        groupName: '',
+        timer: null
+      };
+
+      if (!text) return;
+
+      // Update UI logs
+      setAnnouncements(prev => [{
+        id: `announcement_${Date.now()}_${Math.random()}`,
+        text,
+        timestamp: new Date()
+      }, ...prev].slice(0, 100));
+
+      // Add to speech queue
+      setPendingSpeech(prev => [...prev, {
+        id: `speech_${Date.now()}_${Math.random()}`,
+        text,
+        priority
+      }]);
+    };
+
     const handleTaskAssigned = (data: {
       adminName: string;
-      employeeName: string;
-      employeeId: number;
-      taskId: number;
-      taskTitle: string;
+      assigneeNames?: string[];
+      isGroup: boolean;
+      groupName?: string;
       timestamp: string;
     }) => {
       console.log('📡 [STATION] received station_task_assigned:', data);
-      const key = `${data.adminName}_to_${data.employeeName}_task`;
-
-      if (!eventBuffer.current[key]) {
-        eventBuffer.current[key] = {
-          type: 'task',
-          adminName: data.adminName,
-          employeeName: data.employeeName,
-          count: 0,
-          timer: null
-        };
+      
+      if (eventBuffer.current.timer) {
+        clearTimeout(eventBuffer.current.timer);
       }
 
-      const buffer = eventBuffer.current[key];
-      buffer.count += 1;
-
-      if (buffer.timer) {
-        clearTimeout(buffer.timer);
+      if (data.isGroup) {
+        eventBuffer.current.hasGroupTask = true;
+      } else {
+        eventBuffer.current.hasPersonalTask = true;
       }
 
-      buffer.timer = setTimeout(() => {
-        const finalData = eventBuffer.current[key];
-        if (!finalData) return;
-        delete eventBuffer.current[key];
+      if (data.assigneeNames && Array.isArray(data.assigneeNames)) {
+        data.assigneeNames.forEach(name => {
+          if (name) eventBuffer.current.taskAssignees.add(name);
+        });
+      }
 
-        const text = finalData.count === 1
-          ? `Thông báo mới. Anh ${finalData.adminName} vừa giao nhiệm vụ cho ${finalData.employeeName}. Vui lòng kiểm tra TeamFlow.`
-          : `Thông báo mới. Anh ${finalData.adminName} vừa giao ${finalData.count} nhiệm vụ cho ${finalData.employeeName}. Vui lòng kiểm tra TeamFlow.`;
+      if (data.groupName) {
+        eventBuffer.current.groupName = data.groupName;
+      }
 
-        // Update UI logs
-        setAnnouncements(prev => [{
-          id: `task_${Date.now()}_${Math.random()}`,
-          text,
-          timestamp: new Date()
-        }, ...prev].slice(0, 100));
-
-        // Add to speech queue
-        setPendingSpeech(prev => [...prev, {
-          id: `task_speech_${Date.now()}_${Math.random()}`,
-          text,
-          priority: 1
-        }]);
-      }, 3000);
+      eventBuffer.current.timer = setTimeout(processBufferedEvents, 3000);
     };
 
     const handleDirectMessage = (data: {
       adminName: string;
-      employeeName: string;
-      employeeId: number;
+      receiverNames?: string[];
+      isGroup: boolean;
+      groupName?: string;
       timestamp: string;
     }) => {
       console.log('📡 [STATION] received station_direct_message:', data);
-      const key = `${data.adminName}_to_${data.employeeName}_msg`;
-
-      if (!eventBuffer.current[key]) {
-        eventBuffer.current[key] = {
-          type: 'message',
-          adminName: data.adminName,
-          employeeName: data.employeeName,
-          count: 0,
-          timer: null
-        };
+      
+      if (eventBuffer.current.timer) {
+        clearTimeout(eventBuffer.current.timer);
       }
 
-      const buffer = eventBuffer.current[key];
-      buffer.count += 1;
-
-      if (buffer.timer) {
-        clearTimeout(buffer.timer);
+      if (data.isGroup) {
+        eventBuffer.current.hasGroupMessage = true;
+      } else {
+        eventBuffer.current.hasPersonalMessage = true;
       }
 
-      buffer.timer = setTimeout(() => {
-        const finalData = eventBuffer.current[key];
-        if (!finalData) return;
-        delete eventBuffer.current[key];
+      if (data.receiverNames && Array.isArray(data.receiverNames)) {
+        data.receiverNames.forEach(name => {
+          if (name) eventBuffer.current.messageReceivers.add(name);
+        });
+      }
 
-        const text = finalData.count === 1
-          ? `Thông báo mới. Anh ${finalData.adminName} vừa gửi tin nhắn cho ${finalData.employeeName}. Vui lòng kiểm tra TeamFlow.`
-          : `Thông báo mới. Anh ${finalData.adminName} vừa gửi nhiều tin nhắn cho ${finalData.employeeName}. Vui lòng kiểm tra TeamFlow.`;
+      if (data.groupName) {
+        eventBuffer.current.groupName = data.groupName;
+      }
 
-        // Update UI logs
-        setAnnouncements(prev => [{
-          id: `msg_${Date.now()}_${Math.random()}`,
-          text,
-          timestamp: new Date()
-        }, ...prev].slice(0, 100));
-
-        // Add to speech queue
-        setPendingSpeech(prev => [...prev, {
-          id: `msg_speech_${Date.now()}_${Math.random()}`,
-          text,
-          priority: 2
-        }]);
-      }, 3000);
+      eventBuffer.current.timer = setTimeout(processBufferedEvents, 3000);
     };
 
     socket.on('station_task_assigned', handleTaskAssigned);
@@ -279,13 +334,9 @@ export default function StationScreen() {
     return () => {
       socket.off('station_task_assigned', handleTaskAssigned);
       socket.off('station_direct_message', handleDirectMessage);
-      // Clear any pending timers on unmount
-      Object.keys(eventBuffer.current).forEach(key => {
-        if (eventBuffer.current[key].timer) {
-          clearTimeout(eventBuffer.current[key].timer);
-        }
-      });
-      eventBuffer.current = {};
+      if (eventBuffer.current.timer) {
+        clearTimeout(eventBuffer.current.timer);
+      }
     };
   }, [socket]);
 
