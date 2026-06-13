@@ -116,6 +116,7 @@ interface SpeechItem {
 }
 
 class VoiceNotificationService {
+  public volume = 1.0;
   private queue: SpeechItem[] = [];
   private isSpeaking = false;
   private lastSpokenTime = 0;
@@ -152,6 +153,7 @@ class VoiceNotificationService {
     // Prepare utterance
     const utterance = new SpeechSynthesisUtterance(nextItem.text);
     utterance.lang = 'vi-VN';
+    utterance.volume = this.volume;
     
     // Attempt to select a Vietnamese voice if available
     const voices = window.speechSynthesis.getVoices();

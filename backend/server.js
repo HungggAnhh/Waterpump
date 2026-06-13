@@ -104,6 +104,13 @@ io.on('connection', (socket) => {
       onlineUsers.set(user.id, { socketId: socket.id, id: user.id, name: user.name, avatar: user.avatar, role: user.role });
 
       socket.join(`user_${user.id}`);
+      
+      const NOTIFICATION_STATION_EMAIL = process.env.NOTIFICATION_STATION_EMAIL || 'station_01@company.com';
+      if (user?.email === NOTIFICATION_STATION_EMAIL) {
+        socket.join('stations');
+        console.log(`🟢 Station ${user.name} ONLINE → phòng stations`);
+      }
+      
       console.log(`🟢 ${user.name} ONLINE → phòng user_${user.id}`);
 
       io.emit('update_online_users', Array.from(onlineUsers.values()));
@@ -185,7 +192,7 @@ io.on('connection', (socket) => {
       );
 
       const userPromise = query(
-        'SELECT name, avatar FROM users WHERE id = $1 LIMIT 1',
+        'SELECT name, avatar, role FROM users WHERE id = $1 LIMIT 1',
         [parseInt(sender_id)]
       );
 
@@ -289,6 +296,35 @@ io.on('connection', (socket) => {
         console.log('[SERVER] roomId (conversation_id):', conversation_id);
         console.log('[SERVER] message.id:', messageId);
       });
+
+      // Additive station announcement trigger (Production Safe)
+      const isDirect = convCheck.rows.length > 0 && convCheck.rows[0].type === 'direct';
+      if (sender.role === 'admin' && isDirect) {
+        (async () => {
+          try {
+            const otherMemberRes = await query(
+              `SELECT id, name FROM users WHERE id = (
+                 SELECT user_id FROM conversation_users 
+                 WHERE conversation_id = $1 AND user_id != $2 
+                 LIMIT 1
+               )`,
+              [parseInt(conversation_id), parseInt(sender_id)]
+            );
+            if (otherMemberRes.rows.length > 0) {
+              const recipient = otherMemberRes.rows[0];
+              io.to('stations').emit('station_direct_message', {
+                adminName: sender.name || 'Admin',
+                employeeName: recipient.name,
+                employeeId: recipient.id,
+                timestamp: new Date().toISOString()
+              });
+              console.log('[STATION] Emitted station_direct_message to stations room');
+            }
+          } catch (err) {
+            console.error('❌ Fail-Safe: Error emitting station direct message:', err.message);
+          }
+        })();
+      }
 
       // 2. CHẠY CÁC TÁC VỤ PHỤ (Cập nhật CSDL, Khôi phục Direct chat, Gửi Push Notification) DƯỚI NỀN BẤT ĐỒNG BỘ
       (async () => {

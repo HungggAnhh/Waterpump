@@ -362,7 +362,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
             ]}
           >
             <Image source={{ uri: item.file_url }} style={styles.chatImage} resizeMode="cover" />
-            {item.message && item.message !== '[Ảnh chụp màn hình]' && item.message !== '[Hình ảnh]' && item.message !== '[Video]' && (
+            {item.message && item.message !== '[Ảnh chụp màn hình]' && item.message !== '[Ảnh từ clipboard]' && item.message !== '[Hình ảnh]' && item.message !== '[Video]' && (
               <View style={[
                 styles.messageBubble,
                 isHighlighted
@@ -411,7 +411,7 @@ const MessageItemComponent: React.FC<MessageItemProps> = ({
             <View style={styles.playIconOverlay}>
               <Ionicons name="play" size={32} color="#ffffff" />
             </View>
-            {item.message && item.message !== '[Ảnh chụp màn hình]' && item.message !== '[Hình ảnh]' && item.message !== '[Video]' && (
+            {item.message && item.message !== '[Ảnh chụp màn hình]' && item.message !== '[Ảnh từ clipboard]' && item.message !== '[Hình ảnh]' && item.message !== '[Video]' && (
               <View style={[
                 styles.messageBubble,
                 isHighlighted

@@ -26,6 +26,8 @@ const getBaseUrl = () => {
 
 export const API_BASE_URL = getBaseUrl();
 
+export const NOTIFICATION_STATION_EMAIL = 'station_01@company.com';
+
 export const endpoints = {
   tasks: `${API_BASE_URL}/tasks`,
   users: `${API_BASE_URL}/users`,

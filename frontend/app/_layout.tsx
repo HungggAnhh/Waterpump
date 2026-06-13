@@ -1,5 +1,5 @@
 import { useFonts } from 'expo-font';
-import { Stack, useRouter } from 'expo-router';
+import { Stack, useRouter, useSegments } from 'expo-router';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
@@ -29,6 +29,7 @@ import LoginScreen from '../components/LoginScreen';
 import NameOnboardingScreen from '../components/NameOnboardingScreen';
 import { requestAndRegisterFCM } from '../utils/fcmHelper';
 import { ImageViewer } from '../components/ImageViewer';
+import { NOTIFICATION_STATION_EMAIL } from '../constants/Config';
 
 export default function RootLayout() {
   const [loaded, error] = useFonts({
@@ -93,6 +94,7 @@ function RootLayoutContent() {
 function RootLayoutNav() {
   const colorScheme = useColorScheme();
   const router = useRouter();
+  const segments = useSegments();
   const { user } = useUser();
 
   useEffect(() => {
@@ -101,6 +103,24 @@ function RootLayoutNav() {
       requestAndRegisterFCM(user.id);
     }
   }, [user?.id]);
+
+  useEffect(() => {
+    if (!user) return;
+    const isStation = user.email === NOTIFICATION_STATION_EMAIL;
+    const inStation = segments[0] === 'station';
+
+    if (isStation) {
+      if (!inStation) {
+        console.log('🛡️ [RootLayoutNav] Redirecting station to /station');
+        router.replace('/station' as any);
+      }
+    } else {
+      if (inStation) {
+        console.log('🛡️ [RootLayoutNav] Redirecting normal user away from /station');
+        router.replace('/(tabs)' as any);
+      }
+    }
+  }, [user, segments]);
 
   // Xử lý điều hướng gián tiếp qua trang chủ (?redirect=...) để tránh lỗi Vercel 404
   useEffect(() => {
@@ -139,6 +159,7 @@ function RootLayoutNav() {
             animation: 'slide_from_right',
           }}
         />
+        <Stack.Screen name="station" options={{ headerShown: false }} />
       </Stack>
       <ImageViewer />
     </ThemeProvider>

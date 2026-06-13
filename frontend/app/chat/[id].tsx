@@ -1508,7 +1508,7 @@ export default function ChatRoomScreen() {
           console.log('[CLIPBOARD_UPLOAD_SUCCESS]');
         }
 
-        const screenshotMsgText = caption || (isClipboard ? '[Ảnh từ clipboard]' : '[Ảnh chụp màn hình]');
+        const screenshotMsgText = caption || (isClipboard ? '[Hình ảnh]' : '[Ảnh chụp màn hình]');
         const clientMessageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
 
         // Optimistic update

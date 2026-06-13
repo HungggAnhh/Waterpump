@@ -2,7 +2,7 @@
 import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
 import { Alert } from 'react-native';
 import io, { Socket } from 'socket.io-client';
-import { API_BASE_URL } from '@/constants/Config';
+import { API_BASE_URL, NOTIFICATION_STATION_EMAIL } from '@/constants/Config';
 import { useConversationStore } from '../store/useConversationStore';
 import { useOnlineStore } from '../store/useOnlineStore';
 import { useUser } from './UserContext';
@@ -68,6 +68,41 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       socketUrl = socketUrl.replace(/\/api$/, '').replace(/\/$/, '');
     } else {
       socketUrl = socketUrl.replace('/app-assign-tasks/api', ':3000').replace('/api', ':3000');
+    }
+
+    const isStation = user?.email === NOTIFICATION_STATION_EMAIL;
+    if (isStation) {
+      console.log(`🔌 [GLOBAL_SOCKET] Connecting isolated station socket to: ${socketUrl}`);
+      const socket = io(socketUrl, {
+        transports: ['websocket'],
+        forceNew: true,
+        reconnection: true,
+        reconnectionAttempts: 20,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+        timeout: 20000,
+      });
+      socketRef.current = socket;
+
+      socket.on('connect', () => {
+        console.log(`🟢 [GLOBAL_SOCKET:STATION] Connected! socket.id: ${socket.id}`);
+        setIsConnected(true);
+        socket.emit('join', user);
+      });
+      socket.on('disconnect', () => {
+        console.log('🔴 [GLOBAL_SOCKET:STATION] Disconnected');
+        setIsConnected(false);
+      });
+      socket.on('connect_error', (err) => {
+        console.error('❌ [GLOBAL_SOCKET:STATION] Connect error:', err.message);
+        setIsConnected(false);
+      });
+
+      return () => {
+        socket.disconnect();
+        socketRef.current = null;
+        setIsConnected(false);
+      };
     }
 
     console.log(`🔌 [GLOBAL_SOCKET] Đang khởi tạo kết nối tới: ${socketUrl}`);
@@ -534,20 +569,24 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   return (
     <SocketContext.Provider value={{ socket: socketRef.current, isConnected, startCall: webrtc.startCall }}>
       {children}
-      <IncomingCallModal
-        visible={webrtc.callState === 'incoming'}
-        callerInfo={webrtc.callerInfo}
-        callType={webrtc.callType}
-        onAccept={webrtc.acceptCall}
-        onReject={webrtc.rejectCall}
-      />
-      <CallScreen
-        localStream={webrtc.localStream}
-        remoteStream={webrtc.remoteStream}
-        onHangUp={() => webrtc.handleHangUp(true)}
-        onToggleMute={webrtc.toggleMute}
-        onToggleVideo={webrtc.toggleVideo}
-      />
+      {user?.email !== NOTIFICATION_STATION_EMAIL && (
+        <>
+          <IncomingCallModal
+            visible={webrtc.callState === 'incoming'}
+            callerInfo={webrtc.callerInfo}
+            callType={webrtc.callType}
+            onAccept={webrtc.acceptCall}
+            onReject={webrtc.rejectCall}
+          />
+          <CallScreen
+            localStream={webrtc.localStream}
+            remoteStream={webrtc.remoteStream}
+            onHangUp={() => webrtc.handleHangUp(true)}
+            onToggleMute={webrtc.toggleMute}
+            onToggleVideo={webrtc.toggleVideo}
+          />
+        </>
+      )}
     </SocketContext.Provider>
   );
 };

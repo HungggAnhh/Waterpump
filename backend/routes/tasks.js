@@ -1136,6 +1136,31 @@ router.post('/tasks', async (req, res) => {
         }
       }
       console.log('📡 Realtime: Phát sự kiện tạo và gán task cho các thành viên');
+      
+      // Additive station announcement trigger (Production Safe)
+      if (user.role === 'admin' && assigneeIds && assigneeIds.length > 0) {
+        (async () => {
+          try {
+            const assigneesDetails = await query(
+              'SELECT id, name FROM users WHERE id = ANY($1)',
+              [assigneeIds]
+            );
+            for (const emp of assigneesDetails.rows) {
+              io.to('stations').emit('station_task_assigned', {
+                adminName: senderName || 'Admin',
+                employeeName: emp.name,
+                employeeId: emp.id,
+                taskId: newTask.id,
+                taskTitle: newTask.title,
+                timestamp: new Date().toISOString()
+              });
+              console.log(`[STATION] Emitted station_task_assigned to stations room for employee: ${emp.name}`);
+            }
+          } catch (err) {
+            console.error('❌ Fail-Safe: Error emitting station task assignment:', err.message);
+          }
+        })();
+      }
     }
 
     // Gửi Push Notification bất đồng bộ (chạy nền)
