@@ -25,7 +25,7 @@ const getAuthUser = (req) => {
   if (token) {
     try {
       const decoded = jwt.verify(token, JWT_SECRET);
-      return { id: parseInt(decoded.id), role: decoded.role };
+      return { id: parseInt(decoded.id), role: decoded.role, name: decoded.name || null };
     } catch (e) {
       console.warn("⚠️ JWT verification failed:", e.message);
     }
@@ -33,10 +33,25 @@ const getAuthUser = (req) => {
   const fallbackId = parseInt(req.query.user_id || (req.body && req.body.user_id));
   const fallbackRole = req.query.user_role || (req.body && req.body.user_role) || 'user';
   if (fallbackId) {
-    return { id: fallbackId, role: fallbackRole };
+    return { id: fallbackId, role: fallbackRole, name: null };
   }
   return null;
 };
+
+// Helper: Giải quyết tên người dùng từ database nếu thiếu trong user object (backward compatibility)
+async function resolveUserName(user) {
+  if (!user) return 'Thành viên';
+  if (user.name) return user.name;
+  try {
+    const result = await query(
+      'SELECT name FROM users WHERE id = $1 LIMIT 1',
+      [user.id]
+    );
+    return result.rows?.[0]?.name || 'Thành viên';
+  } catch (err) {
+    return 'Thành viên';
+  }
+}
 
 // GET /api/tasks — Lấy toàn bộ danh sách nhiệm vụ hệ thống
 router.get('/', async (req, res) => {
@@ -928,6 +943,7 @@ router.post('/tasks', async (req, res) => {
   if (!user) {
     return res.status(401).json({ status: 'error', message: 'Không thể xác thực người dùng.' });
   }
+  const senderName = await resolveUserName(user);
 
   const { workspace_id, title, description, status = 'todo', priority = 'medium', assigned_to, deadline, conversation_id } = req.body;
 
@@ -1098,7 +1114,7 @@ router.post('/tasks', async (req, res) => {
       assignees: newTask.assignees || [],
       creator: {
         id: user.id,
-        name: user.name || 'Hệ thống',
+        name: senderName || 'Hệ thống',
         avatar: user.avatar || null
       },
       workspaceId: newTask.workspace_id,
@@ -1135,7 +1151,7 @@ router.post('/tasks', async (req, res) => {
             if (tokensRes.rows.length > 0) {
               const { sendPWAPushNotification } = require('../config/firebaseAdmin');
               const title = `📋 Nhiệm vụ mới`;
-              const body = `${user.name} đã giao cho bạn: "${newTask.title}"`;
+              const body = `${senderName} đã giao cho bạn: "${newTask.title}"`;
               const dataUrl = `/workspace/${newTask.workspace_id || ''}`;
               
               const extraData = {
@@ -1169,7 +1185,7 @@ router.post('/tasks', async (req, res) => {
         id: parseInt(createdMsg.id),
         conversation_id: parseInt(conversation_id),
         sender_id: user.id,
-        sender_name: user.name || 'Hệ thống',
+        sender_name: senderName || 'Hệ thống',
         sender_avatar: user.avatar || null,
         message: messageText,
         type: 'task',
@@ -1203,6 +1219,7 @@ router.put('/tasks/:taskId/assignment/status', async (req, res) => {
   if (!user) {
     return res.status(401).json({ status: 'error', message: 'Không thể xác thực người dùng.' });
   }
+  const senderName = await resolveUserName(user);
 
   const taskId = parseInt(req.params.taskId);
   const { status } = req.body; // 'todo', 'in_progress', 'completed'
@@ -1309,7 +1326,7 @@ router.put('/tasks/:taskId/assignment/status', async (req, res) => {
       io.emit('assignment_status_updated', payload);
       io.emit('task_updated', { id: taskId, user_id: user.id, status, assignees });
       if (status === 'in_progress') {
-        io.emit('task_started', { taskId, user_id: user.id, userName: user.name, title: task.title });
+        io.emit('task_started', { taskId, user_id: user.id, userName: senderName, title: task.title });
       }
     }
 
@@ -1374,6 +1391,7 @@ router.put('/tasks/:taskId', async (req, res) => {
   if (!user) {
     return res.status(401).json({ status: 'error', message: 'Không thể xác thực người dùng.' });
   }
+  const senderName = await resolveUserName(user);
 
   const taskId = parseInt(req.params.taskId);
 
@@ -1557,7 +1575,7 @@ router.put('/tasks/:taskId', async (req, res) => {
       io.emit('task_updated', updatedTask);
       console.log('📡 Realtime: Phát sự kiện task_updated cho:', updatedTask.title);
       if (updatedTask.completed && !currentTask.completed) {
-        io.emit('task_completed', { ...updatedTask, completed_by_name: user.name });
+        io.emit('task_completed', { ...updatedTask, completed_by_name: senderName });
       }
     }
 
@@ -2298,6 +2316,7 @@ router.post('/tasks/:taskId/submit', async (req, res) => {
   if (!user) {
     return res.status(401).json({ status: 'error', message: 'Không thể xác thực người dùng.' });
   }
+  const senderName = await resolveUserName(user);
 
   const taskId = parseInt(req.params.taskId);
 
@@ -2408,7 +2427,7 @@ router.post('/tasks/:taskId/submit', async (req, res) => {
           );
           if (tokensRes.rows.length > 0) {
             const { sendPWAPushNotification } = require('../config/firebaseAdmin');
-            const submitterName = user.name || 'Nhân viên';
+            const submitterName = senderName || 'Nhân viên';
             const title = `📋 Nhiệm vụ chờ duyệt`;
             const body = `${submitterName} vừa gửi duyệt nhiệm vụ: "${updatedTask.title}"`;
             const dataUrl = `/workspace/${updatedTask.workspace_id}`;
@@ -2434,6 +2453,7 @@ router.post('/tasks/:taskId/approve', async (req, res) => {
   if (!user || user.role !== 'admin') {
     return res.status(403).json({ status: 'error', message: 'Chỉ quản trị viên mới được phép duyệt hoàn thành công việc.' });
   }
+  const senderName = await resolveUserName(user);
 
   const taskId = parseInt(req.params.taskId);
 
@@ -2499,8 +2519,8 @@ router.post('/tasks/:taskId/approve', async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       io.emit('task_updated', updatedTask);
-      io.emit('task_approved', { ...updatedTask, approved_by_name: user.name });
-      io.emit('task_completed', { ...updatedTask, completed_by_name: user.name });
+      io.emit('task_approved', { ...updatedTask, approved_by_name: senderName });
+      io.emit('task_completed', { ...updatedTask, completed_by_name: senderName });
     }
 
     // Gửi Push Notification cho Assignee
@@ -2538,6 +2558,7 @@ router.post('/tasks/:taskId/reject', async (req, res) => {
   if (!user || user.role !== 'admin') {
     return res.status(403).json({ status: 'error', message: 'Chỉ quản trị viên mới có quyền yêu cầu làm lại công việc.' });
   }
+  const senderName = await resolveUserName(user);
 
   const taskId = parseInt(req.params.taskId);
   const { reason } = req.body;
@@ -2606,7 +2627,7 @@ router.post('/tasks/:taskId/reject', async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       io.emit('task_updated', updatedTask);
-      io.emit('task_rejected', { ...updatedTask, rejected_by_name: user.name });
+      io.emit('task_rejected', { ...updatedTask, rejected_by_name: senderName });
     }
 
     // Gửi Push Notification cho Assignee
@@ -2644,6 +2665,7 @@ router.post('/tasks/:taskId/view', async (req, res) => {
   if (!user) {
     return res.status(401).json({ status: 'error', message: 'Không thể xác thực người dùng.' });
   }
+  const senderName = await resolveUserName(user);
 
   const taskId = parseInt(req.params.taskId);
 
@@ -2678,7 +2700,7 @@ router.post('/tasks/:taskId/view', async (req, res) => {
     // Phát sự kiện realtime
     const io = req.app.get('io');
     if (io) {
-      io.emit('task_viewed', { taskId, userId: user.id, userName: user.name });
+      io.emit('task_viewed', { taskId, userId: user.id, userName: senderName });
     }
 
     return res.status(200).json({
@@ -2855,6 +2877,7 @@ router.post('/tasks/:taskId/reports', async (req, res) => {
     console.warn('[REPORTS_API:UNAUTHORIZED] 401 Unauthorized - Authentication failed');
     return res.status(401).json({ status: 'error', message: 'Không thể xác thực người dùng (401 Unauthorized).' });
   }
+  const senderName = await resolveUserName(user);
 
   const taskId = parseInt(req.params.taskId);
   const { report_type = 'progress', content, progress_percent = 0, attachments = [] } = req.body;
@@ -2973,7 +2996,7 @@ router.post('/tasks/:taskId/reports', async (req, res) => {
         taskId,
         taskTitle: task.title,
         reporterId: user.id,
-        reporterName: user.name || 'Thành viên',
+        reporterName: senderName || 'Thành viên',
         workspaceId: task.workspace_id,
         createdAt: report.created_at,
         taskCreatorId: task.created_by
@@ -2985,7 +3008,7 @@ router.post('/tasks/:taskId/reports', async (req, res) => {
       io.emit('task_updated', { id: taskId, user_id: user.id, status: updatedTask.status, assignees });
 
       if (report_type === 'completion') {
-        io.emit('task_completed', { id: taskId, user_id: user.id, userName: user.name, completed_by_name: user.name, title: task.title });
+        io.emit('task_completed', { id: taskId, user_id: user.id, userName: senderName, completed_by_name: senderName, title: task.title });
       }
     }
 

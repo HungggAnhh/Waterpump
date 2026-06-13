@@ -374,11 +374,12 @@ export default function PageTasksScreen() {
   useEffect(() => {
     if (!socket) return;
 
-    const handleTaskCreated = (newTask: Task) => {
-      if (newTask.workspace_id === parseInt(workspaceId as string)) {
+    const handleTaskCreated = (payload: any) => {
+      const task = payload?.task ? payload.task : payload;
+      if (task && task.workspace_id === parseInt(workspaceId as string)) {
         setTasks(prev => {
-          if (prev.some(t => t.id === newTask.id)) return prev;
-          return [...prev, newTask];
+          if (prev.some(t => t.id === task.id)) return prev;
+          return [...prev, task];
         });
       }
     };

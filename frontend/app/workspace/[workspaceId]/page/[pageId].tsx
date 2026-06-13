@@ -234,15 +234,16 @@ export default function PageTasksScreen() {
   useEffect(() => {
     if (!socket) return;
 
-    const handleTaskCreated = (newTask: Task) => {
-      if (newTask.page_id === parseInt(pageId as string)) {
+    const handleTaskCreated = (payload: any) => {
+      const task = payload?.task ? payload.task : payload;
+      if (task && task.page_id === parseInt(pageId as string)) {
         setTasks(prev => {
-          if (prev.some(t => t.id === newTask.id)) return prev;
+          if (prev.some(t => t.id === task.id)) return prev;
           // Filter for normal users
-          if (user?.role !== 'admin' && newTask.assigned_to !== user?.id) {
+          if (user?.role !== 'admin' && task.assigned_to !== user?.id) {
             return prev;
           }
-          return [...prev, newTask];
+          return [...prev, task];
         });
       }
     };

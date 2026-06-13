@@ -43,7 +43,7 @@ router.post('/login', async (req, res) => {
 
     // Tạo JWT token 30 ngày
     const token = jwt.sign(
-      { id: user.id, email: user.email, role: user.role },
+      { id: user.id, email: user.email, role: user.role, name: user.name },
       JWT_SECRET,
       { expiresIn: '30d' }
     );
