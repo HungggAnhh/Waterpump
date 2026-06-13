@@ -56,6 +56,8 @@ export default function StationScreen() {
     taskAssignees: Set<string>;
     messageReceivers: Set<string>;
     groupName: string;
+    senderName: string;
+    senderRole: string;
     timer: any;
   }>({
     hasGroupTask: false,
@@ -65,6 +67,8 @@ export default function StationScreen() {
     taskAssignees: new Set(),
     messageReceivers: new Set(),
     groupName: '',
+    senderName: '',
+    senderRole: '',
     timer: null,
   });
 
@@ -198,12 +202,14 @@ export default function StationScreen() {
         return `${names.slice(0, -1).join(', ')} và ${names[names.length - 1]}`;
       };
 
+      const senderDisplay = buf.senderRole === 'admin' ? 'Admin' : (buf.senderName || 'Ai đó');
+
       if (buf.hasPersonalTask) {
         const namesStr = formatNames(buf.taskAssignees);
 
         text = namesStr
-          ? `Admin vừa giao nhiệm vụ cho ${namesStr}.`
-          : 'Admin vừa giao nhiệm vụ mới.';
+          ? `${senderDisplay} vừa giao nhiệm vụ cho ${namesStr}.`
+          : `${senderDisplay} vừa giao nhiệm vụ mới.`;
 
         priority = 1;
 
@@ -212,8 +218,8 @@ export default function StationScreen() {
         const groupName = buf.groupName || '';
 
         text = groupName
-          ? `Admin vừa giao nhiệm vụ cho nhóm ${groupName}.`
-          : 'Admin vừa giao nhiệm vụ cho một nhóm.';
+          ? `${senderDisplay} vừa giao nhiệm vụ cho nhóm ${groupName}.`
+          : `${senderDisplay} vừa giao nhiệm vụ cho một nhóm.`;
 
         priority = 1;
 
@@ -222,8 +228,8 @@ export default function StationScreen() {
         const namesStr = formatNames(buf.messageReceivers);
 
         text = namesStr
-          ? `Admin vừa gửi tin nhắn cho ${namesStr}.`
-          : 'Admin vừa gửi tin nhắn mới.';
+          ? `${senderDisplay} vừa gửi tin nhắn cho ${namesStr}.`
+          : `${senderDisplay} vừa gửi tin nhắn mới.`;
 
         priority = 2;
 
@@ -232,8 +238,8 @@ export default function StationScreen() {
         const groupName = buf.groupName || '';
 
         text = groupName
-          ? `Admin vừa gửi tin nhắn cho nhóm ${groupName}.`
-          : 'Admin vừa gửi tin nhắn trong một nhóm.';
+          ? `${senderDisplay} vừa gửi tin nhắn cho nhóm ${groupName}.`
+          : `${senderDisplay} vừa gửi tin nhắn trong một nhóm.`;
 
         priority = 2;
       }
@@ -247,6 +253,8 @@ export default function StationScreen() {
         taskAssignees: new Set(),
         messageReceivers: new Set(),
         groupName: '',
+        senderName: '',
+        senderRole: '',
         timer: null
       };
 
@@ -268,7 +276,9 @@ export default function StationScreen() {
     };
 
     const handleTaskAssigned = (data: {
-      adminName: string;
+      adminName?: string;
+      senderName?: string;
+      senderRole?: string;
       assigneeNames?: string[];
       isGroup: boolean;
       groupName?: string;
@@ -296,11 +306,16 @@ export default function StationScreen() {
         eventBuffer.current.groupName = data.groupName;
       }
 
+      eventBuffer.current.senderName = data.senderName || data.adminName || 'Admin';
+      eventBuffer.current.senderRole = data.senderRole || 'admin';
+
       eventBuffer.current.timer = setTimeout(processBufferedEvents, 3000);
     };
 
     const handleDirectMessage = (data: {
-      adminName: string;
+      adminName?: string;
+      senderName?: string;
+      senderRole?: string;
       receiverNames?: string[];
       isGroup: boolean;
       groupName?: string;
@@ -327,6 +342,9 @@ export default function StationScreen() {
       if (data.groupName) {
         eventBuffer.current.groupName = data.groupName;
       }
+
+      eventBuffer.current.senderName = data.senderName || data.adminName || 'Admin';
+      eventBuffer.current.senderRole = data.senderRole || 'admin';
 
       eventBuffer.current.timer = setTimeout(processBufferedEvents, 3000);
     };

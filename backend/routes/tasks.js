@@ -1083,7 +1083,7 @@ router.post('/tasks', async (req, res) => {
     }
 
     const assigneesRes = await query(
-      `SELECT ta.user_id, ta.status, ta.started_at, ta.completed_at, u.name, u.avatar, u.avatar AS avatar_url
+      `SELECT ta.user_id, ta.status, ta.started_at, ta.completed_at, u.name, u.avatar, u.avatar AS avatar_url, u.role
        FROM task_assignments ta
        JOIN users u ON ta.user_id = u.id
        WHERE ta.task_id = $1`,
@@ -1138,29 +1138,59 @@ router.post('/tasks', async (req, res) => {
       console.log('📡 Realtime: Phát sự kiện tạo và gán task cho các thành viên');
       
       // Additive station announcement trigger (Production Safe)
-      if (user.role === 'admin') {
+      (async () => {
         try {
           const isGroup = !!newTask.workspace_id;
-          let workspaceName = '';
-          if (newTask.workspace_id) {
-            const wsRes = await query('SELECT name FROM workspaces WHERE id = $1', [newTask.workspace_id]);
-            if (wsRes.rows.length > 0) {
-              workspaceName = wsRes.rows[0].name;
+          let shouldAnnounce = false;
+
+          if (isGroup) {
+            if (user.role === 'admin') {
+              shouldAnnounce = true;
+            } else {
+              const wsMembersRes = await query(
+                `SELECT u.role FROM workspace_members wm
+                 JOIN users u ON wm.user_id = u.id
+                 WHERE wm.workspace_id = $1`,
+                [newTask.workspace_id]
+              );
+              const hasAdminInGroup = wsMembersRes.rows.some(r => r.role === 'admin');
+              if (hasAdminInGroup) {
+                shouldAnnounce = true;
+              }
             }
+          } else {
+            const senderRole = user.role;
+            const hasUserAssignee = (newTask.assignees || []).some(a => a.role !== 'admin');
+            const hasAdminAssignee = (newTask.assignees || []).some(a => a.role === 'admin');
+
+            shouldAnnounce = 
+              (senderRole === 'admin' && hasUserAssignee) ||
+              (senderRole !== 'admin' && hasAdminAssignee);
           }
-          const assigneeNames = (newTask.assignees || []).map(a => a.name || 'nhân viên');
-          io.to('stations').emit('station_task_assigned', {
-            adminName: senderName || 'Admin',
-            assigneeNames: assigneeNames,
-            isGroup: isGroup,
-            groupName: workspaceName,
-            timestamp: new Date().toISOString()
-          });
-          console.log(`[STATION] Emitted station_task_assigned to stations room (isGroup: ${isGroup}, assigneeNames: ${assigneeNames}, groupName: ${workspaceName})`);
+
+          if (shouldAnnounce) {
+            let workspaceName = '';
+            if (newTask.workspace_id) {
+              const wsRes = await query('SELECT name FROM workspaces WHERE id = $1', [newTask.workspace_id]);
+              if (wsRes.rows.length > 0) {
+                workspaceName = wsRes.rows[0].name;
+              }
+            }
+            const assigneeNames = (newTask.assignees || []).map(a => a.name || 'nhân viên');
+            io.to('stations').emit('station_task_assigned', {
+              senderName: senderName || 'Admin',
+              senderRole: user.role,
+              assigneeNames: assigneeNames,
+              isGroup: isGroup,
+              groupName: workspaceName,
+              timestamp: new Date().toISOString()
+            });
+            console.log(`[STATION] Emitted station_task_assigned to stations room (isGroup: ${isGroup}, assigneeNames: ${assigneeNames}, groupName: ${workspaceName}, senderRole: ${user.role})`);
+          }
         } catch (err) {
           console.error('❌ Fail-Safe: Error emitting station task assignment:', err.message);
         }
-      }
+      })();
     }
 
     // Gửi Push Notification bất đồng bộ (chạy nền)

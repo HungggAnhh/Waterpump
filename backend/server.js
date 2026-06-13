@@ -301,25 +301,29 @@ io.on('connection', (socket) => {
       const isDirect = convCheck.rows.length > 0 && convCheck.rows[0].type === 'direct';
       const isGroup = convCheck.rows.length > 0 && convCheck.rows[0].type === 'group';
       const groupName = convCheck.rows.length > 0 ? convCheck.rows[0].name : '';
-      if (sender.role === 'admin' && (isDirect || isGroup)) {
+      if (isDirect || isGroup) {
         (async () => {
           try {
             const receiverRes = await query(
-              `SELECT u.name FROM conversation_users cu
+              `SELECT u.name, u.role FROM conversation_users cu
                JOIN users u ON cu.user_id = u.id
                WHERE cu.conversation_id = $1 AND cu.user_id != $2`,
               [parseInt(conversation_id), parseInt(sender_id)]
             );
             const receiverNames = receiverRes.rows.map(r => r.name || 'nhân viên');
+            const hasAdminReceiver = receiverRes.rows.some(r => r.role === 'admin');
 
-            io.to('stations').emit('station_direct_message', {
-              adminName: sender.name || 'Admin',
-              receiverNames: receiverNames,
-              isGroup: isGroup,
-              groupName: groupName,
-              timestamp: new Date().toISOString()
-            });
-            console.log(`[STATION] Emitted station_direct_message to stations room (isGroup: ${isGroup}, receiverNames: ${receiverNames}, groupName: ${groupName})`);
+            if (sender.role === 'admin' || hasAdminReceiver) {
+              io.to('stations').emit('station_direct_message', {
+                senderName: sender.name || 'Admin',
+                senderRole: sender.role,
+                receiverNames: receiverNames,
+                isGroup: isGroup,
+                groupName: groupName,
+                timestamp: new Date().toISOString()
+              });
+              console.log(`[STATION] Emitted station_direct_message to stations room (isGroup: ${isGroup}, receiverNames: ${receiverNames}, groupName: ${groupName}, sender: ${sender.name})`);
+            }
           } catch (err) {
             console.error('❌ Fail-Safe: Error emitting station direct message:', err.message);
           }
