@@ -8,11 +8,13 @@ import {
   ScrollView,
   Platform,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useSocket } from '../context/SocketContext';
 import { voiceNotification } from '../services/voiceNotification';
+import { useUser } from '../context/UserContext';
 
 interface AnnouncementHistoryItem {
   id: string;
@@ -31,6 +33,7 @@ const MUTED_STORAGE_KEY = '@station_muted_state';
 
 export default function StationScreen() {
   const { socket, isConnected } = useSocket();
+  const { logout } = useUser();
 
   // Clock state
   const [currentTime, setCurrentTime] = useState('');
@@ -394,6 +397,24 @@ export default function StationScreen() {
     }
   };
 
+  const handleLogout = () => {
+    if (Platform.OS === 'web') {
+      const confirmLogout = window.confirm('Bạn có chắc chắn muốn đăng xuất khỏi tài khoản?');
+      if (confirmLogout) {
+        logout();
+      }
+    } else {
+      Alert.alert(
+        'Đăng xuất 🔴',
+        'Bạn có chắc chắn muốn đăng xuất khỏi tài khoản?',
+        [
+          { text: 'Hủy', style: 'cancel' },
+          { text: 'Đăng xuất', style: 'destructive', onPress: () => logout() }
+        ]
+      );
+    }
+  };
+
   return (
     <View style={styles.container}>
       {/* Top Header Card */}
@@ -403,12 +424,19 @@ export default function StationScreen() {
           <Text style={styles.statusText}>{isConnected ? 'Connected' : 'Disconnected'}</Text>
         </View>
         
-        {Platform.OS === 'web' && (
-          <TouchableOpacity onPress={toggleFullscreen} style={styles.fullscreenBtn} activeOpacity={0.8}>
-            <Ionicons name={isFullscreen ? 'contract' : 'expand'} size={22} color="#94a3b8" />
-            <Text style={styles.fullscreenBtnText}>{isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}</Text>
+        <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
+          {Platform.OS === 'web' && (
+            <TouchableOpacity onPress={toggleFullscreen} style={styles.fullscreenBtn} activeOpacity={0.8}>
+              <Ionicons name={isFullscreen ? 'contract' : 'expand'} size={22} color="#94a3b8" />
+              <Text style={styles.fullscreenBtnText}>{isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}</Text>
+            </TouchableOpacity>
+          )}
+
+          <TouchableOpacity onPress={handleLogout} style={styles.logoutBtnHeader} activeOpacity={0.8}>
+            <Ionicons name="log-out-outline" size={22} color="#ef4444" />
+            <Text style={styles.logoutBtnHeaderText}>Đăng xuất</Text>
           </TouchableOpacity>
-        )}
+        </View>
       </View>
 
       {/* Glowing Large Clock */}
@@ -520,6 +548,22 @@ const styles = StyleSheet.create({
   },
   fullscreenBtnText: {
     color: '#94a3b8',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  logoutBtnHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.3)',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    gap: 6,
+  },
+  logoutBtnHeaderText: {
+    color: '#ef4444',
     fontSize: 12,
     fontWeight: '600',
   },
